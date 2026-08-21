@@ -1,0 +1,168 @@
+module sh.sysl.syslui
+
+import sysl.buf.{Buf, buf}
+
+// The erased view tree, and the question of whether a modifier chains.
+//
+// **A view is a trait object, not a type.** SwiftUI encodes the whole tree in the static type of
+// `body` -- `VStack<TupleView<(Text, Button)>>` -- and pays for it with associated types and an
+// opaque result type. That buys no box per node and no indirect call, which is worth having on a
+// microcontroller and worth very little on a machine with a heap. So a child here is a `&View`, a
+// fat pointer whose data word is the ARC box the value sits in, and the tree is kept alive by
+// reference counting like any other graph of boxes.
+//
+// **The receiver is `&self` everywhere, and that is the load-bearing choice in this file.** A
+// modifier has to hand its child back as a `&View`, so it needs the box rather than the value: with
+// `self` the table entry would step over the box header and load the value out, and the modifier
+// would then allocate a second box to put it back in -- a copy per link of the chain. `&self` asks
+// for the receiver already boxed, which is exactly what the wrapper wants to store. Object safety
+// admits it because a `&Trait` carries a box; a `*Trait` would not.
+
+// How much room a view is offered, and how much it asks for. Both are the same shape, which is what
+// makes the layout pass one function rather than two.
+struct Size
+    w: int
+    h: int
+end Size
+
+struct Rect
+    x: int
+    y: int
+    w: int
+    h: int
+
+    right(self) -> int = self.x + self.w
+    bottom(self) -> int = self.y + self.h
+end Rect
+
+// **Both of these are hand-written and both of them are card 0174's argument in four lines.** A
+// struct of integers compared field by field is the most mechanical code in the package, and there
+// is no way to ask for it: `for const` over a struct's fields is what would derive `Eq`, `Hash` and
+// `Display` together. Until then a probe that wants to assert a measurement writes this out.
+impl Eq for Size
+    eq(self, rhs: Size) -> bool = self.w == rhs.w && self.h == rhs.h
+
+impl Eq for Rect
+    eq(self, rhs: Rect) -> bool =
+        self.x == rhs.x && self.y == rhs.y && self.w == rhs.w && self.h == rhs.h
+
+// Where a view goes, once its parent has decided.
+//
+// **Two members and four defaults.** `measure` answers what this wants inside the space offered and
+// `paint` draws into the rectangle it was given; everything else on the trait has a body already.
+// That is the surface a new view has to write, and it is deliberately as small as `Painter`'s in
+// `imui` for the same reason: a trait a backend or a widget can implement in a dozen lines is one
+// people actually implement.
+//
+// **`Self` appears nowhere but the receiver**, which is what makes `&View` formable at all. A
+// modifier returns `&View` rather than `Self` -- so `padding` on a `Text` and `padding` on a
+// `Column` have the same signature, and the chain does not have to know what it is standing on.
+trait View
+    // What this view wants to be, given a box it must fit inside.
+    measure(&self, avail: Size) -> Size
+
+    // Draw into the rectangle layout settled on. A view may be given less than it measured for and
+    // must not draw outside `r`.
+    paint(&self, c: *Canvas, r: Rect)
+
+    // Inset this view by `n` on every side.
+    //
+    // The wrapper stores `self` -- the receiver's own box, erased -- so a chain of modifiers is a
+    // chain of boxes each pointing at the one below, and no view is copied to build it.
+    padding(&self, n: int) -> &View = Padding(self, n)
+
+    // Fill the rectangle behind this view with a solid colour.
+    background(&self, color: u32) -> &View = Background(self, color)
+
+    // Ask for a fixed size regardless of what this view would have measured to.
+    frame(&self, w: int, h: int) -> &View = Frame(self, w, h)
+end View
+
+// A leaf: one run of text, measured by a fixed advance so the probe needs no font.
+//
+// **The width is a lie and is meant to be.** A real backend measures with `TTF_GetStringSize`, and
+// the whole point of `Canvas` standing in for one is that the tree can be asserted without a
+// display server. Eight pixels per byte is wrong for anything but ASCII and is stable, which is
+// what a test wants.
+struct Text
+    s: string
+end Text
+
+impl View for Text
+    measure(&self, avail: Size) -> Size = Size(int(self.s.len) * 8, 16)
+
+    paint(&self, c: *Canvas, r: Rect) = c.text(r, self.s)
+end Text
+
+// A leaf that takes whatever it is offered and draws nothing -- the flexible gap.
+struct Spacer end Spacer
+
+impl View for Spacer
+    measure(&self, avail: Size) -> Size = Size(0, 0)
+
+    paint(&self, c: *Canvas, r: Rect) = ()
+end Spacer
+
+// The three modifiers, each holding its child as an erased box.
+struct Padding
+    child: &View
+    n: int
+end Padding
+
+impl View for Padding
+    measure(&self, avail: Size) -> Size
+        val inner = self.child.measure(Size(avail.w - 2 * self.n, avail.h - 2 * self.n))
+
+        Size(inner.w + 2 * self.n, inner.h + 2 * self.n)
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.child.paint(c, Rect(r.x + self.n, r.y + self.n,
+                                 r.w - 2 * self.n, r.h - 2 * self.n))
+    end paint
+end Padding
+
+struct Background
+    child: &View
+    color: u32
+end Background
+
+impl View for Background
+    measure(&self, avail: Size) -> Size = self.child.measure(avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.fill(r, self.color)
+        self.child.paint(c, r)
+    end paint
+end Background
+
+struct Frame
+    child: &View
+    w: int
+    h: int
+end Frame
+
+impl View for Frame
+    measure(&self, avail: Size) -> Size = Size(self.w, self.h)
+
+    paint(&self, c: *Canvas, r: Rect) = self.child.paint(c, r)
+end Frame
+
+// The constructors, and the reason they are not the struct names.
+//
+// **A struct constructor alone will not chain, and the diagnostic says why**: `Text("hi")` is a
+// value on the stack, and `&self` -- which every modifier takes, so that a wrapper can store the
+// box rather than a copy -- has no reference to bind to. Writing `&Text("hi").padding(8)` works and
+// is not what anybody should have to write.
+//
+//     error: '&self' needs a reference; a sh.sysl.syslui.Text on the stack has none
+//            -- take '*self' instead, or put the object behind a '&'
+//
+// So a leaf is reached through a function whose result type is `&View`, and the ordinary "write the
+// construction where a trait object is expected and it is boxed and then erased" coercion does the
+// work. That the result is lowercase and erased is the shape SwiftUI has too, arrived at from the
+// other direction: there it is `Text(...)` returning an opaque type, here it is `text(...)`
+// returning an erased one, and the call site reads the same either way.
+text(s: string) -> &View = Text(s)
+
+spacer() -> &View = Spacer()

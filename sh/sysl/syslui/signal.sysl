@@ -1,0 +1,70 @@
+module sh.sysl.syslui
+
+import sysl.buf.{Buf, buf}
+
+// A value that says who read it, so a write can tell exactly them.
+//
+// **This is what stands in for a reconciler.** Diffing an erased tree would need to ask a node what
+// type it is, and `02 § Object safety` refuses that: there is no way back from an erasure. Fine-
+// grained reactivity sidesteps the question rather than answering it -- a write notifies what read,
+// nothing walks the tree, and nothing needs to know a node's type. SolidJS, Svelte 5, Angular and
+// Swift Observation have all landed here, from four different starting points.
+//
+// **A dependent is held weakly, and that is the whole lifetime story.** A subtree that has been
+// dropped must stop being notified, and the alternative to a weak edge is an explicit unsubscribe
+// on every teardown path -- which is a leak waiting for the one path somebody forgets. `weak Fn()`
+// makes the drop itself the unsubscribe.
+//
+// Note the spelling: **`weak &Fn()` is refused**, because `weak` already implies the counted box.
+//
+//     'weak Fn() -> unit' is already a weak edge to a counted Fn() -> unit, so the '&' says the
+//     mode a second time -- write 'weak Fn() -> unit'
+struct Signal[T]
+    value: T
+
+    // Everything that has read this value and wants telling when it changes.
+    //
+    // Empty slots accumulate as subtrees go, and are swept on the next notify rather than eagerly:
+    // there is nothing to hook a drop onto from this side, which is the cost of holding the edge
+    // weakly rather than the other way round.
+    deps: Buf[weak Fn() -> unit]
+
+    // Read the value and register the caller as a dependent.
+    //
+    // **The registration is explicit here, and in a finished framework it would not be.** A real
+    // implementation keeps a stack of "who is currently building", so a plain `.get` inside a view
+    // body subscribes that view with nothing written. The probe is asking whether the mechanism
+    // works at all, not whether it is pleasant, so the dependent is passed in.
+    read(self) -> T = self.value
+
+    // Register `f` to be called whenever this changes.
+    watch(*self, f: &Fn() -> unit)
+        self.deps.push(f)
+
+    // Write, and tell everything still alive that read.
+    set(*self, v: T)
+        self.value = v
+        self.notify()
+
+    // Call every live dependent, and forget the ones that have gone.
+    //
+    // **A weak reference is reached only through the `Option` a promotion hands back**, which is
+    // what makes "a dependent never dangles" a fact about the type rather than a discipline. A
+    // subtree dropped between two writes is simply not called, and its slot does not survive the
+    // sweep.
+    notify(*self)
+        var live: Buf[weak Fn() -> unit] = buf()
+        val v = self.deps.view()
+
+        for i in 0..<v.len
+            v[i].get() match
+                Some(f) ->
+                    f()
+                    live.push(f)
+                None -> ()
+
+        self.deps = live
+    end notify
+end Signal
+
+signal[T](v: T) -> &Signal[T] = Signal(v, buf())

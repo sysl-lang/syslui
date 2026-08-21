@@ -1,0 +1,38 @@
+module sh.sysl.syslui
+
+import sysl.buf.{Buf, buf}
+
+// A backend that draws nothing and remembers everything.
+//
+// **This is what lets the probe answer its questions with no window.** A tree that laid itself out
+// correctly and a tree that did not look identical from the outside unless something records where
+// each piece landed; `imui` reached the same conclusion and has `record.sysl` for it. Every question
+// card 0203 asks about the *tree* -- does a modifier chain, does the erasure survive a wrapper, does
+// one layout pass work -- is answerable against a recorder, and only the questions about the *frame*
+// need SDL3.
+//
+// The recording is text on purpose. A structured command list would need an enum, an `Eq` and a
+// printer before a single assertion could be written, and what a failing test wants to show is a
+// line a person can read.
+struct Canvas
+    ops: Buf[string]
+
+    fill(*self, r: Rect, color: u32)
+        self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}")
+
+    text(*self, r: Rect, t: string)
+        self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
+
+    // What was drawn, oldest first, one operation per line.
+    dump(self) -> string
+        var out = ""
+        val v = self.ops.view()
+
+        for i in 0..<v.len
+            out = out + v[i] + "\n"
+
+        out
+    end dump
+end Canvas
+
+canvas() -> Canvas = Canvas(buf())

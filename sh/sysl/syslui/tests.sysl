@@ -1,0 +1,108 @@
+module sh.sysl.syslui
+@tests
+
+import sysl.buf.{Buf, buf}
+
+// The probe's findings, kept as tests rather than as prose.
+//
+// Card 0203 asks six questions and the rule is that a probe's answers become the first tests of the
+// thing it probed. Each test below is one of those answers, and the name says which. A test that
+// passes here is a claim in 0168 that has now been *run* rather than read off a design chapter.
+
+private assert_paints(v: &View, avail: Size, at: Rect, expected: string)
+    var c = canvas()
+
+    v.paint(&c, at)
+    assert(c.dump() == expected, s"expected:\n${expected}got:\n${c.dump()}")
+end assert_paints
+
+// **Question 1: does a modifier chain?**
+//
+// `text("hi").padding(8).background(red)` -- three links, each a trait default returning `&View`,
+// each called on the erased result of the one before. This is the claim 0168 makes and the one the
+// whole ergonomic case rests on.
+@test
+private a_modifier_chain_calls_through_an_erased_receiver()
+    val v = text("hi").padding(8).background(0xFF0000u32)
+
+    assert(v.measure(Size(200, 200)) == Size(32, 32), "two chars at 8px plus 8px of padding a side")
+end a_modifier_chain_calls_through_an_erased_receiver
+
+// **Question 2: does the wrapped view stay erased?**
+//
+// The concrete type must not escape into the modifier's result, or the chain would break at the
+// second link -- which is exactly what happens in Rust, where a default returning a box needs
+// `Self: Sized` and is then unavailable on the trait object. A `Text` and a `Padding` reaching the
+// same variable is the shortest thing that shows it does not happen here.
+@test
+private a_leaf_and_a_wrapper_meet_at_one_object_type()
+    var views: Buf[&View] = buf()
+
+    views.push(text("a"))
+    views.push(text("bb").padding(4))
+    views.push(spacer().frame(50, 10))
+
+    val v = views.view()
+
+    assert(v[0].measure(Size(100, 100)) == Size(8, 16), "the leaf measures itself")
+    assert(v[1].measure(Size(100, 100)) == Size(24, 24), "the wrapper adds its inset")
+    assert(v[2].measure(Size(100, 100)) == Size(50, 10), "a frame overrides what it wraps")
+end a_leaf_and_a_wrapper_meet_at_one_object_type
+
+// A chain paints inside-out: the background fills the whole rectangle it was given, then the
+// padding insets, then the text lands in what is left. Asserting the recording rather than the
+// sizes is what says the *positions* came out right and not merely the arithmetic.
+@test
+private a_chain_paints_from_the_outside_in()
+    assert_paints(text("hi").padding(8).background(0xFF0000u32),
+                  Size(200, 200), Rect(0, 0, 32, 32),
+                  "fill 0,0 32x32 #16711680\ntext 8,8 16x16 'hi'\n")
+end a_chain_paints_from_the_outside_in
+
+// Modifier order is not commutative, and a framework where it silently were would be hiding a bug.
+// Padding-then-background paints the fill behind the inset; background-then-padding insets the fill
+// too. Both are legitimate and they are different pictures.
+@test
+private modifier_order_is_visible_in_the_recording()
+    assert_paints(text("hi").background(0x00FF00u32).padding(8),
+                  Size(200, 200), Rect(0, 0, 32, 32),
+                  "fill 8,8 16x16 #65280\ntext 8,8 16x16 'hi'\n")
+end modifier_order_is_visible_in_the_recording
+
+// **Question 3: is `weak Fn() -> unit` a dependent list?**
+//
+// A write must reach everything that read, exactly once each. This is the mechanism that stands in
+// for a reconciler, so if it does not work the architecture in 0168 does not either.
+@test
+private a_write_calls_every_live_dependent()
+    val s = signal(1)
+    val seen = signal(0)
+    val f: &Fn() -> unit = () -> seen.set(seen.read() + 1)
+
+    s.watch(f)
+    s.set(2)
+    s.set(3)
+
+    assert(s.read() == 3, "the value is the last one written")
+    assert(seen.read() == 2, "and each write called the dependent once")
+end a_write_calls_every_live_dependent
+
+// The other half of question 3, and the half that decides whether teardown needs a discipline: a
+// dependent whose last strong reference has gone must simply stop being called, with nothing having
+// unsubscribed it. If this fails, every drop path in the framework has to remember to unhook, and
+// the one that forgets is a leak nobody finds.
+@test
+private a_dependent_that_has_gone_is_not_called()
+    val s = signal(0)
+    val seen = signal(0)
+
+    if true
+        val f: &Fn() -> unit = () -> seen.set(seen.read() + 1)
+
+        s.watch(f)
+        s.set(1)
+
+    s.set(2)
+
+    assert(seen.read() == 1, "called while it was alive, and not after it went")
+end a_dependent_that_has_gone_is_not_called

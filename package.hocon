@@ -1,0 +1,22 @@
+// SysLUI — a declarative retained user interface for a machine with a heap.
+//
+// **This is a probe, not yet a framework.** Card 0203 asks six questions about whether the
+// architecture decided in 0168 survives contact with the compiler, and the code here exists to
+// answer them. Nothing in it should be read as a settled API.
+//
+// `imui` is the sibling for a panel on a microcontroller and is not replaced by this: it refuses a
+// retained tree on purpose, and the split between the two is by application size rather than by
+// device.
+
+package {
+  name    = "syslui"
+  version = "0.0.1"
+}
+
+// **The probe asks for a heap and nothing else, which is itself one of the findings.** An erased
+// tree is boxes, so `heap` is not negotiable — that is the bargain 0168 struck against `imui`'s.
+// What is *not* here is `os` or `posix`: the recorder in `canvas.sysl` stands in for a backend, so
+// the questions about the tree can be answered with no window, no font and no display server.
+requires {
+  heap = true
+}
