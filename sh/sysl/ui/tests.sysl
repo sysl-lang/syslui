@@ -1,4 +1,4 @@
-module sh.sysl.syslui
+module sh.sysl.ui
 @tests
 
 import sysl.buf.{Buf, buf}
@@ -106,3 +106,66 @@ private a_dependent_that_has_gone_is_not_called()
 
     assert(seen.read() == 1, "called while it was alive, and not after it went")
 end a_dependent_that_has_gone_is_not_called
+
+// **Question 6: does one layout pass work over `[]&View`?**
+//
+// Constraints down, sizes up, the parent places. A column of three heterogeneous children -- a
+// leaf, a chain and a nested row -- is the smallest tree where every part of that sentence has to
+// be true at once.
+@test
+private a_column_stacks_what_its_children_asked_for()
+    val v = column([
+        text("a"),
+        text("bb").padding(4),
+        row([text("c"), text("d")], 2)
+    ], 3)
+
+    assert(v.measure(Size(200, 200)) == Size(24, 62), "the widest child, and every height plus the gaps")
+end a_column_stacks_what_its_children_asked_for
+
+// And the positions, which the sizes alone do not say. Reading the recording is what catches a
+// container that measured correctly and then placed everything at the origin.
+@test
+private a_column_places_each_child_below_the_last()
+    var c = canvas()
+    val v = column([text("a"), text("bb"), text("c")], 3)
+
+    v.paint(&c, Rect(10, 20, 100, 100))
+
+    assert(c.dump() == "text 10,20 100x16 'a'\ntext 10,39 100x16 'bb'\ntext 10,58 100x16 'c'\n",
+           s"got:\n${c.dump()}")
+end a_column_places_each_child_below_the_last
+
+// **Question 5: where does state that outlives a rebuild live?**
+//
+// The tree is thrown away and built again -- which is what a signal write causes -- and the scroll
+// position must still be what it was. If this needs element identity, the erased tree cannot supply
+// it and 0168's architecture has a hole in it.
+private list_of(n: int, offset: &Signal[int]) -> &View
+    var rows: Buf[&View] = buf()
+
+    for i in 0..<n
+        rows.push(text(s"row ${i}"))
+
+    scroll(column(rows.view(), 0), offset, 40)
+end list_of
+
+@test
+private a_scroll_offset_survives_the_tree_being_rebuilt()
+    val offset = signal(0)
+
+    // One tree, scrolled.
+    val before = list_of(10, offset)
+
+    offset.set(32)
+
+    // A completely different tree, built from scratch, sharing only the signal.
+    val after = list_of(10, offset)
+    var c = canvas()
+
+    after.paint(&c, Rect(0, 0, 100, 40))
+
+    assert(offset.read() == 32, "the offset is in the signal, so a rebuild cannot lose it")
+    assert(c.dump() == "clip 0,0 100x40\ntext 0,-32 100x16 'row 0'\ntext 0,-16 100x16 'row 1'\ntext 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\ntext 0,48 100x16 'row 5'\ntext 0,64 100x16 'row 6'\ntext 0,80 100x16 'row 7'\ntext 0,96 100x16 'row 8'\ntext 0,112 100x16 'row 9'\nunclip\n",
+           s"got:\n${c.dump()}")
+end a_scroll_offset_survives_the_tree_being_rebuilt

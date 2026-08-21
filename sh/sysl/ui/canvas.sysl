@@ -1,4 +1,4 @@
-module sh.sysl.syslui
+module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 
@@ -22,6 +22,12 @@ struct Canvas
 
     text(*self, r: Rect, t: string)
         self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
+
+    clip(*self, r: Rect)
+        self.ops.push(s"clip ${r.x},${r.y} ${r.w}x${r.h}")
+
+    unclip(*self)
+        self.ops.push("unclip")
 
     // What was drawn, oldest first, one operation per line.
     dump(self) -> string

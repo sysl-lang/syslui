@@ -1,4 +1,4 @@
-module sh.sysl.syslui
+module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 

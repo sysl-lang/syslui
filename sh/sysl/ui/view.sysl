@@ -1,4 +1,4 @@
-module sh.sysl.syslui
+module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 
@@ -155,7 +155,7 @@ end Frame
 // box rather than a copy -- has no reference to bind to. Writing `&Text("hi").padding(8)` works and
 // is not what anybody should have to write.
 //
-//     error: '&self' needs a reference; a sh.sysl.syslui.Text on the stack has none
+//     error: '&self' needs a reference; a sh.sysl.ui.Text on the stack has none
 //            -- take '*self' instead, or put the object behind a '&'
 //
 // So a leaf is reached through a function whose result type is `&View`, and the ordinary "write the

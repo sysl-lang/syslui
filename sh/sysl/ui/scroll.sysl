@@ -1,0 +1,47 @@
+module sh.sysl.ui
+
+// Where state that outlives a rebuild has to live, when there is no reconciler to hang it on.
+//
+// **This is the question 0203 says is most likely to move the architecture, and the answer is that
+// the signal holds it and the view stays stateless.** A scroll offset must survive the tree being
+// rebuilt -- a rebuild is what a signal write causes, and scrolling is itself a signal write, so a
+// container keeping its offset in a field of its own would reset it on the first flick.
+//
+// React hangs such state on a fiber and Flutter on an element, and both need identity to find the
+// right one again: `canUpdate` on runtime type plus key, which is exactly what an erased tree
+// cannot answer. Holding the offset in a `&Signal[int]` the caller owns sidesteps that the same way
+// signals sidestep diffing -- the state never moves, so nothing has to find it again.
+//
+// **What it costs, and it is a real cost rather than a free win:** the application owns every piece
+// of long-lived widget state, so a scrolling list is two declarations rather than one, and a
+// framework that wanted `list(items)` to just work would have to keep a retained element after all.
+// That trade is worth taking for v1 and it is worth writing down that it was taken.
+struct Scroll
+    child: &View
+    offset: &Signal[int]
+
+    // How tall the window onto the child is. The child is measured unbounded and may be far taller.
+    height: int
+end Scroll
+
+impl View for Scroll
+    measure(&self, avail: Size) -> Size = Size(avail.w, self.height)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val window = Rect(r.x, r.y, r.w, self.height)
+
+        // The child is measured against an unbounded height, which is what makes it a scroller: a
+        // list of a thousand rows asks for the height of a thousand rows and gets clipped to the
+        // window rather than squeezed into it.
+        val inner = self.child.measure(Size(r.w, 1_000_000))
+
+        c.clip(window)
+        self.child.paint(c, Rect(r.x, r.y - self.offset.read(), r.w, inner.h))
+        c.unclip()
+    end paint
+end Scroll
+
+// **The offset is passed in rather than made here**, which is the whole finding above expressed as
+// a signature. A caller that wants a list to remember where it was keeps the signal; one that does
+// not, does not have a list that scrolls.
+scroll(child: &View, offset: &Signal[int], height: int) -> &View = Scroll(child, offset, height)

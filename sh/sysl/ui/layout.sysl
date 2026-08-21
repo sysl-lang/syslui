@@ -1,0 +1,130 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// The layout pass: constraints down, sizes up, the parent places.
+//
+// **One pass, and it is Flutter's rather than a constraint solver's.** A parent hands each child the
+// space it may have, the child answers how much of it it wants, and the parent then decides where
+// each one goes. There is no second pass and nothing iterates to a fixed point, which is what keeps
+// it linear in the number of nodes.
+//
+// `imui/layout.sysl` is the reference for the arithmetic and for nothing else: it cuts pieces off a
+// shrinking rectangle and is deliberately *not* a tree, because immediate mode has no tree to walk.
+// What ports is the rectangle algebra. What does not is the shape.
+//
+// **A container measures its children twice -- once to size itself and once to place them -- and
+// that is a real cost this probe is here to expose rather than hide.** Flutter avoids it by caching
+// the child's answer against the constraints it was asked with. Doing that here needs somewhere to
+// put the cache, and an erased `&View` is shared and immutable, so the cache belongs to a retained
+// element rather than to the view. That is question 5's territory and the probe records it rather
+// than solving it.
+
+// Children stacked top to bottom, each as tall as it asks to be and as wide as the column.
+struct Column
+    children: Buf[&View]
+    spacing: int
+end Column
+
+impl View for Column
+    measure(&self, avail: Size) -> Size
+        var w = 0
+        var h = 0
+        val v = self.children.view()
+
+        for i in 0..<v.len
+            val s = v[i].measure(Size(avail.w, avail.h - h))
+
+            if s.w > w then w = s.w
+
+            h += s.h
+
+            if i + 1 < v.len then h += self.spacing
+
+        Size(w, h)
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        var y = r.y
+        val v = self.children.view()
+
+        for i in 0..<v.len
+            val s = v[i].measure(Size(r.w, r.bottom() - y))
+
+            v[i].paint(c, Rect(r.x, y, r.w, s.h))
+
+            y += s.h + self.spacing
+    end paint
+end Column
+
+// Children laid left to right, each as wide as it asks to be and as tall as the row.
+struct Row
+    children: Buf[&View]
+    spacing: int
+end Row
+
+impl View for Row
+    measure(&self, avail: Size) -> Size
+        var w = 0
+        var h = 0
+        val v = self.children.view()
+
+        for i in 0..<v.len
+            val s = v[i].measure(Size(avail.w - w, avail.h))
+
+            if s.h > h then h = s.h
+
+            w += s.w
+
+            if i + 1 < v.len then w += self.spacing
+
+        Size(w, h)
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        var x = r.x
+        val v = self.children.view()
+
+        for i in 0..<v.len
+            val s = v[i].measure(Size(r.right() - x, r.h))
+
+            v[i].paint(c, Rect(x, r.y, s.w, r.h))
+
+            x += s.w + self.spacing
+    end paint
+end Row
+
+// The container constructors, and the ergonomic gap card 0171 is about.
+//
+// **This is what a SysLUI program looks like without a trailing block argument:**
+//
+//     column([
+//         text("count"),
+//         text("increment").padding(4)
+//     ], 4)
+//
+// It is perfectly usable, it is what a v1 ships, and it is not what anybody screenshots. With 0171
+// the same tree is indentation, which is the whole of what SwiftUI gets from `@ViewBuilder` and
+// trailing-closure syntax together -- and sysl is indentation-based already, so it can read better
+// than the brace form it would be copied from.
+//
+// The array literal is what makes this work at all: `[]&View` takes an array at a call **only**
+// when the argument is a literal (card 0110), so a caller holding a `Buf` of children passes
+// `.view()` instead.
+column(children: []&View, spacing: int = 0) -> &View
+    var b: Buf[&View] = buf()
+
+    for i in 0..<children.len
+        b.push(children[i])
+
+    Column(b, spacing)
+end column
+
+row(children: []&View, spacing: int = 0) -> &View
+    var b: Buf[&View] = buf()
+
+    for i in 0..<children.len
+        b.push(children[i])
+
+    Row(b, spacing)
+end row
