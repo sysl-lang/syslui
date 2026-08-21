@@ -1,4 +1,4 @@
-// SysLUI — a declarative retained user interface for a machine with a heap.
+// syslUI — a declarative retained user interface for a machine with a heap.
 //
 // **This is a probe, not yet a framework.** Card 0203 asks six questions about whether the
 // architecture decided in 0168 survives contact with the compiler, and the code here exists to

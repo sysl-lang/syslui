@@ -1,4 +1,4 @@
-# SysLUI
+# syslUI
 
 A declarative retained user interface for sysl, for a machine with a heap.
 

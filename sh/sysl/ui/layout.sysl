@@ -96,7 +96,7 @@ end Row
 
 // The container constructors, and the ergonomic gap card 0171 is about.
 //
-// **This is what a SysLUI program looks like without a trailing block argument:**
+// **This is what a syslUI program looks like without a trailing block argument:**
 //
 //     column([
 //         text("count"),
