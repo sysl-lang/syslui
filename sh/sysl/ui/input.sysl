@@ -40,7 +40,7 @@ struct Hits
     //
     // **Last wins, because paint order is depth order**: a view drawn later covers one drawn
     // earlier, so the last region that contains the point is the one the eye says was clicked.
-    tap(self, x: int, y: int) -> bool
+    tap(*self, x: int, y: int) -> bool
         val v = self.items.view()
         var i = v.len
 
@@ -56,7 +56,7 @@ struct Hits
     end tap
 
     // How many regions this frame offered -- what a measurement counts and a test asserts.
-    len(self) -> usize = self.items.view().len
+    len(*self) -> usize = self.items.view().len
 end Hits
 
 hits() -> Hits = Hits(buf())

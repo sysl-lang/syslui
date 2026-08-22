@@ -33,7 +33,12 @@ trait Canvas
     unclip(*self)
 
     // How much room `s` takes in this canvas's font. A view measures through this or it is guessing.
-    text_size(self, s: string) -> Size
+    //
+    // **`*self` rather than `self` because a real canvas has a cache.** Measuring a run of text is a
+    // shaping pass, and a backend that answers the same question sixty times a second wants to
+    // remember; a by-value receiver would copy the canvas -- its texture cache, its renderer handle
+    // and its hit list -- once per measurement to avoid a mutation it is entitled to make.
+    text_size(*self, s: string) -> Size
 
     // Say that `r` answers to a tap, and what to do about it.
     //
@@ -99,7 +104,7 @@ impl Canvas for Recorder
     unclip(*self)
         self.ops.push("unclip")
 
-    text_size(self, s: string) -> Size = Size(int(s.len) * self.char_w, self.line_h)
+    text_size(*self, s: string) -> Size = Size(int(s.len) * self.char_w, self.line_h)
 
     hit(*self, r: Rect, f: &Fn() -> unit)
         self.ops.push(s"hit ${r.x},${r.y} ${r.w}x${r.h}")

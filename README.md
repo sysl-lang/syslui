@@ -14,7 +14,7 @@ device.
 
 ## What the probe has established
 
-Nine tests, `sysl test .` green.
+Nineteen tests, `sysl test .` green — and all six of card `0203`'s questions now answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -30,8 +30,38 @@ Nine tests, `sysl test .` green.
   by building a *different* tree that shares only the signal. This was the question most likely to
   move the architecture, and it did not.
 - **One layout pass works** — constraints down, sizes up, the parent places.
+- **A rebuild costs about 24 ns and one allocation a node**, which is nothing. Measured against a
+  real SDL3 frame loop with a counting allocator, at three tree sizes:
 
-Not yet answered: what a rebuild costs under ARC. That needs a real frame loop against SDL3.
+  | rows | boxed nodes | rebuild | + layout and paint | allocations a rebuild |
+  |---:|---:|---:|---:|---:|
+  | 30 | 74 | 2.7 µs | 13.3 µs | 93 |
+  | 300 | 614 | 15.5 µs | 118.0 µs | 641 |
+  | 3000 | 6014 | 141.8 µs | 1337.3 µs | 6047 |
+
+  Linear in the node count, one allocation a node and no more, and the largest of those is **0.85%
+  of a 60 Hz frame** to rebuild — 8% to rebuild, lay out and paint the lot. **So the per-frame arena
+  the mobile survey argued for is refused**: it would attack the one-eighth of the frame that is
+  allocation, and the seven-eighths that is layout and paint would not move. Note that nothing is
+  culled — every one of those 3000 rows is measured and painted, twenty of them visible.
+
+## What a program looks like
+
+```
+column(spacing = 10):
+    text(s"count: ${count.read()}").padding(6)
+
+    row([
+        button("increment", () -> count.set(count.read() + 1)),
+        button("decrement", () -> count.set(count.read() - 1))
+    ], 10)
+
+    scroll(column(rows.view(), 0), offset, 420)
+```
+
+The block fills the first parameter no written argument took, so naming `spacing` ahead of it still
+leaves the block to `children`. A `for` cannot go inside one — a block is a list of expressions —
+so a few hundred rows are built into a `Buf` and passed as a view.
 
 ## The architecture, in one paragraph
 
@@ -49,6 +79,7 @@ very little here.
 - `sh/sysl/ui/signal.sysl` — `Signal[T]` and its weak dependent list
 - `sh/sysl/ui/layout.sysl` — `Column` and `Row`
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives
-- `sh/sysl/ui/canvas.sysl` — a backend that draws nothing and remembers everything, so the tree can
-  be asserted with no window
+- `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against, and
+  a recorder that draws nothing and remembers everything, so the tree can be asserted with no window
+- `sh/sysl/ui/input.sysl` — where a tap goes: the regions the paint pass collected
 - `sh/sysl/ui/tests.sysl` — the findings, kept as tests rather than as prose

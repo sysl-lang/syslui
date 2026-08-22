@@ -268,3 +268,87 @@ private a_view_measures_in_the_font_of_the_canvas_it_is_given()
     assert(measured(v, Size(200, 200)) == Size(32, 32), "eight a byte, sixteen tall, plus the inset")
     assert(v.measure(&wide, Size(200, 200)) == Size(36, 36), "ten a byte, twenty tall, same inset")
 end a_view_measures_in_the_font_of_the_canvas_it_is_given
+
+// -- the edges, found by pointing a frame loop at the tree -----------------------------------------
+
+// **A click that arrives after the tree it was drawn from has gone.** This is the shape a real loop
+// makes on every frame that rebuilds: the record was written by the previous tree, the previous
+// tree has been dropped, and the mouse button goes down before the next paint replaces the record.
+//
+// It is safe, and the reason is worth stating rather than discovering: the record holds its handler
+// **strongly**, and a handler captures the signals it writes rather than the node that carried it.
+// So the node can go and the closure cannot dangle. A weak edge here -- which is the right edge in
+// the dependent list, twenty lines up -- would have made this the crash the frame loop trips over
+// first.
+@test
+private a_tap_recorded_by_a_tree_that_has_gone_still_runs()
+    val count = signal(0)
+    var c = recorder()
+
+    if true
+        val tree = button("increment", () -> count.set(count.read() + 1))
+
+        tree.paint(&c, Rect(0, 0, 100, 28))
+
+    assert(c.taps.tap(50, 14), "the region outlived the tree that drew it")
+    assert(count.read() == 1, "and its action still reaches the signal")
+end a_tap_recorded_by_a_tree_that_has_gone_still_runs
+
+// A container with nothing in it. The spacing is added between children, so a container that added
+// it per child would give an empty one a height and a single-child one a trailing gap.
+@test
+private an_empty_container_measures_to_nothing()
+    assert(measured(column([], 8), Size(200, 200)) == Size(0, 0), "no children, no size, no spacing")
+    assert(measured(row([], 8), Size(200, 200)) == Size(0, 0), "and the same across")
+    assert(measured(column([text("a")], 8), Size(200, 200)) == Size(8, 16), "one child, no gap after it")
+end an_empty_container_measures_to_nothing
+
+// An inset larger than the space it is given. The child is offered a negative width, which is what
+// the arithmetic produces and is not something a caller would write on purpose -- a window dragged
+// narrow produces it on the way past. What must not happen is a wrapper reporting less than its own
+// insets, which would place the next sibling on top of it.
+@test
+private an_inset_wider_than_the_space_still_reports_its_own_width()
+    val v = text("hi").padding(20)
+
+    assert(measured(v, Size(10, 10)) == Size(56, 56), "the text still measures, and the insets are added")
+end an_inset_wider_than_the_space_still_reports_its_own_width
+
+// A list scrolled past its end. Nothing in `Scroll` clamps, and that is deliberate: the offset is
+// the application's signal, so the clamp is the application's -- a framework that clamped would need
+// to know the content height at write time, which is exactly the layout it has not run yet.
+@test
+private a_scroll_past_the_end_paints_nothing_and_does_not_fail()
+    val offset = signal(10_000)
+    var c = recorder()
+
+    scroll(column([text("a"), text("b")], 0), offset, 40).paint(&c, Rect(0, 0, 100, 40))
+
+    assert(c.dump() == "clip 0,0 100x40\ntext 0,-10000 100x16 'a'\ntext 0,-9984 100x16 'b'\nunclip\n",
+           s"got:\n${c.dump()}")
+end a_scroll_past_the_end_paints_nothing_and_does_not_fail
+
+// Two dependents on one signal, one of which goes. The sweep must keep the survivor -- a `notify`
+// that rebuilt its list from the live ones and dropped a live one with them would be a subscription
+// that silently stops, which is the hardest kind of bug to see in a user interface.
+@test
+private a_sweep_keeps_the_dependent_that_is_still_alive()
+    val s = signal(0)
+    val lived = signal(0)
+    val died = signal(0)
+    val keep: &Fn() -> unit = () -> lived.set(lived.read() + 1)
+
+    s.watch(keep)
+
+    if true
+        val f: &Fn() -> unit = () -> died.set(died.read() + 1)
+
+        s.watch(f)
+        s.set(1)
+
+    s.set(2)
+    s.set(3)
+
+    assert(lived.read() == 3, "the survivor heard every write")
+    assert(died.read() == 1, "and the one that went heard only the one before it did")
+end a_sweep_keeps_the_dependent_that_is_still_alive
