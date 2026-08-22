@@ -24,6 +24,20 @@ private measured(v: &View, avail: Size) -> Size
     v.measure(&c, avail)
 end measured
 
+// **`Size` and `Rect` ask the compiler to write their `Eq`, and a derived comparison has exactly one
+// way to go wrong.** Two fields of the same type read in the wrong order still compiles and still
+// answers `true` for most pairs, so every assertion below moves one field and expects that move to
+// be seen. Everything else in this file compares a `Size` and would not notice.
+@test
+private a_derived_eq_sees_every_field()
+    assert(Rect(1, 2, 3, 4) == Rect(1, 2, 3, 4), "the same four fields are equal")
+    assert(Rect(9, 2, 3, 4) != Rect(1, 2, 3, 4), "x is compared")
+    assert(Rect(1, 9, 3, 4) != Rect(1, 2, 3, 4), "y is compared")
+    assert(Rect(1, 2, 9, 4) != Rect(1, 2, 3, 4), "w is compared")
+    assert(Rect(1, 2, 3, 9) != Rect(1, 2, 3, 4), "h is compared")
+    assert(Size(1, 2) != Size(2, 1), "a transposed pair is not equality")
+end a_derived_eq_sees_every_field
+
 // **Question 1: does a modifier chain?**
 //
 // `text("hi").padding(8).background(red)` -- three links, each a trait default returning `&View`,

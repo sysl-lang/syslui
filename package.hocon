@@ -12,10 +12,10 @@ package {
   name    = "syslui"
   version = "0.0.1"
 
-  // **The oldest compiler this builds with, and it is not the newest release.** A tree here is
-  // written as an indented block -- `column(spacing = 8):` -- which landed on the compiler's `dev`
-  // after 0.0.65 was stamped. Card 0203 paused the second half of the probe rather than write the
-  // programs twice, so this is the floor that pause bought.
+  // **The oldest compiler this builds with, and it is a released one.** A tree here is written as an
+  // indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler to write
+  // their own `Eq`. Neither spelling existed at 0.0.65; both shipped in 0.0.66, which is what this
+  // floor names.
   sysl = "0.0.66"
 }
 

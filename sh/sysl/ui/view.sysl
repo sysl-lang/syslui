@@ -20,12 +20,12 @@ import sysl.buf.{Buf, buf}
 
 // How much room a view is offered, and how much it asks for. Both are the same shape, which is what
 // makes the layout pass one function rather than two.
-struct Size
+struct Size deriving Eq
     w: int
     h: int
 end Size
 
-struct Rect
+struct Rect deriving Eq
     x: int
     y: int
     w: int
@@ -38,17 +38,6 @@ struct Rect
     holds(self, px: int, py: int) -> bool =
         px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
 end Rect
-
-// **Both of these are hand-written and both of them are card 0174's argument in four lines.** A
-// struct of integers compared field by field is the most mechanical code in the package, and there
-// is no way to ask for it: `for const` over a struct's fields is what would derive `Eq`, `Hash` and
-// `Display` together. Until then a probe that wants to assert a measurement writes this out.
-impl Eq for Size
-    eq(self, rhs: Size) -> bool = self.w == rhs.w && self.h == rhs.h
-
-impl Eq for Rect
-    eq(self, rhs: Rect) -> bool =
-        self.x == rhs.x && self.y == rhs.y && self.w == rhs.w && self.h == rhs.h
 
 // Where a view goes, once its parent has decided.
 //
