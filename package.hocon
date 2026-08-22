@@ -11,6 +11,12 @@
 package {
   name    = "syslui"
   version = "0.0.1"
+
+  // **The oldest compiler this builds with, and it is not the newest release.** A tree here is
+  // written as an indented block -- `column(spacing = 8):` -- which landed on the compiler's `dev`
+  // after 0.0.65 was stamped. Card 0203 paused the second half of the probe rather than write the
+  // programs twice, so this is the floor that pause bought.
+  sysl = "0.0.66"
 }
 
 // **The probe asks for a heap and nothing else, which is itself one of the findings.** An erased
