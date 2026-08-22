@@ -2,7 +2,7 @@ module sh.sysl.ui
 @tests
 
 import sysl.buf.{Buf, buf}
-import sysl.seq.Sequence
+import sysl.seq.{Sequence, generate}
 
 // The probe's findings, kept as tests rather than as prose.
 //
@@ -164,14 +164,8 @@ end a_column_places_each_child_below_the_last
 // The tree is thrown away and built again -- which is what a signal write causes -- and the scroll
 // position must still be what it was. If this needs element identity, the erased tree cannot supply
 // it and 0168's architecture has a hole in it.
-private list_of(n: int, offset: &Signal[int]) -> &View
-    var rows: Buf[&View] = buf()
-
-    for i in 0..<n
-        rows.push(text(s"row ${i}"))
-
-    scroll(column(rows.view(), 0), offset, 40)
-end list_of
+private list_of(n: int, offset: &Signal[int]) -> &View =
+    scroll(column(generate(usize(n), i -> text(s"row ${i}")), 0), offset, 40)
 
 @test
 private a_scroll_offset_survives_the_tree_being_rebuilt()
