@@ -33,6 +33,10 @@ struct Rect
 
     right(self) -> int = self.x + self.w
     bottom(self) -> int = self.y + self.h
+
+    // Is `px`, `py` inside this rectangle? What a click is matched against.
+    holds(self, px: int, py: int) -> bool =
+        px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
 end Rect
 
 // **Both of these are hand-written and both of them are card 0174's argument in four lines.** A
@@ -54,12 +58,17 @@ impl Eq for Rect
 // `imui` for the same reason: a trait a backend or a widget can implement in a dozen lines is one
 // people actually implement.
 //
+// **Both members take the canvas**, and `measure` takes it for the same reason `paint` does: a run
+// of text is however wide the font makes it, and the font belongs to the backend. A view that
+// measured itself would be guessing, which is exactly what this probe did until a real frame loop
+// showed the rows of a list in the wrong places.
+//
 // **`Self` appears nowhere but the receiver**, which is what makes `&View` formable at all. A
 // modifier returns `&View` rather than `Self` -- so `padding` on a `Text` and `padding` on a
 // `Column` have the same signature, and the chain does not have to know what it is standing on.
 trait View
     // What this view wants to be, given a box it must fit inside.
-    measure(&self, avail: Size) -> Size
+    measure(&self, c: *Canvas, avail: Size) -> Size
 
     // Draw into the rectangle layout settled on. A view may be given less than it measured for and
     // must not draw outside `r`.
@@ -76,20 +85,23 @@ trait View
 
     // Ask for a fixed size regardless of what this view would have measured to.
     frame(&self, w: int, h: int) -> &View = Frame(self, w, h)
+
+    // Call `f` when this view is tapped.
+    //
+    // **A fourth modifier rather than a `Button` widget**, which is worth more than the line it
+    // saves: it says that input composes with the chain the same way drawing does, so anything is
+    // tappable and a button is a composition rather than a type. `button` below is three links and
+    // no new view.
+    on_tap(&self, f: &Fn() -> unit) -> &View = Tappable(self, f)
 end View
 
-// A leaf: one run of text, measured by a fixed advance so the probe needs no font.
-//
-// **The width is a lie and is meant to be.** A real backend measures with `TTF_GetStringSize`, and
-// the whole point of `Canvas` standing in for one is that the tree can be asserted without a
-// display server. Eight pixels per byte is wrong for anything but ASCII and is stable, which is
-// what a test wants.
+// A leaf: one run of text, measured by whatever font the canvas draws with.
 struct Text
     s: string
 end Text
 
 impl View for Text
-    measure(&self, avail: Size) -> Size = Size(int(self.s.len) * 8, 16)
+    measure(&self, c: *Canvas, avail: Size) -> Size = c.text_size(self.s)
 
     paint(&self, c: *Canvas, r: Rect) = c.text(r, self.s)
 end Text
@@ -98,20 +110,20 @@ end Text
 struct Spacer end Spacer
 
 impl View for Spacer
-    measure(&self, avail: Size) -> Size = Size(0, 0)
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(0, 0)
 
     paint(&self, c: *Canvas, r: Rect) = ()
 end Spacer
 
-// The three modifiers, each holding its child as an erased box.
+// The four modifiers, each holding its child as an erased box.
 struct Padding
     child: &View
     n: int
 end Padding
 
 impl View for Padding
-    measure(&self, avail: Size) -> Size
-        val inner = self.child.measure(Size(avail.w - 2 * self.n, avail.h - 2 * self.n))
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        val inner = self.child.measure(c, Size(avail.w - 2 * self.n, avail.h - 2 * self.n))
 
         Size(inner.w + 2 * self.n, inner.h + 2 * self.n)
     end measure
@@ -128,7 +140,7 @@ struct Background
 end Background
 
 impl View for Background
-    measure(&self, avail: Size) -> Size = self.child.measure(avail)
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
 
     paint(&self, c: *Canvas, r: Rect)
         c.fill(r, self.color)
@@ -143,17 +155,38 @@ struct Frame
 end Frame
 
 impl View for Frame
-    measure(&self, avail: Size) -> Size = Size(self.w, self.h)
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.w, self.h)
 
     paint(&self, c: *Canvas, r: Rect) = self.child.paint(c, r)
 end Frame
+
+// A view that answers to a tap, and the reason the action is stored strongly.
+//
+// **The closure is a `&Fn() -> unit` this node owns, where a signal's dependent list holds one
+// weakly.** The two are not the same edge and holding this one weakly would be a bug: a tree is
+// built, handed to the frame loop and is the only thing referring to its own handlers, so a weak
+// action would be swept between the build and the click. What holds the action alive is the node,
+// and what holds the node alive is the tree -- so a subtree that goes takes its handlers with it,
+// which is the same lifetime story the signal has from the other end.
+struct Tappable
+    child: &View
+    action: &Fn() -> unit
+end Tappable
+
+impl View for Tappable
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.child.paint(c, r)
+        c.hit(r, self.action)
+    end paint
+end Tappable
 
 // The constructors, and the reason they are not the struct names.
 //
 // **A struct constructor alone will not chain, and the diagnostic says why**: `Text("hi")` is a
 // value on the stack, and `&self` -- which every modifier takes, so that a wrapper can store the
-// box rather than a copy -- has no reference to bind to. Writing `&Text("hi").padding(8)` works and
-// is not what anybody should have to write.
+// box rather than a copy -- has no reference to bind to.
 //
 //     error: '&self' needs a reference; a sh.sysl.ui.Text on the stack has none
 //            -- take '*self' instead, or put the object behind a '&'
@@ -166,3 +199,11 @@ end Frame
 text(s: string) -> &View = Text(s)
 
 spacer() -> &View = Spacer()
+
+// A tappable label on a filled ground.
+//
+// **Three links of the chain and no new view type**, which is the whole argument for `on_tap` being
+// a modifier. The colour is a constant rather than a theme because a probe with a theme system has
+// stopped being a probe; a framework gives this a `Style` and nothing else about it changes.
+button(label: string, on_tap: &Fn() -> unit, color: u32 = 0x3A6EA5u32) -> &View =
+    text(label).padding(6).background(color).on_tap(on_tap)

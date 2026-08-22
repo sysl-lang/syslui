@@ -2,21 +2,91 @@ module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 
+// What a frame is drawn through, and what tells a view how big its text is.
+//
+// **This is a trait rather than a struct because the probe now has two backends and they are not
+// alike.** The recorder below answers every question about the *tree* with no window, no font and
+// no display server, which is what made five of card 0203's six questions answerable in a unit
+// test. The sixth is about a real frame, and a real frame needs a real font -- so the thing a view
+// draws through has to be something a caller supplies.
+//
+// **A view reaches it as `*Canvas`, an erased pointer, and that is the shape rather than a generic
+// bound.** `imui` takes `p: *P` for `[P: Painter]` so every call monomorphizes and nothing is
+// dispatched; it can, because its widgets are functions. A `View` here is already a trait object,
+// and a generic method would make it one no longer -- so the canvas is erased too, and the two
+// erasures meet at one indirect call per drawing operation. That is the cost of a retained tree and
+// it is the bargain 0168 struck.
+//
+// **Measurement is on this trait and not on the view**, which is the one thing the recorder version
+// of the probe got wrong: `Text` measured itself at eight pixels a byte, and a row of a list is
+// however tall the font says it is. A canvas knows its font; a view does not and should not.
+trait Canvas
+    // Fill a rectangle with a solid colour, 0xRRGGBB.
+    fill(*self, r: Rect, color: u32)
+
+    // Draw a run of text with its top-left at `r`, clipped to `r`.
+    text(*self, r: Rect, t: string)
+
+    // Restrict drawing to `r` until the matching `unclip`.
+    clip(*self, r: Rect)
+
+    unclip(*self)
+
+    // How much room `s` takes in this canvas's font. A view measures through this or it is guessing.
+    text_size(self, s: string) -> Size
+
+    // Say that `r` answers to a tap, and what to do about it.
+    //
+    // **Input is collected by the paint pass rather than by a pass of its own**, which is the
+    // cheapest thing that works over an erased tree: there is no element to hang a hit region on
+    // and no second walk that would know where anything landed, because layout is decided during
+    // paint. So a view that wants a tap says so where it draws, the canvas collects the regions in
+    // paint order, and the backend matches a click against the last one that contains it -- last
+    // being topmost, since a later fill covers an earlier one.
+    hit(*self, r: Rect, f: &Fn() -> unit)
+end Canvas
+
 // A backend that draws nothing and remembers everything.
 //
 // **This is what lets the probe answer its questions with no window.** A tree that laid itself out
 // correctly and a tree that did not look identical from the outside unless something records where
-// each piece landed; `imui` reached the same conclusion and has `record.sysl` for it. Every question
-// card 0203 asks about the *tree* -- does a modifier chain, does the erasure survive a wrapper, does
-// one layout pass work -- is answerable against a recorder, and only the questions about the *frame*
-// need SDL3.
+// each piece landed; `imui` reached the same conclusion and has `record.sysl` for it.
 //
 // The recording is text on purpose. A structured command list would need an enum, an `Eq` and a
 // printer before a single assertion could be written, and what a failing test wants to show is a
 // line a person can read.
-struct Canvas
+struct Recorder
     ops: Buf[string]
 
+    // What the frame said was interactive, so a test can click a button rather than assert that a
+    // line naming one was printed.
+    taps: Hits
+
+    // The font this canvas pretends to draw with, one fixed advance and one line height.
+    //
+    // **It is a parameter rather than a constant so that a test can lay a tree out against a font
+    // it was not written for.** That is not idle: a view measured itself until a real frame loop
+    // showed a list of rows in the wrong places, and the reason nothing caught it was that the only
+    // canvas in existence agreed with the guess. Two fonts is what makes the disagreement visible.
+    char_w: int
+    line_h: int
+
+    // What was drawn, oldest first, one operation per line.
+    dump(self) -> string
+        var out = ""
+        val v = self.ops.view()
+
+        for i in 0..<v.len
+            out = out + v[i] + "\n"
+
+        out
+    end dump
+end Recorder
+
+// **A fixed advance a byte, and it is a lie meant to be one.** A real font measures with
+// `TTF_GetStringSize`; this is stable, which is what a test wants, and wrong for anything but
+// ASCII, which is what keeps anybody from mistaking it for a font.
+impl Canvas for Recorder
     fill(*self, r: Rect, color: u32)
         self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}")
 
@@ -29,16 +99,13 @@ struct Canvas
     unclip(*self)
         self.ops.push("unclip")
 
-    // What was drawn, oldest first, one operation per line.
-    dump(self) -> string
-        var out = ""
-        val v = self.ops.view()
+    text_size(self, s: string) -> Size = Size(int(s.len) * self.char_w, self.line_h)
 
-        for i in 0..<v.len
-            out = out + v[i] + "\n"
+    hit(*self, r: Rect, f: &Fn() -> unit)
+        self.ops.push(s"hit ${r.x},${r.y} ${r.w}x${r.h}")
+        self.taps.add(r, f)
+end Recorder
 
-        out
-    end dump
-end Canvas
-
-canvas() -> Canvas = Canvas(buf())
+// The default font is eight by sixteen, which is what every measurement in the package's own tests
+// is written in terms of.
+recorder(char_w: int = 8, line_h: int = 16) -> Recorder = Recorder(buf(), hits(), char_w, line_h)

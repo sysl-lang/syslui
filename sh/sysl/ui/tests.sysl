@@ -10,11 +10,19 @@ import sysl.buf.{Buf, buf}
 // passes here is a claim in 0168 that has now been *run* rather than read off a design chapter.
 
 private assert_paints(v: &View, avail: Size, at: Rect, expected: string)
-    var c = canvas()
+    var c = recorder()
 
     v.paint(&c, at)
     assert(c.dump() == expected, s"expected:\n${expected}got:\n${c.dump()}")
 end assert_paints
+
+// What a view measures to, through a canvas, since a view no longer measures itself. The recorder's
+// font is eight pixels a byte and sixteen tall, which is what every number below is in terms of.
+private measured(v: &View, avail: Size) -> Size
+    var c = recorder()
+
+    v.measure(&c, avail)
+end measured
 
 // **Question 1: does a modifier chain?**
 //
@@ -25,7 +33,7 @@ end assert_paints
 private a_modifier_chain_calls_through_an_erased_receiver()
     val v = text("hi").padding(8).background(0xFF0000u32)
 
-    assert(v.measure(Size(200, 200)) == Size(32, 32), "two chars at 8px plus 8px of padding a side")
+    assert(measured(v, Size(200, 200)) == Size(32, 32), "two chars at 8px plus 8px of padding a side")
 end a_modifier_chain_calls_through_an_erased_receiver
 
 // **Question 2: does the wrapped view stay erased?**
@@ -44,9 +52,9 @@ private a_leaf_and_a_wrapper_meet_at_one_object_type()
 
     val v = views.view()
 
-    assert(v[0].measure(Size(100, 100)) == Size(8, 16), "the leaf measures itself")
-    assert(v[1].measure(Size(100, 100)) == Size(24, 24), "the wrapper adds its inset")
-    assert(v[2].measure(Size(100, 100)) == Size(50, 10), "a frame overrides what it wraps")
+    assert(measured(v[0], Size(100, 100)) == Size(8, 16), "the leaf measures itself")
+    assert(measured(v[1], Size(100, 100)) == Size(24, 24), "the wrapper adds its inset")
+    assert(measured(v[2], Size(100, 100)) == Size(50, 10), "a frame overrides what it wraps")
 end a_leaf_and_a_wrapper_meet_at_one_object_type
 
 // A chain paints inside-out: the background fills the whole rectangle it was given, then the
@@ -120,14 +128,14 @@ private a_column_stacks_what_its_children_asked_for()
         row([text("c"), text("d")], 2)
     ], 3)
 
-    assert(v.measure(Size(200, 200)) == Size(24, 62), "the widest child, and every height plus the gaps")
+    assert(measured(v, Size(200, 200)) == Size(24, 62), "the widest child, and every height plus the gaps")
 end a_column_stacks_what_its_children_asked_for
 
 // And the positions, which the sizes alone do not say. Reading the recording is what catches a
 // container that measured correctly and then placed everything at the origin.
 @test
 private a_column_places_each_child_below_the_last()
-    var c = canvas()
+    var c = recorder()
     val v = column([text("a"), text("bb"), text("c")], 3)
 
     v.paint(&c, Rect(10, 20, 100, 100))
@@ -161,7 +169,7 @@ private a_scroll_offset_survives_the_tree_being_rebuilt()
 
     // A completely different tree, built from scratch, sharing only the signal.
     val after = list_of(10, offset)
-    var c = canvas()
+    var c = recorder()
 
     after.paint(&c, Rect(0, 0, 100, 40))
 
@@ -169,3 +177,94 @@ private a_scroll_offset_survives_the_tree_being_rebuilt()
     assert(c.dump() == "clip 0,0 100x40\ntext 0,-32 100x16 'row 0'\ntext 0,-16 100x16 'row 1'\ntext 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\ntext 0,48 100x16 'row 5'\ntext 0,64 100x16 'row 6'\ntext 0,80 100x16 'row 7'\ntext 0,96 100x16 'row 8'\ntext 0,112 100x16 'row 9'\nunclip\n",
            s"got:\n${c.dump()}")
 end a_scroll_offset_survives_the_tree_being_rebuilt
+
+// **A tree written as indentation**, which is card 0171 arriving and the reason the second half of
+// 0203 waited for it. The same tree as an array literal is asserted a few tests above; this one is
+// here to say the two build the same thing, and that a block's lines may be different concrete
+// types reaching one `[]&View` -- a `Text`, a chain ending in a `Background`, and a nested `Row`.
+@test
+private a_trailing_block_builds_the_same_tree_as_a_literal()
+    val block = column(spacing = 3):
+        text("a")
+        text("bb").padding(4)
+        row([text("c"), text("d")], 2)
+
+    val literal = column([
+        text("a"),
+        text("bb").padding(4),
+        row([text("c"), text("d")], 2)
+    ], 3)
+
+    assert(measured(block, Size(200, 200)) == measured(literal, Size(200, 200)),
+           "the block and the literal measure alike")
+
+    var a = recorder()
+    var b = recorder()
+
+    block.paint(&a, Rect(10, 20, 100, 100))
+    literal.paint(&b, Rect(10, 20, 100, 100))
+
+    assert(a.dump() == b.dump(), s"block:\n${a.dump()}literal:\n${b.dump()}")
+end a_trailing_block_builds_the_same_tree_as_a_literal
+
+// A block naming `spacing` first still fills `children`, which is the rule 0171 landed second and
+// the first thing anybody writes. Without it the block would be stranded at the parameter after the
+// one it meant.
+@test
+private a_named_argument_before_a_block_does_not_take_its_slot()
+    val v = column(spacing = 3):
+        text("a")
+        text("bb")
+
+    assert(measured(v, Size(200, 200)) == Size(16, 35), "two rows of 16 and one gap of 3")
+end a_named_argument_before_a_block_does_not_take_its_slot
+
+// **Input composes with the chain.** `on_tap` is a modifier like `padding`, so a button is three
+// links and no new view type -- and what proves it is a tap arriving at the closure through the
+// erasure, not a line in the recording saying a region was registered.
+@test
+private a_tap_reaches_the_action_of_the_view_that_was_drawn()
+    val count = signal(0)
+    var c = recorder()
+
+    button("increment", () -> count.set(count.read() + 1)).paint(&c, Rect(0, 0, 100, 28))
+
+    assert(c.taps.len() == 1, "one region, from the one tappable view")
+    assert(c.taps.tap(50, 14), "a point inside it is a hit")
+    assert(count.read() == 1, "and the action ran")
+    assert(!c.taps.tap(400, 14), "a point outside every region is not")
+    assert(count.read() == 1, "and nothing ran")
+end a_tap_reaches_the_action_of_the_view_that_was_drawn
+
+// Paint order is depth order, so the last region holding a point is the one on top. A column of two
+// buttons is the ordinary case; two overlapping regions is the case that says which rule is in use.
+@test
+private the_topmost_region_wins_a_point_two_of_them_hold()
+    val which = signal(0)
+    var c = recorder()
+
+    val v = column(spacing = 0):
+        button("under", () -> which.set(1))
+        button("over", () -> which.set(2))
+
+    v.paint(&c, Rect(0, 0, 200, 60))
+
+    assert(c.taps.len() == 2, "two buttons, two regions")
+    assert(c.taps.tap(10, 40), "the lower half is the second button")
+    assert(which.read() == 2, "and it is the one that ran")
+end the_topmost_region_wins_a_point_two_of_them_hold
+
+// A canvas whose font is not the one these tests are written in, which is the whole reason
+// `measure` takes one.
+//
+// **This is the defect the frame loop found.** A `Text` used to measure itself at eight pixels a
+// byte, so a list of rows laid out against a real font put every row in the wrong place -- and no
+// test could have caught it, because the only canvas in existence agreed with the guess.
+@test
+private a_view_measures_in_the_font_of_the_canvas_it_is_given()
+    val v = text("hi").padding(8)
+    var wide = recorder(10, 20)
+
+    assert(measured(v, Size(200, 200)) == Size(32, 32), "eight a byte, sixteen tall, plus the inset")
+    assert(v.measure(&wide, Size(200, 200)) == Size(36, 36), "ten a byte, twenty tall, same inset")
+end a_view_measures_in_the_font_of_the_canvas_it_is_given

@@ -25,7 +25,7 @@ struct Scroll
 end Scroll
 
 impl View for Scroll
-    measure(&self, avail: Size) -> Size = Size(avail.w, self.height)
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(avail.w, self.height)
 
     paint(&self, c: *Canvas, r: Rect)
         val window = Rect(r.x, r.y, r.w, self.height)
@@ -33,7 +33,7 @@ impl View for Scroll
         // The child is measured against an unbounded height, which is what makes it a scroller: a
         // list of a thousand rows asks for the height of a thousand rows and gets clipped to the
         // window rather than squeezed into it.
-        val inner = self.child.measure(Size(r.w, 1_000_000))
+        val inner = self.child.measure(c, Size(r.w, 1_000_000))
 
         c.clip(window)
         self.child.paint(c, Rect(r.x, r.y - self.offset.read(), r.w, inner.h))

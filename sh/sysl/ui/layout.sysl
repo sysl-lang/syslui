@@ -27,13 +27,13 @@ struct Column
 end Column
 
 impl View for Column
-    measure(&self, avail: Size) -> Size
+    measure(&self, c: *Canvas, avail: Size) -> Size
         var w = 0
         var h = 0
         val v = self.children.view()
 
         for i in 0..<v.len
-            val s = v[i].measure(Size(avail.w, avail.h - h))
+            val s = v[i].measure(c, Size(avail.w, avail.h - h))
 
             if s.w > w then w = s.w
 
@@ -49,7 +49,7 @@ impl View for Column
         val v = self.children.view()
 
         for i in 0..<v.len
-            val s = v[i].measure(Size(r.w, r.bottom() - y))
+            val s = v[i].measure(c, Size(r.w, r.bottom() - y))
 
             v[i].paint(c, Rect(r.x, y, r.w, s.h))
 
@@ -64,13 +64,13 @@ struct Row
 end Row
 
 impl View for Row
-    measure(&self, avail: Size) -> Size
+    measure(&self, c: *Canvas, avail: Size) -> Size
         var w = 0
         var h = 0
         val v = self.children.view()
 
         for i in 0..<v.len
-            val s = v[i].measure(Size(avail.w - w, avail.h))
+            val s = v[i].measure(c, Size(avail.w - w, avail.h))
 
             if s.h > h then h = s.h
 
@@ -86,7 +86,7 @@ impl View for Row
         val v = self.children.view()
 
         for i in 0..<v.len
-            val s = v[i].measure(Size(r.right() - x, r.h))
+            val s = v[i].measure(c, Size(r.right() - x, r.h))
 
             v[i].paint(c, Rect(x, r.y, s.w, r.h))
 
@@ -94,23 +94,32 @@ impl View for Row
     end paint
 end Row
 
-// The container constructors, and the ergonomic gap card 0171 is about.
+// The container constructors, and what a trailing block does to them.
 //
-// **This is what a syslUI program looks like without a trailing block argument:**
+// **A tree is indentation now**, which is what card 0171 was filed to get and what it landed:
 //
-//     column([
-//         text("count"),
-//         text("increment").padding(4)
-//     ], 4)
+//     column(spacing = 8):
+//         text(s"count: ${count.read()}")
+//         button("increment", () -> count.set(count.read() + 1))
 //
-// It is perfectly usable, it is what a v1 ships, and it is not what anybody screenshots. With 0171
-// the same tree is indentation, which is the whole of what SwiftUI gets from `@ViewBuilder` and
-// trailing-closure syntax together -- and sysl is indentation-based already, so it can read better
-// than the brace form it would be copied from.
+// The block fills the first parameter no written argument took, so naming `spacing` ahead of it is
+// not a conflict -- the block still goes to `children`. That rule is the reason `column(spacing =
+// 8):` works at all, and it is the first thing anybody writes.
 //
-// The array literal is what makes this work at all: `[]&View` takes an array at a call **only**
-// when the argument is a literal (card 0110), so a caller holding a `Buf` of children passes
-// `.view()` instead.
+// **The older form still compiles and is what a caller with a `Buf` of children writes:**
+//
+//     column([text("a"), text("b")], 4)
+//     column(rows.view(), 4)
+//
+// The array literal is what makes the first of those work: `[]&View` takes an array at a call
+// **only** when the argument is a literal (card 0110), so a caller holding a `Buf` passes `.view()`
+// instead. A block is a literal by the same rule, which is why lines of different concrete types
+// meet at one `[]&View` without a cast.
+//
+// **What a block will not hold is a loop**, and that limit is 0171's stated cost rather than an
+// oversight: a block is a list of expressions and a `for` is a statement. A list of a few hundred
+// rows is therefore built into a `Buf` and passed as a view, exactly as `list_of` does below the
+// tests -- and Swift's `buildArray` is precisely the machinery that was refused.
 column(children: []&View, spacing: int = 0) -> &View
     var b: Buf[&View] = buf()
 

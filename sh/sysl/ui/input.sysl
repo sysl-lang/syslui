@@ -1,0 +1,62 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// Where a tap goes, once the frame that could answer it has been drawn.
+//
+// **The regions are collected by the paint pass and matched afterwards, which is the only shape an
+// erased tree leaves open.** A retained framework hangs a hit region on the element that owns it
+// and walks the element tree on a click; there are no elements here, and the view tree does not
+// know where anything landed -- layout is decided inside `paint` and is gone by the time it
+// returns. So the frame records what was interactive as it draws, and a click consults the record.
+//
+// This is immediate mode's answer arriving in a retained framework, and it is not a compromise: the
+// record is rebuilt every frame anyway, so it cannot go stale, and the thing a click must not do --
+// fire a handler belonging to a subtree that has since been thrown away -- is impossible when the
+// record and the tree are built together.
+//
+// **The action is held strongly.** A handler is reached only from the node that carries it, and a
+// weak edge here would be swept between the build and the click.
+
+// One interactive rectangle and what it does.
+struct Hit
+    r: Rect
+    action: &Fn() -> unit
+end Hit
+
+// The interactive regions of one frame, in paint order.
+struct Hits
+    items: Buf[Hit]
+
+    // Forget the previous frame. A backend calls this before painting, not after: the record has to
+    // outlive the frame it describes, because the click that consults it arrives later.
+    reset(*self)
+        self.items = buf()
+
+    add(*self, r: Rect, action: &Fn() -> unit)
+        self.items.push(Hit(r, action))
+
+    // Call the topmost region holding this point, and say whether there was one.
+    //
+    // **Last wins, because paint order is depth order**: a view drawn later covers one drawn
+    // earlier, so the last region that contains the point is the one the eye says was clicked.
+    tap(self, x: int, y: int) -> bool
+        val v = self.items.view()
+        var i = v.len
+
+        while i > 0
+            i -= 1
+
+            if v[i].r.holds(x, y)
+                (v[i].action)()
+
+                return true
+
+        false
+    end tap
+
+    // How many regions this frame offered -- what a measurement counts and a test asserts.
+    len(self) -> usize = self.items.view().len
+end Hits
+
+hits() -> Hits = Hits(buf())
