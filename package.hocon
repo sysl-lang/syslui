@@ -12,11 +12,12 @@ package {
   name    = "syslui"
   version = "0.0.1"
 
-  // **The oldest compiler this builds with, and it is a released one.** A tree here is written as an
-  // indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler to write
-  // their own `Eq`. Neither spelling existed at 0.0.65; both shipped in 0.0.66, which is what this
-  // floor names.
-  sysl = "0.0.66"
+  // **The oldest compiler this builds with, and it is ahead of the newest release.** A tree here is
+  // written as an indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler
+  // to write their own `Eq`; both of those shipped in 0.0.66. What moves the floor past it is
+  // `sysl.seq`, which is how a list of children is produced now that a container takes one whole
+  // rather than one built into a `Buf` beside the call.
+  sysl = "0.0.71"
 }
 
 // **The probe asks for a heap and nothing else, which is itself one of the findings.** An erased

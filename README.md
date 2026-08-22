@@ -56,12 +56,13 @@ column(spacing = 10):
         button("decrement", () -> count.set(count.read() - 1))
     ], 10)
 
-    scroll(column(rows.view(), 0), offset, 420)
+    scroll(column(rows.map(r -> text(r).padding(3)), 0), offset, 420)
 ```
 
 The block fills the first parameter no written argument took, so naming `spacing` ahead of it still
 leaves the block to `children`. A `for` cannot go inside one — a block is a list of expressions —
-so a few hundred rows are built into a `Buf` and passed as a view.
+so a list whose length is known only while running is named with `sysl.seq`'s `map` and handed to
+the container whole, rather than accumulated into a `Buf` beside the call.
 
 ## The architecture, in one paragraph
 

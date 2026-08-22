@@ -117,14 +117,19 @@ end Row
 // meet at one `[]&View` without a cast.
 //
 // **What a block will not hold is a loop**, and that limit is 0171's stated cost rather than an
-// oversight: a block is a list of expressions and a `for` is a statement. A list of a few hundred
-// rows is therefore built into a `Buf` and passed as a view, exactly as `list_of` does below the
-// tests -- and Swift's `buildArray` is precisely the machinery that was refused.
+// oversight: a block is a list of expressions and a `for` is a statement. What a list of rows is
+// written as instead is one expression that produces the whole list, which is what `sysl.seq` is
+// for:
+//
+//     column(rows.map(r -> text(r).padding(3)), 0)
+//
+// That is the shape Swift reaches `buildArray` for, arrived at from the other end: the loop stays
+// out of the block, and the sequence the loop would have built is named rather than accumulated.
+// A caller that already holds a `Buf` still passes `.view()`.
 column(children: []&View, spacing: int = 0) -> &View
     var b: Buf[&View] = buf()
 
-    for i in 0..<children.len
-        b.push(children[i])
+    b.extend(children)
 
     Column(b, spacing)
 end column
@@ -132,8 +137,7 @@ end column
 row(children: []&View, spacing: int = 0) -> &View
     var b: Buf[&View] = buf()
 
-    for i in 0..<children.len
-        b.push(children[i])
+    b.extend(children)
 
     Row(b, spacing)
 end row

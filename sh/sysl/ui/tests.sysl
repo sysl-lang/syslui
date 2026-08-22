@@ -2,6 +2,7 @@ module sh.sysl.ui
 @tests
 
 import sysl.buf.{Buf, buf}
+import sysl.seq.Sequence
 
 // The probe's findings, kept as tests rather than as prose.
 //
@@ -220,6 +221,42 @@ private a_trailing_block_builds_the_same_tree_as_a_literal()
 
     assert(a.dump() == b.dump(), s"block:\n${a.dump()}literal:\n${b.dump()}")
 end a_trailing_block_builds_the_same_tree_as_a_literal
+
+// **The rows a block cannot hold, produced as one expression instead.** A block's lines are
+// expressions and a `for` is a statement, so a list whose length is known only while running is
+// what `sysl.seq`'s `map` is for: it names the sequence rather than accumulating it, and the
+// container takes the whole of it in the position a literal would have gone.
+//
+// This says the tree that arrives is the one the hand-built `Buf` produced, which is the form it
+// replaces -- three lines and a `.view()` standing between a container and its children.
+@test
+private a_mapped_sequence_builds_the_same_children_as_a_loop()
+    var names: Buf[string] = buf()
+
+    for i in 0..<3
+        names.push(s"row ${i}")
+
+    val rows = names.view()
+
+    var made: Buf[&View] = buf()
+
+    for i in 0..<rows.len
+        made.push(text(rows[i]).padding(2))
+
+    val looped = column(made.view(), 3)
+    val mapped = column(rows.map(r -> text(r).padding(2)), 3)
+
+    assert(measured(looped, Size(200, 200)) == measured(mapped, Size(200, 200)),
+           "the loop and the map measure alike")
+
+    var a = recorder()
+    var b = recorder()
+
+    looped.paint(&a, Rect(0, 0, 200, 200))
+    mapped.paint(&b, Rect(0, 0, 200, 200))
+
+    assert(a.dump() == b.dump(), s"looped:\n${a.dump()}mapped:\n${b.dump()}")
+end a_mapped_sequence_builds_the_same_children_as_a_loop
 
 // A block naming `spacing` first still fills `children`, which is the rule 0171 landed second and
 // the first thing anybody writes. Without it the block would be stranded at the parameter after the
