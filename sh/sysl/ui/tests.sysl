@@ -3,6 +3,7 @@ module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 import sysl.seq.{Sequence, generate}
+import sysl.text.Search
 import sh.sysl.plutovg
 
 // The probe's findings, kept as tests rather than as prose.
@@ -189,7 +190,11 @@ private a_scroll_offset_survives_the_tree_being_rebuilt()
     // clip, and the other seven are measured -- the column needs their heights to place the ones
     // after them -- and never painted. That is what makes a list of three hundred rows cost about
     // what a list of ten costs.
-    assert(c.dump() == "clip 0,0 100x40\ntext 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\nunclip\n",
+    assert(c.dump() == "clip 0,0 100x40\n" +
+                       "text 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\n" +
+                       "unclip\n" +
+                       s"fill 92,0 8x40 #${GROUND_TINT} r4\n" +
+                       s"fill 92,4 8x24 #${lighten(INERT, 25)} r4\n",
            s"got:\n${c.dump()}")
 end a_scroll_offset_survives_the_tree_being_rebuilt
 
@@ -535,9 +540,9 @@ private a_reactive_view_paints_the_state_the_canvas_reports()
     v.paint(&over, Rect(0, 0, 100, 20))
     v.paint(&down, Rect(0, 0, 100, 20))
 
-    assert(away.dump() == "text 0,0 100x20 'rest'\n", s"away:\n${away.dump()}")
-    assert(over.dump() == "text 0,0 100x20 'over'\n", s"over:\n${over.dump()}")
-    assert(down.dump() == "text 0,0 100x20 'down'\n", s"down:\n${down.dump()}")
+    assert(away.dump() == "text 0,2 100x16 'rest'\n", s"away:\n${away.dump()}")
+    assert(over.dump() == "text 0,2 100x16 'over'\n", s"over:\n${over.dump()}")
+    assert(down.dump() == "text 0,2 100x16 'down'\n", s"down:\n${down.dump()}")
 end a_reactive_view_paints_the_state_the_canvas_reports
 
 // **A press that wandered off reads as neither**, which is how a person cancels a click: hold the
@@ -550,7 +555,7 @@ private a_press_outside_the_rectangle_is_not_a_press_on_it()
     c.point(400, 10, true)
     v.paint(&c, Rect(0, 0, 100, 20))
 
-    assert(c.dump() == "text 0,0 100x20 'rest'\n", s"got:\n${c.dump()}")
+    assert(c.dump() == "text 0,2 100x16 'rest'\n", s"got:\n${c.dump()}")
 end a_press_outside_the_rectangle_is_not_a_press_on_it
 
 // The whole button, in the three states, read off the recording.
@@ -894,7 +899,7 @@ private an_unchecked_box_draws_no_mark()
     assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
                   s"fill 0,0 18x18 #${GROUND_TINT} r4\n" +
                   s"stroke 0,0 18x18 #${INERT} w2 r4\n" +
-                  "text 26,0 40x18 'label'\n" +
+                  "text 26,1 40x16 'label'\n" +
                   "hit 0,0 66x18\n")
 end an_unchecked_box_draws_no_mark
 
@@ -907,7 +912,7 @@ private a_checked_box_is_filled_and_marked()
                   s"fill 0,0 18x18 #${ACCENT} r4\n" +
                   s"stroke 0,0 18x18 #${ACCENT} w2 r4\n" +
                   s"fill 5,5 8x8 #${WHITE} r2\n" +
-                  "text 26,0 40x18 'label'\n" +
+                  "text 26,1 40x16 'label'\n" +
                   "hit 0,0 66x18\n")
 end a_checked_box_is_filled_and_marked
 
@@ -931,7 +936,7 @@ private pointing_at_a_checkbox_label_lights_its_box()
     assert(away.dump() != over.dump(), "the pointer is on the label and the box knows")
     assert(over.dump() == s"fill 0,0 18x18 #${GROUND_TINT} r4\n" +
                           s"stroke 0,0 18x18 #${lighten(INERT, 20)} w2 r4\n" +
-                          "text 26,0 40x18 'label'\n" +
+                          "text 26,1 40x16 'label'\n" +
                           "hit 0,0 66x18\n",
            s"the lit outline:\n${over.dump()}")
 end pointing_at_a_checkbox_label_lights_its_box
@@ -1283,3 +1288,153 @@ private a_progress_bar_keeps_its_thickness()
                   s"fill 0,12 200x6 #${INERT} r3\n" +
                   s"fill 0,12 100x6 #${ACCENT} r3\n")
 end a_progress_bar_keeps_its_thickness
+
+// **A label is centred in the rectangle it was given rather than drawn at the top of it**, which is
+// the same rule the controls follow and was found the same way: a checkbox's label sat two pixels
+// above its box, because a `Row` gives every child the height of the tallest and the box is taller
+// than a line of text.
+@test
+private a_label_is_centred_in_a_rectangle_taller_than_its_line()
+    assert_paints(text("hi"), Size(200, 200), Rect(0, 0, 100, 40), "text 0,12 100x16 'hi'\n")
+
+    // Given exactly its own height, nothing moves -- which is the case every other recording in
+    // this file is written in terms of.
+    assert_paints(text("hi"), Size(200, 200), Rect(0, 0, 100, 16), "text 0,0 100x16 'hi'\n")
+
+    // And given less, it takes what there is rather than centring itself outside it.
+    assert_paints(text("hi"), Size(200, 200), Rect(0, 0, 100, 8), "text 0,0 100x8 'hi'\n")
+end a_label_is_centred_in_a_rectangle_taller_than_its_line
+
+// -- the scrollbar --------------------------------------------------------------------------------
+
+// **A list that fits gets no bar at all**, because a full-height thumb says nothing and would cover
+// content that has no reason to be covered.
+@test
+private a_list_that_fits_its_window_shows_no_bar()
+    val offset = signal(0)
+    var c = recorder()
+
+    scroll(column([text("a"), text("b")], 0), offset, 40).paint(&c, Rect(0, 0, 100, 40))
+
+    assert(c.dump() == "clip 0,0 100x40\ntext 0,0 100x16 'a'\ntext 0,16 100x16 'b'\nunclip\n",
+           s"thirty-two pixels of content in a forty-pixel window:\n${c.dump()}")
+end a_list_that_fits_its_window_shows_no_bar
+
+// **The thumb is as much of the track as the window is of the content**, which is what makes a
+// scrollbar report how much there is as well as where you are.
+@test
+private a_thumb_is_the_windows_share_of_the_content()
+    val offset = signal(0)
+    var c = recorder()
+
+    // A hundred rows of sixteen is sixteen hundred, seen through a two-hundred-pixel window: an
+    // eighth, so twenty-five of the two hundred.
+    scroll(column(generate(100usize, i -> text("x")), 0), offset, 200).paint(&c, Rect(0, 0, 100, 200))
+
+    assert(c.dump().contains(s"fill 92,0 8x25 #${lighten(INERT, 25)} r4"),
+           s"an eighth of the track, at the top:\n${c.dump()}")
+end a_thumb_is_the_windows_share_of_the_content
+
+// And it stops shrinking, or a long enough list leaves nothing to take hold of.
+@test
+private a_thumb_never_shrinks_past_taking_hold_of()
+    val offset = signal(0)
+    var c = recorder()
+
+    scroll(column(generate(2000usize, i -> text("x")), 0), offset, 200).paint(&c, Rect(0, 0, 100, 200))
+
+    assert(c.dump().contains(s"fill 92,0 8x24 #${lighten(INERT, 25)} r4"),
+           s"two thousand rows would ask for a thumb one pixel tall:\n${c.dump()}")
+end a_thumb_never_shrinks_past_taking_hold_of
+
+// The thumb sits at the fraction of its travel the offset is of the content's, so the bottom of the
+// list puts it at the bottom of the track and not one thumb past it.
+@test
+private a_thumb_at_the_end_of_the_list_is_at_the_end_of_its_track()
+    val offset = signal(0)
+    val list = scroll(column(generate(20usize, i -> text("x")), 0), offset, 100)
+
+    var top = recorder()
+    var bottom = recorder()
+
+    // Twenty rows is 320 tall in a 100 window, so the content travels 220 and the thumb travels
+    // 100 - 31 = 69.
+    list.paint(&top, Rect(0, 0, 100, 100))
+
+    offset.set(220)
+    list.paint(&bottom, Rect(0, 0, 100, 100))
+
+    assert(top.dump().contains(s"fill 92,0 8x31 #${lighten(INERT, 25)} r4"), s"at the top:\n${top.dump()}")
+    assert(bottom.dump().contains(s"fill 92,69 8x31 #${lighten(INERT, 25)} r4"), s"at the end:\n${bottom.dump()}")
+end a_thumb_at_the_end_of_the_list_is_at_the_end_of_its_track
+
+// **Dragging the bar scrolls the list**, by the same arithmetic the slider does on the other axis:
+// the thumb is taken by its middle, so it lands where the pointer is.
+@test
+private dragging_the_thumb_moves_the_offset()
+    val offset = signal(0)
+    val list = scroll(column(generate(20usize, i -> text("x")), 0), offset, 100)
+    var c = recorder()
+
+    // Half way down the thumb's travel, which is 69: 15 + 34 is the middle of the track.
+    c.point(96, 34 + 15, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 108)
+
+    // **The clamp is within the track**, because the thumb is taken by its middle: a pointer at the
+    // very bottom would otherwise ask for half a thumb past the end of the list.
+    c.point(96, 99, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 220)
+
+    c.point(96, 0, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 0)
+end dragging_the_thumb_moves_the_offset
+
+// And a press that has wandered off the bar is not a press on it -- the same rule the slider has,
+// and the reason the clamp above is inside the track rather than over the whole window. A real
+// scrollbar captures the pointer at the press and follows it anywhere; capture is a window-level
+// idea and `Canvas` has no window.
+@test
+private a_press_that_has_left_the_bar_stops_scrolling()
+    val offset = signal(0)
+    val list = scroll(column(generate(20usize, i -> text("x")), 0), offset, 100)
+    var c = recorder()
+
+    c.point(96, 49, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    val was = offset.read()
+
+    assert(was > 0, "it scrolled while the pointer was on the bar")
+
+    // Still held, now well below the window.
+    c.point(96, 400, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), was)
+end a_press_that_has_left_the_bar_stops_scrolling
+
+// And a pointer merely resting on the bar moves nothing, which is the same guard the slider has and
+// for the same reason: an unguarded write would mark every frame dirty.
+@test
+private a_pointer_resting_on_the_bar_does_not_scroll()
+    val offset = signal(50)
+    val n = signal(0)
+    val bump: &Fn() -> unit = () -> n.set(n.read() + 1)
+
+    offset.watch(bump)
+
+    val list = scroll(column(generate(20usize, i -> text("x")), 0), offset, 100)
+    var c = recorder()
+
+    c.point(96, 50)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 50)
+    assert_eq(n.read(), 0)
+end a_pointer_resting_on_the_bar_does_not_scroll

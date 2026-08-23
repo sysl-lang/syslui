@@ -22,7 +22,61 @@ struct Scroll
 
     // How tall the window onto the child is. The child is measured unbounded and may be far taller.
     height: int
+
+    // The scrollbar, drawn over the right-hand edge of the window and only when there is something
+    // to scroll.
+    //
+    // **It overlays rather than reserving width**, which is the choice every modern platform has
+    // made and it is not only fashion: a bar that took eight pixels would change the width the
+    // content was laid out in, so a list would reflow the moment it grew past its window -- and a
+    // list that is exactly its window's height would sit one row from flipping between two layouts.
+    // Overlaying keeps the content's width a property of the window alone.
+    //
+    // **It is dragged, and that costs nothing new**: the pointer's position is already on `Canvas`
+    // because a slider needed it, and this is the same arithmetic on the other axis.
+    private bar(&self, c: *Canvas, window: Rect, content: int)
+        // How far the content can travel, and how far the thumb can, which are not the same number
+        // and are the two the whole control is a ratio between.
+        val span = content - window.h
+        val track = Rect(window.right() - BAR_W, window.y, BAR_W, window.h)
+
+        // The thumb is as much of the track as the window is of the content -- which is what makes
+        // a scrollbar tell you how much there is as well as where you are. It stops shrinking at
+        // `MIN_THUMB`, or a long enough list would leave nothing to take hold of.
+        val ideal = window.h * window.h / content
+        val thumb = if ideal < MIN_THUMB then MIN_THUMB else ideal
+        val travel = track.h - thumb
+
+        if c.pressed(track) && travel > 0
+            val (_, py) = c.pointer()
+
+            // The thumb is grabbed by its middle, so it lands where the pointer is rather than
+            // jumping its own height away from it.
+            val at = py - track.y - thumb / 2
+            val held = if at < 0 then 0 elif at > travel then travel else at
+            val want = held * span / travel
+
+            // Guarded on the value moving, exactly as the slider's is: an unguarded write would
+            // mark every frame dirty for as long as a pointer rested on the bar.
+            if want != self.offset.read() then self.offset.set(want)
+
+        val off = self.offset.read()
+        val clamped = if off < 0 then 0 elif off > span then span else off
+        val y = if travel > 0 then clamped * travel / span else 0
+        val lit = c.phase(track, BAR_SLOT, if c.hovered(track) then 1.0 else 0.0, HOVER_RATE)
+
+        // **The track stays quiet and the thumb does not.** A groove barely distinguishable from
+        // the panel is what a scrollbar should be when nobody is looking at it; a thumb that quiet
+        // is one nobody can find, and it is the half carrying the information.
+        c.fill(track, GROUND_TINT, BAR_W / 2)
+        c.fill(Rect(track.x, track.y + y, BAR_W, thumb),
+               lighten(INERT, 25 + int(lit * 30.0)), BAR_W / 2)
+    end bar
 end Scroll
+
+private const BAR_W: int = 8
+private const MIN_THUMB: int = 24
+private const BAR_SLOT: int = 6
 
 impl View for Scroll
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(avail.w, self.height)
@@ -38,6 +92,11 @@ impl View for Scroll
         c.clip(window)
         self.child.paint(c, Rect(r.x, r.y - self.offset.read(), r.w, inner.h))
         c.unclip()
+
+        // **Only when there is something to scroll.** A bar on a list that fits is an interface
+        // element that says nothing, and it would be drawn full-height over content that has no
+        // reason to be covered.
+        if inner.h > window.h then self.bar(c, window, inner.h)
     end paint
 end Scroll
 

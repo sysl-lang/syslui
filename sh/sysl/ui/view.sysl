@@ -120,7 +120,22 @@ struct Text
 impl View for Text
     measure(&self, c: *Canvas, avail: Size) -> Size = c.text_size(self.s)
 
-    paint(&self, c: *Canvas, r: Rect) = c.text(r, self.s)
+    // **Centred vertically in whatever it was given, which is routinely more than it asked for.**
+    // A `Row` gives every child the height of the tallest, so a label beside a control two pixels
+    // taller than a line of text is handed the control's height -- and a run drawn at the top of
+    // that sits visibly above the thing it labels. A checkbox is exactly this case and is where it
+    // was noticed.
+    //
+    // The rectangle handed on is the centred one rather than the whole, so the clip a backend
+    // applies is the run's own box and text cannot stray above or below its line.
+    paint(&self, c: *Canvas, r: Rect)
+        val h = c.text_size(self.s).h
+
+        if h >= r.h then
+            c.text(r, self.s)
+        else
+            c.text(Rect(r.x, r.y + (r.h - h) / 2, r.w, h), self.s)
+    end paint
 
 // A leaf that takes whatever it is offered and draws nothing -- the flexible gap.
 //
