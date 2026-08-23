@@ -1,0 +1,131 @@
+module sh.sysl.ui
+
+import sh.sysl.plutovg
+
+// A picture, and the three ways of putting one into a rectangle that is the wrong shape.
+//
+// **A `Canvas` drew rectangles and text and nothing else until this file**, which is the constraint
+// the whole toolkit was designed around -- so adding a fourth operation is worth an argument rather
+// than a shrug. The argument is that a picture is not expressible in terms of the other three at any
+// price: a photograph is not a run of filled rectangles, and a program that wanted one had no way
+// down to the backend that was drawing its window.
+//
+// **The pixels are a `plutovg.Surface`, and that is a container rather than a backend.** A surface
+// is a width, a height, a stride and premultiplied ARGB32 bytes, which is what every backend here
+// would have had to define for itself; this package already carries plutovg, so defining a second
+// one would be a copy with a different name. A backend that is not plutovg reads `pixels()` and
+// uploads it -- `st7796` does exactly that with a band today.
+//
+// **Decoding is plutovg's too**, because stb_image is already vendored inside it: PNG, JPEG, BMP,
+// PSD, TGA, GIF, HDR, PIC and PNM arrive through `load_image` with nothing else linked.
+//
+// **`Canvas.draw_image` has a default body that draws nothing**, which is the rule every optional
+// member on that trait follows: a backend with no way to put pixels down produces a frame with the
+// picture missing, which is a plainer picture rather than a wrong one.
+
+// A picture in memory.
+//
+// **It is passed as `&Image` everywhere**, so a program loads a picture once and draws it into as
+// many frames as it likes -- the tree is thrown away sixty times a second and this is not.
+struct Image
+    pixels: &plutovg.Surface
+
+    width(&self) -> int = self.pixels.width()
+
+    height(&self) -> int = self.pixels.height()
+
+    size(&self) -> Size = Size(self.pixels.width(), self.pixels.height())
+end Image
+
+// A picture read from a file: PNG, JPEG, BMP, PSD, TGA, GIF, HDR, PIC or PNM.
+//
+// `None` covers every way it can fail at once -- the file is not there, it is not an image, or it is
+// one the decoder cannot read -- because there is nothing a caller would do differently between them.
+load_image(path: string) -> Option[&Image] =
+    plutovg.load_image(path) match
+        Some(s) -> Some(Image(s))
+        None -> None
+
+// The same, from bytes: an image inside an archive, one that arrived over a socket, or one built
+// into the program. **This is the one an application on a phone usually wants**, since an asset
+// there is not a path.
+image_from_data(bytes: []const u8) -> Option[&Image] =
+    plutovg.image_from_data(bytes) match
+        Some(s) -> Some(Image(s))
+        None -> None
+
+// How a picture is put into a rectangle that is not its shape.
+//
+// **Three, because there are three answers and no fourth**: change the picture's shape, keep the
+// shape and leave a gap, or keep the shape and lose an edge. Every interface makes this choice
+// somewhere, and the one thing none of them wants is to make it by accident -- which is what a
+// single stretching mode would be.
+enum Fit
+    // Fill the rectangle exactly. The aspect changes, and a face drawn this way looks wrong.
+    Stretch
+
+    // As large as fits inside, keeping the aspect, centred. Nothing is lost and there is a gap.
+    Contain
+
+    // As small as covers it, keeping the aspect, centred. Nothing is left over and an edge is cut.
+    Cover
+end Fit
+
+// A picture as a view.
+//
+// **Its natural size is its pixel size**, and a caller wanting another says so -- which is the same
+// bargain `frame` makes, and the reason this does not take an `avail` and shrink to it: a picture
+// that quietly resized itself to whatever it was offered would relayout the column it is in.
+struct Picture
+    img: &Image
+    fit: Fit
+    want: Size
+
+    // Rounded corners, because a texture is cut to the shape it fills and an avatar is the ordinary
+    // case. This is one parameter here and a whole feature anywhere else.
+    radius: int
+
+impl View for Picture
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.want
+
+    paint(&self, c: *Canvas, r: Rect)
+        val at = placed(self.fit, self.img.size(), r)
+
+        // **`Cover` is the one that needs clipping**, since it is the only fit that puts pixels
+        // outside the rectangle it was given -- and a picture bleeding over its neighbours is the
+        // failure a person notices last and dislikes most.
+        if self.fit == Fit.Cover
+            c.clip(r)
+            c.draw_image(at, self.img, self.radius)
+            c.unclip()
+        else
+            c.draw_image(at, self.img, self.radius)
+    end paint
+
+// A picture at its own size.
+image(img: &Image, fit: Fit = Fit.Contain, radius: int = 0) -> &View =
+    Picture(img, fit, img.size(), radius)
+
+// A picture at a size of the caller's choosing.
+image_sized(img: &Image, w: int, h: int, fit: Fit = Fit.Cover, radius: int = 0) -> &View =
+    Picture(img, fit, Size(w, h), radius)
+
+// Where a picture of `of` goes inside `r`, under each of the three fits.
+//
+// **Written out rather than folded into one expression with a flag**, because the two that keep the
+// aspect differ by a single comparison and reading which way round it goes is the whole of what a
+// person checks here. A degenerate picture -- zero wide or zero tall, which is what a decoder that
+// half-failed hands back -- fills the rectangle rather than dividing by nothing.
+private placed(fit: Fit, of: Size, r: Rect) -> Rect
+    if fit == Fit.Stretch || of.w <= 0 || of.h <= 0 then return r
+
+    // Whether the picture is proportionally wider than the box, which is the one comparison the two
+    // aspect-keeping fits differ by: `Contain` is bound by the width when it is, and `Cover` when it
+    // is not.
+    val wide = of.w * r.h > of.h * r.w
+    val inside = if fit == Fit.Contain then wide else !wide
+    val w = if inside then r.w else of.w * r.h / of.h
+    val h = if inside then of.h * r.w / of.w else r.h
+
+    Rect(r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h)
+end placed

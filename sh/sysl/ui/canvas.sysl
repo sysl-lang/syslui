@@ -30,6 +30,12 @@ import sysl.buf.{Buf, buf}
 //
 // That is what keeps this surface small, and small is what makes a second backend cheap. Anything
 // that cannot be expressed as rectangles, a glyph run and a clip belongs in a layer above this one.
+//
+// **`draw_image` is the one exception, and it is an exception to the letter rather than the spirit.**
+// A photograph is not a run of filled rectangles at any price, so a program wanting one had no way
+// down to the backend drawing its window -- but putting a block of pixels somewhere is the other
+// thing every backend can already do, a plain SDL3 one included, and it needs no path and no
+// rasterizer. What is still refused here is a *shape* a backend would have to be able to trace.
 trait Canvas
     // Fill a rectangle with a solid colour, 0xRRGGBB, its corners rounded by `radius`.
     //
@@ -266,6 +272,14 @@ trait Canvas
     // and its hit list -- once per measurement to avoid a mutation it is entitled to make.
     text_size(*self, s: string) -> Size
 
+    // Put a picture into `r`, scaled to fill it, with its corners rounded by `radius`.
+    //
+    // **The default draws nothing**, which is the rule every optional member here follows: a backend
+    // with no way to put pixels down produces a frame with the picture missing, which is a plainer
+    // frame rather than a wrong one. `image.sysl` argues why a fourth drawing operation was worth
+    // adding at all -- a photograph is not expressible as filled rectangles at any price.
+    draw_image(*self, r: Rect, img: &Image, radius: int = 0) = ()
+
     // Paint this view after the whole tree has been painted, above everything, at `at`.
     //
     // **Everything else composes downward and this is the one thing that does not.** A dropdown is
@@ -491,6 +505,13 @@ impl Canvas for Recorder
     hit(*self, r: Rect, f: &Fn() -> unit)
         self.ops.push(s"hit ${r.x},${r.y} ${r.w}x${r.h}")
         self.taps.add(r, f)
+
+    // **The picture's own size is recorded beside the rectangle it went into**, because that is the
+    // half a fit decides and the half a test is about: a recording that said only where it landed
+    // could not tell `Contain` from `Stretch`.
+    override draw_image(*self, r: Rect, img: &Image, radius: int)
+        self.ops.push(s"image ${r.x},${r.y} ${r.w}x${r.h} of ${img.width()}x${img.height()}" +
+                      radii(radius))
 
     // **Recorded as well as kept**, so a test can see that something was raised without having to
     // run a whole frame through `render` -- which is the difference between asserting that a menu

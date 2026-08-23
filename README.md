@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred and ninety-one tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Two hundred and forty-four tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -121,7 +121,7 @@ switch on a phone as well as on a desktop.
 tapped, so a rebuild between those two moments changes nothing. That is `scroll.sysl`'s finding
 applied everywhere, and it is what makes a control safe to throw away sixty times a second.
 
-Two of them are worth singling out:
+Three of them are worth singling out:
 
 - **A checkbox is a `Reactive` wrapping a `Row` wrapping a state-dependent leaf**, so pointing at
   the *label* lights the *box*. No widget had to be told about another; it is the styling layer
@@ -444,6 +444,36 @@ the caret is, every frame, so text replaced from underneath cannot leave a field
 end of what it now holds. Nothing wraps: a long paragraph in an area is one line that scrolls
 sideways, because wrapping means measuring candidate breaks over the whole run on every frame.
 
+## Pictures
+
+```
+val logo = load_image("logo.png").unwrap()       // PNG, JPEG, BMP, TGA, GIF, PSD, HDR, PIC, PNM
+val face = image_from_data(bytes).unwrap()       // or from memory, which is what a phone has
+
+image(logo)                                      // at its own size
+image_sized(face, 64, 64, Fit.Cover, 32)         // cropped square, rounded to a circle
+```
+
+**A picture is the fourth thing a `Canvas` can draw, and the only exception to the rule that keeps
+that surface small** — everything else is a filled rectangle, a glyph run or a clip, because the
+toolkit has to run where there is no rasterizer. Putting a block of pixels down is the other thing
+every backend can already do, a plain SDL3 one included; what is still refused is a *shape* a backend
+would have to trace.
+
+**Three fits, because there are three answers**: `Stretch` changes the shape, `Contain` keeps it and
+leaves a gap, `Cover` keeps it and crops. The two that keep it differ by a single comparison, which
+is why both directions of it have a test. Only `Cover` clips, because it is the only one that puts
+pixels outside the rectangle it was given.
+
+**The pixels are a `plutovg.Surface`, which is a container rather than a backend** — a width, a
+height, a stride and premultiplied ARGB32 — and decoding is plutovg's too, since stb_image is
+vendored inside it. So an image costs nothing linked that the package did not already carry, and a
+backend that is not plutovg reads the bytes and uploads them, exactly as `st7796` does with a band.
+
+**Corners are a parameter and not a feature**: a texture is cut to the shape it fills, so a rounded
+picture is a rounded rectangle path. The radius is divided by the scale before it is asked for, or a
+picture squeezed into a rectangle of another shape would come out with elliptical corners.
+
 ## Culling
 
 A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
@@ -519,6 +549,7 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/overlay.sysl` — `render`, popovers and modals: the second paint pass
 - `sh/sysl/ui/atom.sysl` — application state a module declares, and values derived from it
 - `sh/sysl/ui/select.sysl` — selecting a run of text with the pointer
+- `sh/sysl/ui/image.sysl` — `Image`, the three fits, and the one drawing operation that is not a rectangle
 - `sh/sysl/ui/key.sysl` — `Key`, `Press`, and the focus the canvas keeps
 - `sh/sysl/ui/edit.sysl` — what a key does to a string and a caret, as a pure function
 - `sh/sysl/ui/field.sysl` — `text_field` and `text_area`: the geometry left over

@@ -3838,3 +3838,89 @@ private an_area_scrolls_to_the_caret_line()
                        "hit 0,0 320x60\n",
            s"the first two lines have scrolled off the top:\n${c.dump()}")
 end an_area_scrolls_to_the_caret_line
+
+// ## Pictures
+//
+// **A picture is the fourth thing a canvas can draw**, and the three fits are where the interesting
+// mistakes are: the two that keep the aspect differ by a single comparison, and getting it the wrong
+// way round produces a plausible picture in the wrong place rather than a crash.
+
+// A four-by-two picture, which is the shape that makes every fit below come out a different size.
+private wide_picture() -> &Image = Image(plutovg.surface(4, 2).unwrap())
+
+@test
+private a_picture_measures_to_its_own_pixels()
+    val img = wide_picture()
+
+    assert(measured(image(img), Size(500, 500)) == Size(4, 2), "its natural size is its pixel size")
+    assert(measured(image_sized(img, 60, 40), Size(500, 500)) == Size(60, 40), "or the caller's")
+end a_picture_measures_to_its_own_pixels
+
+// Stretch fills the rectangle exactly, aspect and all.
+@test
+private stretch_fills_the_rectangle()
+    assert_paints(image(wide_picture(), Fit.Stretch), Size(200, 200), Rect(0, 0, 100, 100),
+                  "image 0,0 100x100 of 4x2\n")
+end stretch_fills_the_rectangle
+
+// **Contain keeps the aspect and leaves a gap**, centred in what it was given: a picture twice as
+// wide as it is tall, in a square, is bound by the width and half as tall as the box.
+@test
+private contain_keeps_the_aspect_and_centres_the_gap()
+    assert_paints(image(wide_picture(), Fit.Contain), Size(200, 200), Rect(0, 0, 100, 100),
+                  "image 0,25 100x50 of 4x2\n")
+end contain_keeps_the_aspect_and_centres_the_gap
+
+// **Cover is the same comparison the other way round**, so the same picture in the same square is
+// bound by the height, twice as wide as the box, and clipped to it.
+@test
+private cover_keeps_the_aspect_and_crops()
+    assert_paints(image(wide_picture(), Fit.Cover), Size(200, 200), Rect(0, 0, 100, 100),
+                  "clip 0,0 100x100\n" +
+                  "image -50,0 200x100 of 4x2\n" +
+                  "unclip\n")
+end cover_keeps_the_aspect_and_crops
+
+// **Only `Cover` clips**, because it is the only fit that puts pixels outside the rectangle it was
+// given -- and a picture bleeding over its neighbours is the failure a person dislikes most.
+@test
+private the_other_two_fits_do_not_clip()
+    var c = recorder()
+
+    image(wide_picture(), Fit.Contain).paint(&c, Rect(0, 0, 100, 100))
+    image(wide_picture(), Fit.Stretch).paint(&c, Rect(0, 0, 100, 100))
+
+    assert(!c.dump().contains("clip"), s"nothing was clipped:\n${c.dump()}")
+end the_other_two_fits_do_not_clip
+
+// A tall box is the other side of both comparisons, which is what says the arithmetic is not simply
+// agreeing with itself.
+@test
+private a_tall_box_binds_the_other_way()
+    assert_paints(image(wide_picture(), Fit.Contain), Size(200, 200), Rect(0, 0, 40, 100),
+                  "image 0,40 40x20 of 4x2\n")
+    assert_paints(image(wide_picture(), Fit.Cover), Size(200, 200), Rect(0, 0, 40, 100),
+                  "clip 0,0 40x100\n" +
+                  "image -80,0 200x100 of 4x2\n" +
+                  "unclip\n")
+end a_tall_box_binds_the_other_way
+
+// Rounded corners reach the backend, which is what makes an avatar a parameter rather than a feature.
+@test
+private a_picture_can_have_rounded_corners()
+    assert_paints(image_sized(wide_picture(), 40, 40, Fit.Stretch, 8), Size(200, 200),
+                  Rect(0, 0, 40, 40), "image 0,0 40x40 of 4x2 r8\n")
+end a_picture_can_have_rounded_corners
+
+// A picture that could not be read is a `None` rather than a handle to nothing, and every way of
+// failing answers the same way -- there is nothing a caller would do differently between them.
+@test
+private a_picture_that_is_not_there_is_none()
+    assert(load_image("no-such-picture.png").is_none())
+
+    var rubbish: [8]u8
+
+    for i in 0..<8 do rubbish[i] = u8(i)
+
+    assert(image_from_data(rubbish[..]).is_none(), "and bytes that are not an image")
+end a_picture_that_is_not_there_is_none

@@ -29,7 +29,7 @@ package {
 // rasterizer, carries its own C, and needs nothing installed, which is why the same backend serves
 // a desktop and a phone.
 dependencies {
-  plutovg { git = "github.com/sysl-lang/plutovg", version = "0.2.0" }
+  plutovg { git = "github.com/sysl-lang/plutovg", version = "0.2.1" }
 }
 
 // **An erased tree is boxes, so `heap` is not negotiable** — that is the bargain 0168 struck against

@@ -246,6 +246,37 @@ impl Canvas for PlutoCanvas
 
     hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
 
+    // **The transform places the picture and the path cuts it**, which is the whole of what a
+    // texture is: PlutoVG lays a surface down in user space one pixel to one unit, so the scale that
+    // makes it the right size is the same scale the path is drawn in.
+    //
+    // **So the corner radius is divided by that scale before it is asked for**, or a picture squeezed
+    // into a rectangle of another shape would come out with elliptical corners. `round_rect` takes
+    // its two radii separately, which is what makes the compensation exact rather than a compromise.
+    override draw_image(*self, r: Rect, img: &Image, radius: int)
+        val w = img.width()
+        val h = img.height()
+
+        if w <= 0 || h <= 0 || r.w <= 0 || r.h <= 0 then return
+
+        val sx = f32(r.w) / f32(w)
+        val sy = f32(r.h) / f32(h)
+
+        self.vg.save()
+        self.vg.translate(f32(r.x), f32(r.y))
+        self.vg.scale(sx, sy)
+        self.vg.texture(img.pixels)
+        self.vg.begin()
+
+        if radius <= 0 then
+            self.vg.rect(0.0, 0.0, f32(w), f32(h))
+        else
+            self.vg.round_rect(0.0, 0.0, f32(w), f32(h), f32(radius) / sx, f32(radius) / sy)
+
+        self.vg.fill()
+        self.vg.restore()
+    end draw_image
+
     raise_above(*self, v: &View, at: Rect)
         val on = self.tints.view()
 
