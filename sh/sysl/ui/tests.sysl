@@ -2570,8 +2570,9 @@ private render_paints_the_tree_and_then_what_it_raised()
 
     render(text("menu").popover(open, text("one")), &c, Rect(0, 0, 40, 16))
 
-    assert(c.dump() == "text 0,0 40x16 'menu'\nraise 0,20 24x16\ntext 0,20 24x16 'one'\n",
-           s"the overlay is painted last, outside the anchor:\n${c.dump()}")
+    assert(c.dump() == "text 0,0 40x16 'menu'\nraise 0,20 24x16\n" +
+                       s"ink #${dark().ink}\ntext 0,20 24x16 'one'\nunink\n",
+           s"the overlay is painted last, outside the anchor, in the ink it was raised under:\n${c.dump()}")
 end render_paints_the_tree_and_then_what_it_raised
 
 // **An overlay escapes the clip in force where it was raised**, which is the whole reason it exists:
@@ -2586,7 +2587,7 @@ private an_overlay_escapes_the_clip_it_was_raised_under()
 
     // The raise happens inside the clip and the paint happens after `unclip`, at y = 20, which is
     // outside the sixteen-pixel window entirely.
-    assert(c.dump().contains("unclip\ntext 0,20 24x16 'one'"),
+    assert(c.dump().contains("unclip\n" + s"ink #${dark().ink}\n" + "text 0,20 24x16 'one'"),
            s"painted after the clip was unwound:\n${c.dump()}")
 end an_overlay_escapes_the_clip_it_was_raised_under
 
@@ -2805,3 +2806,86 @@ private two_overlays_keep_their_own_themes()
     assert(d.contains(s"#${dark().panel}"), s"the first kept the root's:\n${d}")
     assert(d.contains(s"#${light().panel}"), s"and the second kept its own:\n${d}")
 end two_overlays_keep_their_own_themes
+
+// -- spacing --------------------------------------------------------------------------------------
+
+// **Named arguments are what makes per-side padding readable**, which is why it is four defaulted
+// parameters rather than an `Insets` struct: `.pad(bottom = 12)` says what it does.
+@test
+private padding_may_be_given_on_one_side_only()
+    assert_paints(text("hi").pad(bottom = 12), Size(200, 200), Rect(0, 0, 16, 28),
+                  "text 0,0 16x16 'hi'\n")
+
+    assert(measured(text("hi").pad(bottom = 12), Size(200, 200)) == Size(16, 28),
+           "twelve taller and no wider")
+end padding_may_be_given_on_one_side_only
+
+@test
+private padding_may_be_given_on_each_side_separately()
+    assert_paints(text("hi").pad(top = 1, right = 2, bottom = 3, left = 4),
+                  Size(200, 200), Rect(0, 0, 22, 20),
+                  "text 4,1 16x16 'hi'\n")
+
+    assert(measured(text("hi").pad(top = 1, right = 2, bottom = 3, left = 4), Size(200, 200))
+               == Size(22, 20),
+           "six wider and four taller")
+end padding_may_be_given_on_each_side_separately
+
+// The uniform one is the same wrapper with the same number four times, so nothing about it moved.
+@test
+private uniform_padding_is_the_same_on_every_side()
+    var a = recorder()
+    var b = recorder()
+
+    text("hi").padding(8).paint(&a, Rect(0, 0, 32, 32))
+    text("hi").pad(8, 8, 8, 8).paint(&b, Rect(0, 0, 32, 32))
+
+    assert(a.dump() == b.dump(), s"one:\n${a.dump()}four:\n${b.dump()}")
+end uniform_padding_is_the_same_on_every_side
+
+// **`padded` takes its inset from the theme**, which is the same argument as `panel` against
+// `background`: a number cannot be restyled, and "however much room this interface gives things"
+// moves with the theme.
+@test
+private padded_takes_its_inset_from_the_theme()
+    assert_paints(text("hi").padded(), Size(200, 200), Rect(0, 0, 32, 32),
+                  "text 8,8 16x16 'hi'\n")
+
+    assert_paints(text("hi").padded().restyle(t -> t with { pad = 2 }),
+                  Size(200, 200), Rect(0, 0, 20, 20),
+                  "text 2,2 16x16 'hi'\n")
+
+    assert(measured(text("hi").padded().restyle(t -> t with { pad = 20 }), Size(200, 200))
+               == Size(56, 56),
+           "and measure sees the restyle too, or a padded view would be placed wrong")
+end padded_takes_its_inset_from_the_theme
+
+// **There is no `margin`, and there does not need to be one**: the difference between a padding and
+// a margin is only which side of the background it falls on, and the chain decides that.
+@test
+private a_margin_is_padding_outside_the_background()
+    // Padding: the ground covers the inset.
+    assert_paints(text("hi").padding(8).background(0xFF0000u32),
+                  Size(200, 200), Rect(0, 0, 32, 32),
+                  "fill 0,0 32x32 #16711680\ntext 8,8 16x16 'hi'\n")
+
+    // Margin: the ground stops at the text, and the inset is outside it.
+    assert_paints(text("hi").background(0xFF0000u32).padding(8),
+                  Size(200, 200), Rect(0, 0, 32, 32),
+                  "fill 8,8 16x16 #16711680\ntext 8,8 16x16 'hi'\n")
+end a_margin_is_padding_outside_the_background
+
+// The panel below a tab bar does not sit hard against the rule, which is the one place a tab bar
+// always looks wrong.
+@test
+private a_tab_panel_is_not_flush_against_the_rule()
+    val chosen = signal(0)
+    var c = recorder()
+
+    tabs(["a"], chosen, panels).paint(&c, Rect(0, 0, 200, 100))
+
+    // The bar is 16 of text and 8 of padding a side, then a 2-pixel indicator, then the 1-pixel
+    // rule: the panel starts a theme's padding below that rather than on it.
+    assert(c.dump().contains("text 8,43 184x16 'panel 0'"),
+           s"eight below the rule, not on it:\n${c.dump()}")
+end a_tab_panel_is_not_flush_against_the_rule

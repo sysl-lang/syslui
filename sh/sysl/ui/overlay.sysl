@@ -23,6 +23,14 @@ import sysl.buf.{Buf, buf}
 
 // One thing to paint after the tree, where, and under what.
 //
+// **The canvas state in force at the raise is captured, and the clip is the ONE piece deliberately
+// left behind.** Escaping the clip is the whole reason an overlay exists; escaping the *styling* is
+// a bug, and it bit twice -- once for the theme and then again for the ink, which is the same
+// mistake found the same way, by looking at a dialog whose text had gone nearly invisible.
+//
+// The rule to hold on to: **an overlay should paint as though it were still where it was raised, in
+// every respect but where it is allowed to draw.**
+//
 // **The theme is captured, and it has to be.** An overlay is painted after the tree has finished, by
 // which time every `push_theme` the tree made has been popped -- so a menu raised from inside a
 // restyled section would come back painted in the theme of the *root*, which is the one place it
@@ -36,6 +44,11 @@ struct Overlay
     view: &View
     at: Rect
     look: Theme
+
+    // The text colour in force where this was raised. `Foreground` sets it and puts it back, so by
+    // the time an overlay is painted the tree's has long been popped -- and the dialog draws in
+    // whatever the backend was constructed with, which on a light interface is invisible.
+    tint: u32
 end Overlay
 
 // Paint a whole frame: the tree, and then anything the tree raised above itself.
@@ -67,7 +80,9 @@ render(v: &View, c: *Canvas, at: Rect)
 
         for i in 0..<p.len
             c.push_theme(p[i].look)
+            c.ink(p[i].tint)
             p[i].view.paint(c, p[i].at)
+            c.unink()
             c.pop_theme()
 end render
 

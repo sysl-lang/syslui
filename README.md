@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred and sixty-nine tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred and seventy-seven tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -344,6 +344,30 @@ build every panel on every rebuild, including the ones nobody is looking at, to 
 below it is also built once. A header reading the signal live would move its indicator on the frame a
 tab was tapped while the panel waited for the rebuild — one frame of the bar highlighting the wrong
 thing.
+
+## Spacing
+
+```
+text("title").pad(bottom = 12)
+panel.pad(left = 8, right = 8)
+text("hi").padded()                 // however much room the theme gives things
+```
+
+`padding(n)` insets every side; `pad(top =, right =, bottom =, left =)` insets the ones you name.
+**Named arguments are what makes that readable**, which is why it's four defaulted parameters rather
+than an `Insets` struct — `.pad(bottom = 12)` says what it does where `.inset(Insets(0, 0, 12, 0))`
+makes a reader count commas. `padded()` takes its inset from the theme, the same argument as `panel`
+against `background`.
+
+**There is no `margin`, and there doesn't need to be one.** The difference between a padding and a
+margin is only *which side of the background it falls on*, and the chain decides that:
+
+```
+text("hi").padding(8).background(red)    // padding — the ground covers the inset
+text("hi").background(red).padding(8)    // margin  — the ground stops at the text
+```
+
+A second name for the same wrapper would be two ways to write one thing.
 
 ## Culling
 

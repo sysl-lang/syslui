@@ -196,8 +196,9 @@ trait Canvas
     // backend is made to think about it.
     raise_above(*self, v: &View, at: Rect)
 
-    // **The theme in force is captured with it**, so an overlay paints as though it were still where
-    // it was raised rather than in whatever the root was drawn in.
+    // **The theme and the text colour in force are captured with it**, so an overlay paints as
+    // though it were still where it was raised rather than in whatever the root was drawn in. The
+    // clip is the one thing deliberately left behind, which is the whole point of raising.
     //
     // Take what has been raised, clearing it. `render` is what calls this.
     take_overlays(*self) -> Buf[Overlay]
@@ -264,6 +265,15 @@ struct Recorder
 
     // What has been raised above the tree and not yet painted.
     raised: Buf[Overlay]
+
+    // The text colour in force, and the ones to go back to.
+    //
+    // **The recorder writes `ink` into the recording and used to keep nothing**, which was fine
+    // while nothing asked what colour was current -- and stopped being fine the moment an overlay
+    // had to capture it. A backend that records what it is told but cannot answer what it was told
+    // is one that can only be tested for what it draws, never for what it knows.
+    tint: u32
+    tints: Buf[u32]
 
     // The animations in flight, so that easing can be tested without a clock or a window.
     //
@@ -344,9 +354,15 @@ impl Canvas for Recorder
 
     ink(*self, color: u32)
         self.ops.push(s"ink #${color}")
+        self.tints.push(self.tint)
+        self.tint = color
 
     unink(*self)
         self.ops.push("unink")
+
+        self.tints.pop() match
+            Some(c) -> self.tint = c
+            None -> ()
 
     hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
 
@@ -372,7 +388,7 @@ impl Canvas for Recorder
     // opens and asserting what the menu looks like.
     raise_above(*self, v: &View, at: Rect)
         self.ops.push(s"raise ${at.x},${at.y} ${at.w}x${at.h}")
-        self.raised.push(Overlay(v, at, self.look))
+        self.raised.push(Overlay(v, at, self.look, self.tint))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised
@@ -386,7 +402,7 @@ end Recorder
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
     Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(),
-             buf(), phases())
+             buf(), dark().ink, buf(), phases())
 
 // The rectangle two of them have in common, which is what nesting one clip inside another leaves.
 //

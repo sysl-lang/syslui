@@ -78,7 +78,37 @@ trait View
     //
     // The wrapper stores `self` -- the receiver's own box, erased -- so a chain of modifiers is a
     // chain of boxes each pointing at the one below, and no view is copied to build it.
-    padding(&self, n: int) -> &View = Padding(self, n)
+    padding(&self, n: int) -> &View = Padding(self, n, n, n, n)
+
+    // Inset it on the sides you name, and nowhere else.
+    //
+    // **Named arguments are what makes this readable**, which is why it is four defaulted parameters
+    // rather than an `Insets` struct: `.pad(bottom = 12)` says what it does, where `.inset(Insets(0,
+    // 0, 12, 0))` makes a reader count commas.
+    //
+    //     text("title").pad(bottom = 12)
+    //     panel.pad(left = 8, right = 8)
+    pad(&self, top: int = 0, right: int = 0, bottom: int = 0, left: int = 0) -> &View =
+        Padding(self, top, right, bottom, left)
+
+    // Inset by whatever the theme calls a padding, on every side.
+    //
+    // **The themed counterpart to `padding(n)`, and the same argument as `panel` against
+    // `background`**: a number is a number and cannot be restyled, where "however much room this
+    // interface gives things" moves with the theme.
+    padded(&self) -> &View = Padded(self)
+
+    // ## Margin
+    //
+    // **There is no `margin`, and there does not need to be one.** The difference between a padding
+    // and a margin is only ever *which side of the background it falls on*, and that is decided by
+    // the order of the chain:
+    //
+    //     text("hi").padding(8).background(red)    // padding: the ground covers the inset
+    //     text("hi").background(red).padding(8)    // margin: the ground stops at the text
+    //
+    // A second name for the same wrapper would be two ways to write one thing, which is the style
+    // argument this toolkit has avoided everywhere else.
 
     // Fill the rectangle behind this view with a solid colour, corners rounded by `radius`.
     background(&self, color: u32, radius: int = 0) -> &View = Background(self, color, radius)
@@ -227,17 +257,40 @@ impl View for Spacer
 // The modifiers, each holding its child as an erased box.
 struct Padding
     child: &View
-    n: int
+    top: int
+    right: int
+    bottom: int
+    left: int
 
 impl View for Padding
     measure(&self, c: *Canvas, avail: Size) -> Size
-        val inner = self.child.measure(c, Size(avail.w - 2 * self.n, avail.h - 2 * self.n))
+        val across = self.left + self.right
+        val down = self.top + self.bottom
+        val inner = self.child.measure(c, Size(avail.w - across, avail.h - down))
 
-        Size(inner.w + 2 * self.n, inner.h + 2 * self.n)
+        Size(inner.w + across, inner.h + down)
+    end measure
 
     paint(&self, c: *Canvas, r: Rect)
-        self.child.paint(c, Rect(r.x + self.n, r.y + self.n,
-                                 r.w - 2 * self.n, r.h - 2 * self.n))
+        self.child.paint(c, Rect(r.x + self.left, r.y + self.top,
+                                 r.w - self.left - self.right, r.h - self.top - self.bottom))
+
+// An inset the theme decides, rather than one a call site names.
+struct Padded
+    child: &View
+
+impl View for Padded
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        val n = c.theme().pad
+        val inner = self.child.measure(c, Size(avail.w - 2 * n, avail.h - 2 * n))
+
+        Size(inner.w + 2 * n, inner.h + 2 * n)
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        val n = c.theme().pad
+
+        self.child.paint(c, Rect(r.x + n, r.y + n, r.w - 2 * n, r.h - 2 * n))
 
 struct Background
     child: &View

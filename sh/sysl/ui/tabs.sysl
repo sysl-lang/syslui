@@ -38,7 +38,11 @@ tabs(labels: []string, chosen: &Signal[int], body: &Fn(int) -> &View) -> &View
     // rest, which is the alignment story doing its ordinary job.
     bar.push(spacer())
 
-    column([row(bar.view(), 0), divider(), body(safe)], 0)
+    // **The rule touches the indicators and the panel does not touch the rule.** A gap above the
+    // rule would leave the chosen tab's indicator floating; no gap below it puts the panel hard
+    // against the line, which is the one place a tab bar always looks wrong. `padded` rather than a
+    // number, so how much room it is depends on the theme rather than on this file.
+    column([row(bar.view(), 0), divider(), body(safe).padded()], 0)
 end tabs
 
 // One header: a label over an indicator, lit while the pointer is on it.
