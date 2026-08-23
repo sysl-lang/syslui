@@ -3576,6 +3576,10 @@ private a_press_anywhere_else_gives_the_keyboard_up()
 
     c.point(20, 14, true)
     v.paint(&c, FIELD)
+
+    // **End the frame the press belongs to.** A tap is reported for exactly one frame and `render`
+    // is what ends one; a test that paints by hand says so itself.
+    c.keys_done()
     c.point(20, 14, false)
 
     assert(c.focus() == 1, "it has the keyboard")
@@ -3598,6 +3602,10 @@ private typing_into_a_focused_field_writes_the_signal()
 
     c.point(20, 14, true)
     v.paint(&c, FIELD)
+
+    // **End the frame the press belongs to.** A tap is reported for exactly one frame and `render`
+    // is what ends one; a test that paints by hand says so itself.
+    c.keys_done()
     c.point(20, 14, false)
 
     c.key(typed("ab"))
@@ -3624,6 +3632,7 @@ private an_unfocused_field_takes_none_of_the_keys()
 
     c.point(20, 14, true)
     text_field(mine, 1).paint(&c, FIELD)
+    c.keys_done()
     c.point(20, 14, false)
 
     c.key(typed("ab"))
@@ -3643,6 +3652,10 @@ private a_selection_is_painted_behind_the_field_text()
 
     c.point(20, 14, true)
     v.paint(&c, FIELD)
+
+    // **End the frame the press belongs to.** A tap is reported for exactly one frame and `render`
+    // is what ends one; a test that paints by hand says so itself.
+    c.keys_done()
     c.point(20, 14, false)
     c.edit(Selection(1, 3))
     c.ops = buf()
@@ -3703,6 +3716,7 @@ private a_long_run_scrolls_to_keep_the_caret_in_view()
 
     c.point(20, 14, true)
     v.paint(&c, box)
+    c.keys_done()
     c.point(20, 14, false)
 
     // Eighty-eight pixels of room and eight pixels a character: the twelfth character is the first
@@ -3751,6 +3765,10 @@ private a_selection_across_lines_paints_on_each_of_them()
 
     c.point(20, 14, true)
     v.paint(&c, AREA)
+
+    // **End the frame the press belongs to.** A tap is reported for exactly one frame and `render`
+    // is what ends one; a test that paints by hand says so itself.
+    c.keys_done()
     c.point(20, 14, false)
     c.edit(Selection(1, 10))
     c.ops = buf()
@@ -3780,6 +3798,10 @@ private enter_in_an_area_starts_a_line()
 
     c.point(20, 14, true)
     v.paint(&c, AREA)
+
+    // **End the frame the press belongs to.** A tap is reported for exactly one frame and `render`
+    // is what ends one; a test that paints by hand says so itself.
+    c.keys_done()
     c.point(20, 14, false)
 
     c.key(typed("a"))
@@ -3822,6 +3844,10 @@ private an_area_scrolls_to_the_caret_line()
 
     c.point(20, 14, true)
     v.paint(&c, AREA)
+
+    // **End the frame the press belongs to.** A tap is reported for exactly one frame and `render`
+    // is what ends one; a test that paints by hand says so itself.
+    c.keys_done()
     c.point(20, 14, false)
     c.edit(Selection(8, 8))
     c.ops = buf()
@@ -3838,6 +3864,65 @@ private an_area_scrolls_to_the_caret_line()
                        "hit 0,0 320x60\n",
            s"the first two lines have scrolled off the top:\n${c.dump()}")
 end an_area_scrolls_to_the_caret_line
+
+// **A tap is a press and a release between two frames, and a field has to be focusable by one.**
+// This is the phone bug written down: focus was taken by a field noticing `pressed(r)` while it
+// painted, which works with a mouse because a mouse press lasts for several frames -- and a thumb's
+// does not, so on a touch screen no field could ever be typed into.
+@test
+private a_tap_too_quick_to_span_a_frame_still_focuses()
+    val t = signal("hello")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(30, 14, true)
+    c.point(30, 14, false)
+
+    assert(!c.pressed(FIELD), "the finger has already gone by the time anything is painted")
+
+    render(v, &c, FIELD)
+
+    assert(c.focus() == 1, "and the field still took the keyboard")
+    assert(c.editing() == Selection(3, 3), "with the caret where the finger landed")
+end a_tap_too_quick_to_span_a_frame_still_focuses
+
+// And the frame after it is not a second tap: a press is reported once and `render` is what ends it.
+@test
+private a_tap_is_reported_for_one_frame_only()
+    val t = signal("hello")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(30, 14, true)
+    c.point(30, 14, false)
+    render(v, &c, FIELD)
+
+    c.edit(Selection(0, 0))
+    render(v, &c, FIELD)
+
+    assert(c.editing() == Selection(0, 0), "the caret was not put back where the tap was")
+    assert(c.focus() == 1, "and the focus is still where the tap left it")
+end a_tap_is_reported_for_one_frame_only
+
+// A tap outside blurs, which is the other half and needs no view to know anything.
+@test
+private a_tap_outside_puts_the_keyboard_away()
+    val t = signal("hello")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(30, 14, true)
+    c.point(30, 14, false)
+    render(v, &c, FIELD)
+
+    assert(c.focus() == 1)
+
+    c.point(400, 400, true)
+    c.point(400, 400, false)
+    render(v, &c, FIELD)
+
+    assert(c.focus() == NOBODY, "a tap that landed nowhere near it still took the keyboard away")
+end a_tap_outside_puts_the_keyboard_away
 
 // **A key belongs to exactly one frame**, and `render` is what says where a frame ends -- which is
 // the regression this pins: clearing them in `tick` threw away the keys of the frame about to be

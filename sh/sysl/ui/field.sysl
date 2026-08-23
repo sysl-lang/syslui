@@ -60,7 +60,11 @@ impl View for Field
         // **A press inside takes the keyboard, and every press anywhere gave it up first** -- which
         // is the whole of the focus protocol and the reason no view has to know that another view
         // was clicked. `Keyboard.moved` is the other half.
-        if c.pressed(r) then c.take_focus(self.id)
+        //
+        // **`tapped` rather than `pressed`, because a tap is over before this runs.** A mouse press
+        // lasts several frames and a finger's does not; asking whether the pointer is down now meant
+        // a field that could be focused with a mouse and not with a thumb.
+        if c.tapped(r) then c.take_focus(self.id)
 
         val mine = c.focus() == self.id
         val was = self.text.read()
@@ -126,6 +130,14 @@ private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> Edited
         val (px, py) = c.pointer()
 
         return Edited(s, Selection(offset_at(c, s, inner, ox, oy), offset_at(c, s, inner, px, py)))
+
+    // **A tap places the caret where it landed**, which a drag would otherwise have done: the grab
+    // above answers only while the pointer is still down, and a finger's is not.
+    if c.tapped(inner)
+        val (tx, ty) = c.tap_point()
+        val at = offset_at(c, s, inner, tx, ty)
+
+        return Edited(s, Selection(at, at))
 
     apply_all(s, sel, c.keys(), multiline)
 end typing

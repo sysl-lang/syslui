@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-Two hundred and forty-five tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Two hundred and forty-eight tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -417,6 +417,14 @@ only name that survives a relayout — it must be unique in a window and never `
 is one line in each of two places rather than a rule anybody has to remember: no view knows that
 another view was clicked, and a click on a button, on a list or on empty ground all put the keyboard
 away by doing nothing at all.
+
+**The press is remembered rather than observed, and a touch screen is what forced that.** Focus was
+taken by a field noticing `pressed(r)` while it painted, which works with a mouse only because a
+mouse press lasts several frames — a tap is a press and a release arriving *between* two frames, and
+the paint in the middle sees nothing at all. So the down transition records where it landed and
+`tapped(r)` reports it for exactly the frame that follows. On a phone that was the difference between
+a field that could be typed into and one that could not, and no test in this package could have found
+it: every one of them held the button down.
 
 The work splits three ways, and only the last of the three is in `field.sysl`:
 

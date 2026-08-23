@@ -23,6 +23,13 @@ import sysl.buf.{Buf, buf}
 // know that another view was clicked, no dismissal chain has to be maintained, and a click on a
 // button, on a scroll list, or on empty ground all put the keyboard away by doing nothing at all.
 //
+// **The press is remembered rather than observed, and a touch screen is what forced that.** Focus
+// was taken by a field noticing `pressed(r)` while it painted, which works on a desktop only
+// because a mouse press lasts several frames -- and a tap on a phone is a press and a release
+// arriving between two frames, so the paint in the middle never sees one. So the down *transition*
+// records where it landed and says so for exactly one frame: `tapped(r)` is true for whatever
+// rectangle held it, whether the finger is still there or not.
+//
 // **Nothing here is application state and none of it is a signal.** Which field somebody is typing
 // in, and where the caret is inside it, are facts about the window between two frames -- the same
 // kind of fact as where the pointer is. The *text* is the application's, and it is a signal, which
@@ -97,23 +104,39 @@ struct Keyboard
     // hold. Blurring on the hold would mean a field could never keep focus while it was dragged in.
     was_down: bool
 
+    // Where the last press landed, and whether the frame being painted is the one that follows it.
+    // **A tap is over before a frame is drawn**, so the point is kept rather than asked for.
+    tap_x: int
+    tap_y: int
+    fresh: bool
+
     // The window reported a key.
     press(*self, p: Press) = self.presses.push(p)
 
     // What this frame's keys are, for whoever has the focus.
     keys(*self) -> []Press = self.presses.view()
 
-    // Forget the previous frame's keys. A backend calls this beside `Hits.reset`, before painting:
-    // a key that arrived while the last frame was being drawn is meant for the next one.
+    // Forget this frame's keys and the press that came with them. **`render` calls it at the end of
+    // a frame**, which is the only moment either is certainly finished with.
     reset(*self)
         self.presses = buf()
+        self.fresh = false
 
     // Told once a frame, through the canvas's `point`. **The transition into down is the blur**, not
-    // the hold and not the release.
-    moved(*self, down: bool)
-        if down && !self.was_down then self.focus = NOBODY
+    // the hold and not the release -- and it is also the press a field takes focus from, recorded
+    // here because a tap does not last long enough to be noticed any other way.
+    moved(*self, x: int, y: int, down: bool)
+        if down && !self.was_down
+            self.focus = NOBODY
+            self.tap_x = x
+            self.tap_y = y
+            self.fresh = true
 
         self.was_down = down
+    end moved
+
+    // Did the press this frame follows land in `r`?
+    landed(*self, r: Rect) -> bool = self.fresh && r.holds(self.tap_x, self.tap_y)
 
     // Give the keyboard to `id`, and start it with an empty caret if it did not have it before.
     take(*self, id: int)
@@ -125,4 +148,4 @@ struct Keyboard
     edit(*self, sel: Selection) = self.sel = sel
 end Keyboard
 
-keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false)
+keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false, -1, -1, false)

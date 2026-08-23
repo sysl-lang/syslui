@@ -82,7 +82,7 @@ struct PlutoCanvas
         self.py = y
         self.down = down
         self.hold.moved(x, y, down)
-        self.board.moved(down)
+        self.board.moved(x, y, down)
     end point
 
     // A key the window reported. **The frame loop hands these over as they arrive and clears them
@@ -194,6 +194,10 @@ impl Canvas for PlutoCanvas
     override take_focus(*self, id: int) = self.board.take(id)
 
     override keys(*self) -> []Press = self.board.keys()
+
+    override tapped(*self, r: Rect) -> bool = self.board.landed(r)
+
+    override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
 
     override editing(*self) -> Selection = self.board.sel
 

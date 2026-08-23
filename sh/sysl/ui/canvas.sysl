@@ -220,6 +220,17 @@ trait Canvas
     // What arrived since the last frame, for whichever view has the focus.
     keys(*self) -> []Press = no_keys()
 
+    // Did the press this frame follows land in `r`, and where exactly?
+    //
+    // **This is not `pressed(r)`, and a touch screen is why.** A mouse press lasts for several
+    // frames, so a view could notice one while painting; a tap is a press and a release between two
+    // frames, and the paint in the middle sees nothing at all. The press is therefore recorded when
+    // it happens and reported for exactly the one frame that follows it.
+    tapped(*self, r: Rect) -> bool = false
+
+    // Where that press was, in the coordinates a view is painted in.
+    tap_point(*self) -> (int, int) = (-1, -1)
+
     // Where the focused view's caret is, and what it has selected.
     editing(*self) -> Selection = nothing_selected()
 
@@ -390,7 +401,7 @@ struct Recorder
         self.py = y
         self.down = down
         self.hold.moved(x, y, down)
-        self.board.moved(down)
+        self.board.moved(x, y, down)
     end point
 
     // Send a key, so a test can type without a window.
@@ -492,6 +503,10 @@ impl Canvas for Recorder
     override take_focus(*self, id: int) = self.board.take(id)
 
     override keys(*self) -> []Press = self.board.keys()
+
+    override tapped(*self, r: Rect) -> bool = self.board.landed(r)
+
+    override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
 
     override editing(*self) -> Selection = self.board.sel
 
