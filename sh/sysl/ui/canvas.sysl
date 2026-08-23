@@ -31,28 +31,29 @@ import sysl.buf.{Buf, buf}
 // That is what keeps this surface small, and small is what makes a second backend cheap. Anything
 // that cannot be expressed as rectangles, a glyph run and a clip belongs in a layer above this one.
 trait Canvas
-    // Fill a rectangle with a solid colour, 0xRRGGBB.
-    fill(*self, r: Rect, color: u32)
+    // Fill a rectangle with a solid colour, 0xRRGGBB, its corners rounded by `radius`.
+    //
+    // **A fill and a stroke rather than one styled box**, because the modifiers are separate and a
+    // backend should not be asked to draw what nobody wrote: `.background(c, 8)` fills and
+    // `.border(c, 1, 8)` strokes, and a view wearing both makes two calls in the order the chain put
+    // them. There is no colour meaning "none", and this is why one is not needed.
+    //
+    // **The radius is a defaulted parameter rather than a second member**, which is worth stating
+    // because the surface carried both for a day: a square fill is a rounded one with no radius, and
+    // two members meant every backend wrote the same body twice and every view chose between them.
+    // A default on a trait member is filled in at the call, including a call through `*Canvas` where
+    // the receiver has forgotten its type -- so `c.fill(r, colour)` costs a backend nothing.
+    fill(*self, r: Rect, color: u32, radius: int = 0)
 
     // Draw a run of text with its top-left at `r`, clipped to `r`.
     text(*self, r: Rect, t: string)
-
-    // Fill a rectangle whose corners are rounded by `radius`.
-    //
-    // **A fill and a stroke rather than one styled box**, because the modifiers are separate and a
-    // backend should not be asked to draw what nobody wrote: `.background(c, radius: 8)` fills and
-    // `.border(c, 1, radius: 8)` strokes, and a view wearing both makes two calls in the order the
-    // chain put them. There is no colour meaning "none", and this is why one is not needed.
-    //
-    // `radius` of zero is square, so `round(r, c, 0)` is `fill(r, c)` and a backend may say so.
-    round(*self, r: Rect, color: u32, radius: int)
 
     // Outline a rectangle, `width` pixels thick, drawn **inside** `r` and rounded by `radius`.
     //
     // Inside rather than centred on the edge, so a bordered view occupies exactly the rectangle
     // layout gave it and never bleeds into a neighbour -- which is what lets a border be added to a
     // view without moving anything around it.
-    stroke(*self, r: Rect, color: u32, width: int, radius: int)
+    stroke(*self, r: Rect, color: u32, width: int = 1, radius: int = 0)
 
     // Restrict drawing to `r` until the matching `unclip`.
     clip(*self, r: Rect)
@@ -84,6 +85,20 @@ trait Canvas
     hovered(*self, r: Rect) -> bool
 
     pressed(*self, r: Rect) -> bool
+
+    // How far an animation on this rectangle has travelled toward `target`, moving at `rate` per
+    // second. `slot` tells two animations on one view apart.
+    //
+    // **This is on the canvas for the same reason the pointer is: the tree has nowhere to keep it.**
+    // A `Reactive` is rebuilt on every paint, so anything it stored would be thrown away between the
+    // frame that started an animation and the frame that continues it. The canvas is the one thing
+    // that lives across frames and already knows the rectangle, which is what `phases.sysl` is and
+    // what its own prose argues at length.
+    //
+    // **The default answers `target`, so a backend with no clock is drawn settled** -- a printer, an
+    // offscreen render, a test that says nothing about time. That is what makes animation something
+    // a backend opts into rather than something every backend owes.
+    phase(*self, r: Rect, slot: int, target: real, rate: real) -> real = target
 
     // How much room `s` takes in this canvas's font. A view measures through this or it is guessing.
     //
@@ -139,12 +154,23 @@ struct Recorder
     py: int
     down: bool
 
+    // The animations in flight, so that easing can be tested without a clock or a window.
+    //
+    // **A test drives time by hand**, which is the only way an animation is testable at all: a
+    // fixed sequence of `tick`s is reproducible where a real frame loop is not, and a test asserting
+    // what a hover looks like a tenth of a second in should not depend on how busy the machine was.
+    anim: Phases
+
     // Put the pointer somewhere, so a test can hover and press without a window.
     point(*self, x: int, y: int, down: bool = false)
         self.px = x
         self.py = y
         self.down = down
     end point
+
+    // Advance the clock by `dt` seconds. Until this is called nothing moves, so a recording made
+    // without it shows the settled appearance.
+    tick(*self, dt: real) = self.anim.tick(dt)
 
     // What was drawn, oldest first, one operation per line.
     dump(self) -> string
@@ -158,18 +184,21 @@ struct Recorder
     end dump
 end Recorder
 
+// A radius, written only when there is one.
+private radii(radius: int) -> string = if radius == 0 then "" else s" r${radius}"
+
 // **A fixed advance a byte, and it is a lie meant to be one.** A real font measures with
 // `TTF_GetStringSize`; this is stable, which is what a test wants, and wrong for anything but
 // ASCII, which is what keeps anybody from mistaking it for a font.
 impl Canvas for Recorder
-    fill(*self, r: Rect, color: u32)
-        self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}")
-
-    round(*self, r: Rect, color: u32, radius: int)
-        self.ops.push(s"round ${r.x},${r.y} ${r.w}x${r.h} #${color} r${radius}")
+    // **A square fill records as it always did**, so that the radius does not appear in the reading
+    // of a tree that never asked for one -- a test about layout should not have to say anything
+    // about corners. A rounded one adds `r8`, and that is the whole of the difference.
+    fill(*self, r: Rect, color: u32, radius: int)
+        self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}" + radii(radius))
 
     stroke(*self, r: Rect, color: u32, width: int, radius: int)
-        self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width} r${radius}")
+        self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width}" + radii(radius))
 
     text(*self, r: Rect, t: string)
         self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
@@ -190,6 +219,11 @@ impl Canvas for Recorder
 
     pressed(*self, r: Rect) -> bool = self.down && r.holds(self.px, self.py)
 
+    // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
+    // and a clock a test can drive, so it replaces it.
+    override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
+        self.anim.at(r, slot, target, rate)
+
     text_size(*self, s: string) -> Size = Size(int(s.len) * self.char_w, self.line_h)
 
     hit(*self, r: Rect, f: &Fn() -> unit)
@@ -200,4 +234,4 @@ end Recorder
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false)
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, phases())

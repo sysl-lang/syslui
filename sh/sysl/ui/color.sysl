@@ -1,0 +1,51 @@
+module sh.sysl.ui
+
+// Colour arithmetic, and why a toolkit needs any at all.
+//
+// **A style is asked for once and worn in three states**, which is the whole reason this file
+// exists. A button is given one accent colour and has to look like something when the pointer is
+// over it and like something else while it is held down; a caller made to name all three would
+// spend most of a theme saying the same hue in slightly different words, and a caller who named
+// only one would get no feedback at all.
+//
+// So the states are *derived*: hover is the accent moved toward white, pressed is the accent moved
+// toward black, and a border is the ground moved a little further than either. That is what a
+// designer does by hand in a palette, and it is arithmetic rather than judgement.
+//
+// A colour is `0xRRGGBB` in a `u32`, which is what `Canvas` takes and what an application writes as
+// a hex literal. There is no alpha: nothing in the toolkit composites, and a channel nobody reads is
+// a channel that goes wrong silently.
+
+const WHITE: u32 = 0xFFFFFF
+const BLACK: u32 = 0x000000
+
+// The channel `shift` bits up, as a number from 0 to 255.
+private channel(c: u32, shift: u32) -> int = int((c >> shift) & 0xFF)
+
+// One channel of the answer. Integer arithmetic on purpose: the inputs are bytes and the output is a
+// byte, so there is nothing for a float to be more accurate about.
+private blend(x: int, y: int, p: int) -> int = (x * (100 - p) + y * p) / 100
+
+private pack(r: int, g: int, b: int) -> u32 = (u32(r) << 16) | (u32(g) << 8) | u32(b)
+
+// `a` at `pct` of nothing, `b` at `pct` of a hundred, and a straight line between them.
+//
+// **A percentage outside the range is clamped rather than refused**, because this is called from a
+// paint pass with a number a style computed, and a user interface that stopped drawing over an
+// arithmetic slip would be worse than one that drew the nearest colour it could.
+mix(a: u32, b: u32, pct: int) -> u32
+    val p = if pct < 0 then 0 elif pct > 100 then 100 else pct
+
+    pack(blend(channel(a, 16), channel(b, 16), p),
+         blend(channel(a, 8), channel(b, 8), p),
+         blend(channel(a, 0), channel(b, 0), p))
+
+// Toward white, and toward black.
+//
+// **These are a mix against a constant and nothing cleverer**, which is a choice rather than a
+// shortcut: lightening in a perceptual space would be better and would need a colour space, a pair
+// of transfer functions and a dependency on floating point. What a hover effect needs is that the
+// colour visibly moves and that two colours moved by the same amount move by the same amount.
+lighten(c: u32, pct: int) -> u32 = mix(c, WHITE, pct)
+
+darken(c: u32, pct: int) -> u32 = mix(c, BLACK, pct)

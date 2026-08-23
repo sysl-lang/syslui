@@ -69,8 +69,26 @@ trait View
     // chain of boxes each pointing at the one below, and no view is copied to build it.
     padding(&self, n: int) -> &View = Padding(self, n)
 
-    // Fill the rectangle behind this view with a solid colour.
-    background(&self, color: u32) -> &View = Background(self, color)
+    // Fill the rectangle behind this view with a solid colour, corners rounded by `radius`.
+    background(&self, color: u32, radius: int = 0) -> &View = Background(self, color, radius)
+
+    // Outline this view, `width` pixels thick, drawn inside the rectangle it was given.
+    //
+    // **Nothing moves when a border is added**, which is what makes it a modifier rather than a
+    // container: the stroke is drawn inside the rectangle layout already settled on, so a view that
+    // gains an outline keeps its size and its neighbours keep their places. SwiftUI's `.border` is
+    // the same shape and for the same reason; a caller who wants the content pushed in writes the
+    // `.padding` that says so.
+    border(&self, color: u32, width: int = 1, radius: int = 0) -> &View =
+        Border(self, color, width, radius)
+
+    // Draw the text inside this view in `color`.
+    //
+    // **A subtree rather than a leaf, and that is the point.** A label does not carry its own colour
+    // and a caller does not hand it one -- a styled view sets the ink around whatever it wraps, so
+    // the text inside a button follows the button, and a whole panel is recoloured by one link of a
+    // chain near the root. It is `Canvas` state for exactly this reason.
+    foreground(&self, color: u32) -> &View = Foreground(self, color)
 
     // Ask for a fixed size regardless of what this view would have measured to.
     frame(&self, w: int, h: int) -> &View = Frame(self, w, h)
@@ -87,67 +105,96 @@ end View
 // A leaf: one run of text, measured by whatever font the canvas draws with.
 struct Text
     s: string
-end Text
 
 impl View for Text
     measure(&self, c: *Canvas, avail: Size) -> Size = c.text_size(self.s)
 
     paint(&self, c: *Canvas, r: Rect) = c.text(r, self.s)
-end Text
 
 // A leaf that takes whatever it is offered and draws nothing -- the flexible gap.
+//
+// **The one place an `end` marker is load-bearing rather than a readability choice**: a struct with
+// no fields has no indented body to dedent out of, so `end Spacer` is what says the declaration is
+// finished. The compiler says as much when it is left off.
 struct Spacer end Spacer
 
 impl View for Spacer
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(0, 0)
 
     paint(&self, c: *Canvas, r: Rect) = ()
-end Spacer
 
-// The four modifiers, each holding its child as an erased box.
+// The modifiers, each holding its child as an erased box.
 struct Padding
     child: &View
     n: int
-end Padding
 
 impl View for Padding
     measure(&self, c: *Canvas, avail: Size) -> Size
         val inner = self.child.measure(c, Size(avail.w - 2 * self.n, avail.h - 2 * self.n))
 
         Size(inner.w + 2 * self.n, inner.h + 2 * self.n)
-    end measure
 
     paint(&self, c: *Canvas, r: Rect)
         self.child.paint(c, Rect(r.x + self.n, r.y + self.n,
                                  r.w - 2 * self.n, r.h - 2 * self.n))
-    end paint
-end Padding
 
 struct Background
     child: &View
     color: u32
-end Background
+    radius: int
 
 impl View for Background
     measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
 
     paint(&self, c: *Canvas, r: Rect)
-        c.fill(r, self.color)
+        c.fill(r, self.color, self.radius)
         self.child.paint(c, r)
-    end paint
-end Background
+
+// An outline, drawn over the child rather than under it.
+//
+// **Over, because the stroke is inside the rectangle and the child fills it.** A border painted
+// first would be covered by whatever the child drew to its own edge, which is the ordinary case --
+// a background is a child of the border in a chain like `.background(g).border(e)`. Painting last
+// is what makes the outline visible without insetting anything.
+struct Border
+    child: &View
+    color: u32
+    width: int
+    radius: int
+
+impl View for Border
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.child.paint(c, r)
+        c.stroke(r, self.color, self.width, self.radius)
+
+// The text colour for a subtree, set around the child and put back afterwards.
+//
+// **It restores what it found rather than resetting to a default**, which is what makes the
+// modifier nest: a coloured label inside a coloured panel leaves the panel's colour standing for the
+// siblings that follow it. That is `clip`'s discipline, and the canvas keeps the stack.
+struct Foreground
+    child: &View
+    color: u32
+
+impl View for Foreground
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.ink(self.color)
+        self.child.paint(c, r)
+        c.unink()
 
 struct Frame
     child: &View
     w: int
     h: int
-end Frame
 
 impl View for Frame
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.w, self.h)
 
     paint(&self, c: *Canvas, r: Rect) = self.child.paint(c, r)
-end Frame
 
 // A view that answers to a tap, and the reason the action is stored strongly.
 //
@@ -160,7 +207,6 @@ end Frame
 struct Tappable
     child: &View
     action: &Fn() -> unit
-end Tappable
 
 impl View for Tappable
     measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
@@ -168,8 +214,6 @@ impl View for Tappable
     paint(&self, c: *Canvas, r: Rect)
         self.child.paint(c, r)
         c.hit(r, self.action)
-    end paint
-end Tappable
 
 // The constructors, and the reason they are not the struct names.
 //
@@ -189,10 +233,6 @@ text(s: string) -> &View = Text(s)
 
 spacer() -> &View = Spacer()
 
-// A tappable label on a filled ground.
-//
-// **Three links of the chain and no new view type**, which is the whole argument for `on_tap` being
-// a modifier. The colour is a constant rather than a theme because a probe with a theme system has
-// stopped being a probe; a framework gives this a `Style` and nothing else about it changes.
-button(label: string, on_tap: &Fn() -> unit, color: u32 = 0x3A6EA5u32) -> &View =
-    text(label).padding(6).background(color).on_tap(on_tap)
+// `button` is in `style.sysl`, because it is no longer a chain of modifiers: it has to look
+// different while the pointer is over it, and a view that changes with the pointer is a kind of view
+// this file does not have.

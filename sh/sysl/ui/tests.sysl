@@ -397,3 +397,362 @@ private a_sweep_keeps_the_dependent_that_is_still_alive()
     assert(lived.read() == 3, "the survivor heard every write")
     assert(died.read() == 1, "and the one that went heard only the one before it did")
 end a_sweep_keeps_the_dependent_that_is_still_alive
+
+// -- the styling layer ----------------------------------------------------------------------------
+
+// **A default argument on a trait member is filled in at the CALL, including a call through the
+// erasure**, which is the language fact the whole `Canvas` surface was cut around: `fill` and a
+// separate `round` were two members for a day, and every backend wrote the same body twice.
+//
+// A view calls `c.fill(r, colour)` with no radius, through a `*Canvas` whose receiver has forgotten
+// what it is, and the recorder — which declares the parameter without a default, because an `impl`
+// may not restate one — sees the zero.
+@test
+private a_defaulted_trait_argument_survives_the_erasure()
+    assert_paints(text("hi").background(0xFF0000u32),
+                  Size(200, 200), Rect(0, 0, 16, 16),
+                  "fill 0,0 16x16 #16711680\ntext 0,0 16x16 'hi'\n")
+end a_defaulted_trait_argument_survives_the_erasure
+
+// And a radius, when one is asked for. The recorder writes it only when it is not zero, so a tree
+// that never asked about corners reads the way it always did.
+@test
+private a_radius_reaches_the_canvas_and_a_square_fill_still_reads_as_one()
+    assert_paints(text("hi").background(0xFF0000u32, 8),
+                  Size(200, 200), Rect(0, 0, 16, 16),
+                  "fill 0,0 16x16 #16711680 r8\ntext 0,0 16x16 'hi'\n")
+end a_radius_reaches_the_canvas_and_a_square_fill_still_reads_as_one
+
+// **A border is drawn over the child and inside the rectangle**, which is what lets it be added to a
+// view without moving anything. Both halves are in this one recording: the stroke comes last, and
+// its rectangle is the whole of what the view was given rather than an inset of it.
+@test
+private a_border_paints_over_the_child_and_insets_nothing()
+    assert_paints(text("hi").border(0x00FF00u32, 2, 4),
+                  Size(200, 200), Rect(0, 0, 16, 16),
+                  "text 0,0 16x16 'hi'\nstroke 0,0 16x16 #65280 w2 r4\n")
+end a_border_paints_over_the_child_and_insets_nothing
+
+// A border measures to exactly what it wraps. If it did not, adding one would shove every sibling.
+@test
+private a_border_changes_no_measurement()
+    val plain = text("hi").padding(4)
+    val edged = text("hi").padding(4).border(0x00FF00u32, 3, 5)
+
+    assert(measured(plain, Size(200, 200)) == measured(edged, Size(200, 200)),
+           "an outline is drawn inside what layout already settled on")
+end a_border_changes_no_measurement
+
+// **Ink is set around the child and put back**, so a label follows the view that styled it and the
+// siblings after it are unaffected.
+@test
+private foreground_sets_the_ink_around_its_child_and_restores_it()
+    assert_paints(text("hi").foreground(0x112233u32),
+                  Size(200, 200), Rect(0, 0, 16, 16),
+                  "ink #1122867\ntext 0,0 16x16 'hi'\nunink\n")
+end foreground_sets_the_ink_around_its_child_and_restores_it
+
+// Nesting is the case that says `unink` restores rather than resets: the inner one ends and the
+// outer colour is still standing for the row below it.
+@test
+private a_nested_foreground_leaves_the_outer_one_standing()
+    val v = column(spacing = 0):
+        text("a").foreground(0x00FF00u32)
+        text("b")
+
+    assert_paints(v.foreground(0xFF0000u32), Size(200, 200), Rect(0, 0, 16, 32),
+                  "ink #16711680\nink #65280\ntext 0,0 16x16 'a'\nunink\ntext 0,16 16x16 'b'\nunink\n")
+end a_nested_foreground_leaves_the_outer_one_standing
+
+// -- colour arithmetic ----------------------------------------------------------------------------
+
+// The ends of the line, which is what every derived state is a point on.
+@test
+private a_mix_at_either_end_is_the_colour_it_started_from()
+    assert_eq(mix(0x3A6EA5u32, 0xFFFFFFu32, 0), 0x3A6EA5u32)
+    assert_eq(mix(0x3A6EA5u32, 0xFFFFFFu32, 100), 0xFFFFFFu32)
+    assert_eq(lighten(0x3A6EA5u32, 0), 0x3A6EA5u32)
+    assert_eq(lighten(0x3A6EA5u32, 100), WHITE)
+    assert_eq(darken(0x3A6EA5u32, 100), BLACK)
+end a_mix_at_either_end_is_the_colour_it_started_from
+
+// **Each channel is mixed against its own opposite number**, which is the one way this goes wrong
+// and would not be visible in a grey: a shift computed off by eight bits still produces a colour.
+@test
+private each_channel_is_mixed_against_its_own()
+    assert_eq(mix(BLACK, WHITE, 50), 0x7F7F7Fu32)
+    assert_eq(mix(0xFF0000u32, 0x00FF00u32, 50), 0x7F7F00u32)
+    assert_eq(mix(0x000000u32, 0x0000FFu32, 50), 0x00007Fu32)
+end each_channel_is_mixed_against_its_own
+
+// A percentage outside the range is clamped, because this is called from a paint pass and a user
+// interface that stopped drawing over an arithmetic slip would be worse than one that drew the
+// nearest colour it could.
+@test
+private a_percentage_outside_the_range_is_clamped_rather_than_wrapped()
+    assert_eq(mix(0x3A6EA5u32, 0xFFFFFFu32, -40), 0x3A6EA5u32)
+    assert_eq(mix(0x3A6EA5u32, 0xFFFFFFu32, 250), 0xFFFFFFu32)
+end a_percentage_outside_the_range_is_clamped_rather_than_wrapped
+
+// -- the state-dependent view ---------------------------------------------------------------------
+
+// **Measurement is at rest even when the pointer is on it**, which is the rule that keeps a list
+// from twitching as the cursor crosses it. The body below is deliberately a different size in each
+// state, so a `measure` that asked the canvas would be caught.
+@test
+private a_reactive_view_measures_at_rest_whatever_the_pointer_is_doing()
+    val v = reactive(i -> if i.hovered() then spacer().frame(90, 90) else spacer().frame(10, 10))
+    var c = recorder()
+
+    c.point(5, 5)
+
+    assert(v.measure(&c, Size(200, 200)) == Size(10, 10),
+           "the pointer is inside it and it still measures to its resting size")
+end a_reactive_view_measures_at_rest_whatever_the_pointer_is_doing
+
+// And paint is where the state is read, because paint is the only moment a view knows its rectangle.
+@test
+private a_reactive_view_paints_the_state_the_canvas_reports()
+    val v = reactive(i -> if i.pressed() then text("down") elif i.hovered() then text("over") else text("rest"))
+
+    var away = recorder()
+    var over = recorder()
+    var down = recorder()
+
+    over.point(50, 10)
+    down.point(50, 10, true)
+
+    v.paint(&away, Rect(0, 0, 100, 20))
+    v.paint(&over, Rect(0, 0, 100, 20))
+    v.paint(&down, Rect(0, 0, 100, 20))
+
+    assert(away.dump() == "text 0,0 100x20 'rest'\n", s"away:\n${away.dump()}")
+    assert(over.dump() == "text 0,0 100x20 'over'\n", s"over:\n${over.dump()}")
+    assert(down.dump() == "text 0,0 100x20 'down'\n", s"down:\n${down.dump()}")
+end a_reactive_view_paints_the_state_the_canvas_reports
+
+// **A press that wandered off reads as neither**, which is how a person cancels a click: hold the
+// button down, slide off it, let go, and nothing should have happened.
+@test
+private a_press_outside_the_rectangle_is_not_a_press_on_it()
+    val v = reactive(i -> if i.pressed() then text("down") elif i.hovered() then text("over") else text("rest"))
+    var c = recorder()
+
+    c.point(400, 10, true)
+    v.paint(&c, Rect(0, 0, 100, 20))
+
+    assert(c.dump() == "text 0,0 100x20 'rest'\n", s"got:\n${c.dump()}")
+end a_press_outside_the_rectangle_is_not_a_press_on_it
+
+// The whole button, in the three states, read off the recording.
+//
+// **This asserts the WIRING and not the arithmetic** -- the derived colours are named through the
+// same helpers the button uses, because what could go wrong here is a state choosing the wrong
+// ground, and what could go wrong in `mix` is tested where `mix` is.
+@test
+private a_button_wears_a_different_ground_in_each_state()
+    val face = button("hi", () -> ())
+
+    var away = recorder()
+    var over = recorder()
+    var down = recorder()
+
+    over.point(50, 14)
+    down.point(50, 14, true)
+
+    face.paint(&away, Rect(0, 0, 100, 28))
+    face.paint(&over, Rect(0, 0, 100, 28))
+    face.paint(&down, Rect(0, 0, 100, 28))
+
+    assert(away.dump() == painted(ACCENT), s"away:\n${away.dump()}")
+    assert(over.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"over:\n${over.dump()}")
+
+    // **A press is also a hover**, since the pointer has to be on the button to hold it down -- so
+    // the pressed ground is the lifted one sunk, not the accent sunk. That falls out of the two
+    // being layered rather than chosen between, and it is the right picture: releasing the button
+    // leaves the pointer where it is, and what the eye should see is the press relaxing rather than
+    // the whole colour jumping.
+    assert(down.dump() == painted(darken(lighten(ACCENT, HOVER_LIFT), PRESS_SINK)),
+           s"down:\n${down.dump()}")
+end a_button_wears_a_different_ground_in_each_state
+
+// What a button of label "hi" in a 100x28 rectangle draws, given the ground it settled on. The
+// order is the chain read outside in, and the `hit` at the end is `on_tap` still being a modifier.
+private painted(ground: u32) -> string =
+    s"fill 0,0 100x28 #${ground} r6\n" +
+    s"ink #${WHITE}\n" +
+    "text 8,8 84x12 'hi'\n" +
+    "unink\n" +
+    s"stroke 0,0 100x28 #${lighten(ground, EDGE_LIFT)} w1 r6\n" +
+    "hit 0,0 100x28\n"
+
+// A button still answers to a tap, which is the thing the rewrite could most easily have dropped:
+// the `Reactive` sits *inside* the `Tappable`, so the region is the whole button rather than
+// whatever the chosen state happened to build.
+@test
+private a_restyled_button_is_still_tappable_in_every_state()
+    val count = signal(0)
+    var c = recorder()
+
+    c.point(50, 14, true)
+    button("increment", () -> count.set(count.read() + 1)).paint(&c, Rect(0, 0, 100, 28))
+
+    assert(c.taps.len() == 1, "one region, drawn while pressed")
+    assert(c.taps.tap(50, 14), "and it holds the point")
+    assert(count.read() == 1, "and the action ran")
+end a_restyled_button_is_still_tappable_in_every_state
+
+// -- animation ------------------------------------------------------------------------------------
+
+// **An animation nobody has seen before starts settled**, which is the difference between a panel
+// that appears and a panel that flies in. Only a *change* to something already on screen eases.
+@test
+private a_phase_first_asked_about_is_already_where_it_was_asked_for()
+    var p = phases()
+
+    assert_eq(p.at(Rect(0, 0, 10, 10), 0, 1.0, 8.0), 1.0)
+    assert_eq(p.at(Rect(0, 0, 10, 10), 0, 0.0, 8.0), 0.0)
+end a_phase_first_asked_about_is_already_where_it_was_asked_for
+
+// And once it exists, a change to the target is travelled toward at the rate given rather than
+// jumped to. A quarter of a second at four per second is a quarter of the way.
+@test
+private a_phase_moves_toward_its_target_at_the_rate_it_was_given()
+    var p = phases()
+    val r = Rect(0, 0, 10, 10)
+
+    assert_eq(p.at(r, 0, 0.0, 1.0), 0.0)
+
+    p.tick(0.25)
+
+    assert_eq(p.at(r, 0, 1.0, 1.0), 0.25)
+
+    p.tick(0.25)
+
+    assert_eq(p.at(r, 0, 1.0, 1.0), 0.5)
+end a_phase_moves_toward_its_target_at_the_rate_it_was_given
+
+// It stops on arrival rather than overshooting, in both directions -- which is the one arithmetic
+// slip a linear step can make, and it would show as a colour going past white and coming back.
+@test
+private a_phase_stops_on_arrival_rather_than_passing_it()
+    var p = phases()
+    val r = Rect(0, 0, 10, 10)
+
+    assert_eq(p.at(r, 0, 0.0, 1.0), 0.0)
+
+    p.tick(10.0)
+
+    assert_eq(p.at(r, 0, 1.0, 1.0), 1.0)
+
+    p.tick(10.0)
+
+    assert_eq(p.at(r, 0, 0.0, 1.0), 0.0)
+end a_phase_stops_on_arrival_rather_than_passing_it
+
+// **A reversal starts from wherever it had got to**, which is why the step is a rate and not a curve
+// over a duration: a pointer crossing a button twice interrupts the first ease half way, and there
+// is no start time left to compute an ease-in-out from.
+@test
+private a_reversal_starts_from_where_the_animation_had_got_to()
+    var p = phases()
+    val r = Rect(0, 0, 10, 10)
+
+    assert_eq(p.at(r, 0, 0.0, 1.0), 0.0)
+
+    p.tick(0.25)
+
+    assert_eq(p.at(r, 0, 1.0, 1.0), 0.25)
+
+    p.tick(0.125)
+
+    assert_eq(p.at(r, 0, 0.0, 1.0), 0.125)
+end a_reversal_starts_from_where_the_animation_had_got_to
+
+// Two animations on one view are told apart by their slot, and two views by their rectangle.
+@test
+private a_slot_and_a_rectangle_are_both_part_of_the_key()
+    var p = phases()
+    val a = Rect(0, 0, 10, 10)
+    val b = Rect(0, 20, 10, 10)
+
+    assert_eq(p.at(a, 0, 0.0, 1.0), 0.0)
+    assert_eq(p.at(a, 1, 0.0, 1.0), 0.0)
+    assert_eq(p.at(b, 0, 0.0, 1.0), 0.0)
+
+    p.tick(0.25)
+
+    // The same elapsed time, and the one asked to move twice as fast has moved twice as far.
+    assert_eq(p.at(a, 0, 1.0, 1.0), 0.25)
+    assert_eq(p.at(a, 1, 1.0, 2.0), 0.5)
+    assert_eq(p.at(b, 0, 0.0, 1.0), 0.0)
+end a_slot_and_a_rectangle_are_both_part_of_the_key
+
+// **What nothing asked about during a frame is forgotten**, which is what stops the store growing
+// for as long as the program runs: a row scrolled off the end, or a subtree behind a condition that
+// turned false, leaves an entry nothing will ever ask about again.
+@test
+private an_animation_nothing_asked_about_is_swept()
+    var p = phases()
+    val r = Rect(0, 0, 10, 10)
+
+    assert_eq(p.at(r, 0, 0.0, 1.0), 0.0)
+
+    p.tick(0.25)
+
+    assert_eq(p.at(r, 0, 1.0, 1.0), 0.25)
+
+    // A frame in which nothing asks about it, and then another. The first tick keeps it (it was
+    // touched during the frame before), the second drops it.
+    p.tick(0.25)
+    p.tick(0.25)
+
+    // Asked about again it is new, so it starts settled rather than resuming from a quarter.
+    assert_eq(p.at(r, 0, 1.0, 1.0), 1.0)
+end an_animation_nothing_asked_about_is_swept
+
+// **A recorder that is never ticked shows the settled appearance**, which is why every test above
+// this section says nothing about time and still reads the way it always did.
+@test
+private a_canvas_with_no_clock_draws_everything_settled()
+    val face = button("hi", () -> ())
+    var c = recorder()
+
+    c.point(50, 14)
+    face.paint(&c, Rect(0, 0, 100, 28))
+
+    assert(c.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"got:\n${c.dump()}")
+end a_canvas_with_no_clock_draws_everything_settled
+
+// And a button that is hovered *after* it has been drawn eases, rather than snapping.
+//
+// The first paint is with the pointer away, which is what puts the phase in the store at zero; the
+// pointer then arrives and each frame moves it `HOVER_RATE * dt` of the way.
+@test
+private a_button_eases_into_its_hover_rather_than_snapping()
+    val face = button("hi", () -> ())
+    val at = Rect(0, 0, 100, 28)
+    var c = recorder()
+
+    face.paint(&c, at)
+
+    assert(c.dump() == painted(ACCENT), s"at rest:\n${c.dump()}")
+
+    // The pointer arrives, and one frame of a sixtieth of a second passes.
+    c.point(50, 14)
+    c.tick(1.0 / 60.0)
+    c.ops = buf()
+    face.paint(&c, at)
+
+    val part = HOVER_RATE / 60.0
+
+    assert(c.dump() == painted(lighten(ACCENT, int(part * real(HOVER_LIFT)))),
+           s"one frame in:\n${c.dump()}")
+
+    // Long enough to have arrived, and it is the full hover and no more.
+    c.tick(1.0)
+    c.ops = buf()
+    face.paint(&c, at)
+
+    assert(c.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"settled:\n${c.dump()}")
+end a_button_eases_into_its_hover_rather_than_snapping

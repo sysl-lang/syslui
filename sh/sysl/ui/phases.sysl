@@ -1,0 +1,110 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// Where an animation lives, in a framework that has nowhere to put it.
+//
+// **An animation is state that outlives a rebuild, and the tree cannot hold it.** A `Reactive` is
+// built fresh on every paint and holds one closure; the moment it could store "the hover is 40% of
+// the way in" it would be storing something the next rebuild throws away. That is the same problem
+// `Scroll` has, and `Scroll`'s answer -- give it to the application in a signal -- is unbearable
+// here: nobody is going to declare a signal per button.
+//
+// **So the phase belongs to the CANVAS, keyed by the rectangle**, which is the same trick the hit
+// list plays and works for the same reason: layout is decided during paint, a view knows its
+// rectangle exactly then, and a view that is not moving has the same rectangle every frame. The
+// application declares nothing, and a `Reactive` stores nothing.
+//
+// **What it costs, and it is a real cost rather than a free win:** a view that MOVES loses its
+// phase, because its key changed. For a button in a static chrome that is never; for a row in a
+// list being scrolled it is every frame, so a hover effect on a scrolling row snaps rather than
+// eases. That is the honest boundary of keying by geometry, and the fix -- were it ever worth one --
+// is an identity the application supplies, which is the retained element this architecture spent
+// card 0168 refusing.
+
+// One animation in flight: a value easing toward wherever it is being asked to go.
+struct Phase
+    r: Rect
+
+    // Which animation on that view. A button eases its hover and its press separately, and both are
+    // on one rectangle.
+    slot: int
+
+    value: real
+
+    // Whether anything asked about this since the last tick. What is not asked about has gone.
+    touched: bool
+
+// The store, and the clock it moves against.
+//
+// **A backend owns one and calls `tick` once a frame.** Nothing here reads a clock itself: the
+// elapsed time is handed in, because the thing that knows how long a frame took is the thing that
+// presented the last one, and a store that called a clock would need an operating system to be
+// tested against.
+struct Phases
+    entries: Buf[Phase]
+
+    // How long the frame being drawn is worth, in seconds. Zero until a backend says otherwise,
+    // which is what makes an untouched store answer with settled values.
+    dt: real
+
+    // Start a frame: adopt its duration, and forget every animation nothing asked about during the
+    // last one.
+    //
+    // **The sweep is what stops the store growing without bound.** A tree is rebuilt constantly and
+    // rectangles come and go -- a row scrolled off the end, a subtree behind a condition that turned
+    // false -- and an entry nobody asks about again is an entry that will never be asked about
+    // again. One frame of grace is enough, because a view that is still there is painted every
+    // frame.
+    tick(*self, dt: real)
+        var kept: Buf[Phase] = buf()
+        val v = self.entries.view()
+
+        for i in 0..<v.len
+            if v[i].touched then kept.push(Phase(v[i].r, v[i].slot, v[i].value, false))
+
+        self.entries = kept
+        self.dt = dt
+
+    // Where this animation has got to, moving toward `target` at `rate` per second.
+    //
+    // **An animation nobody has seen before starts settled rather than at zero**, which is the
+    // difference between a panel that appears and a panel that flies in: a view painted for the
+    // first time already under the pointer should look hovered, not ease into it from nothing. What
+    // eases is a *change* to a view that was already on screen.
+    at(*self, r: Rect, slot: int, target: real, rate: real) -> real
+        val v = self.entries.view()
+
+        for i in 0..<v.len
+            if v[i].slot == slot && v[i].r == r
+                val next = step(v[i].value, target, rate * self.dt)
+
+                self.entries.set(i, Phase(r, slot, next, true))
+
+                return next
+
+        self.entries.push(Phase(r, slot, target, true))
+        target
+end Phases
+
+// One step toward `target`, never past it.
+//
+// **Linear rather than eased, and that is a decision rather than a shortcut.** An ease-in-out is a
+// curve over a *duration*, so it needs to know when the animation started and how far it has to go
+// -- and a phase that is interrupted half way, which is exactly what a pointer crossing a button
+// twice produces, has no such duration any more. Moving at a rate is interruptible by construction:
+// wherever the value has got to is a legitimate place to start heading back from.
+private step(value: real, target: real, by: real) -> real
+    if by <= 0.0 then return target
+
+    if value < target
+        val next = value + by
+
+        if next > target then target else next
+    else
+        val next = value - by
+
+        if next < target then target else next
+end step
+
+phases() -> Phases = Phases(buf(), 0.0)

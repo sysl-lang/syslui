@@ -1,0 +1,151 @@
+module sh.sysl.ui
+
+// A view whose appearance is decided while it is being drawn, and the one idea the rest of the
+// styling rests on.
+//
+// **The problem is an ordering one and it has no answer inside the tree.** A tree is built before
+// anything knows where the pointer is -- that is what a rebuild *is*, a function of the application
+// state alone -- so a node cannot be handed the colour it will need, because at the moment it is
+// made nobody has asked the window yet. Immediate mode does not have this problem: `imui` draws and
+// tests the pointer in the same call, which is why a hover effect there is an `if`.
+//
+// **So a node carries every appearance it might take and chooses while painting**, and the choice is
+// made from the canvas, which is the only thing that knows. That is SwiftUI's `ButtonStyle` exactly:
+// `makeBody(configuration:)` is handed `isPressed` and returns a view, and the same body is called
+// again with a different configuration when the press changes. The difference is that SwiftUI
+// re-runs the body through its diffing engine and this re-runs it during paint, which an erased tree
+// with no reconciler can do and a reconciling one cannot.
+//
+// **This is what generalizes**, and the reason to write it as a struct with a state parameter rather
+// than as a `hover_color` field on a button: focus, disabled, selected and dragged are all more
+// fields on `Interaction`, and every style written against it keeps working because it takes the
+// whole thing.
+
+// What the pointer is doing to a view, at the moment the view is drawn.
+//
+// **Two numbers rather than two flags, and that is what makes the styling animate.** A style handed
+// `hovered: bool` can only choose between two appearances, so a pointer crossing a button is a step
+// change and there is nowhere for an ease to live. A style handed `hover: real` is being told *how
+// far in* the hover is, and the same arithmetic that picked a colour picks every colour on the way
+// to it -- so animation costs a style nothing and is not something it has to opt into.
+//
+// **Nothing here is stored between frames and nothing is a signal.** Where the pointer is, and how
+// far an ease has got, are facts about the window rather than application state; treating either as
+// state is what would force a rebuild on every mouse move.
+struct Interaction deriving Eq
+    // Zero at rest, one fully hovered, in between while easing.
+    hover: real
+
+    // Held down *and* inside. A press that began here and wandered off falls back toward zero,
+    // which is what a person expects: sliding off a button before letting go is how a click is
+    // cancelled, and the button should relax rather than stay dented.
+    press: real
+
+    // The flags, for a style that genuinely wants a step change -- a label that swaps its text, an
+    // icon that appears. Half way is the crossing point, so this is what the animation was doing
+    // before it was an animation.
+    hovered(self) -> bool = self.hover > 0.5
+
+    pressed(self) -> bool = self.press > 0.5
+
+// The resting appearance -- what a view looks like with nothing pointing at it.
+//
+// **Layout is measured in this state and never in another**, which is the rule that keeps a list
+// from twitching. If `measure` asked the canvas what the pointer was doing, a style whose hover
+// state is a pixel wider would relayout the row under the cursor and shove its neighbours, and the
+// thing being pointed at would move out from under the pointer. With an *animated* hover that would
+// be worse still: the layout would move for every frame of the ease rather than once.
+//
+// It is a function rather than a `const` because a `const` in sysl is folded into its uses as a
+// literal, and there is no literal for a struct.
+at_rest() -> Interaction = Interaction(0.0, 0.0)
+
+// How fast the two states ease, as a fraction of the whole travel per second.
+//
+// **A press is quicker than a hover, and deliberately so.** A press is a direct response to
+// something the person just did and has to feel instant; a hover is the interface noticing them, and
+// noticing too fast reads as twitchy when the pointer is only passing over.
+const HOVER_RATE: real = 8.0
+const PRESS_RATE: real = 16.0
+
+// A view built from the interaction state, freshly on every paint.
+//
+// **The body is called twice a frame and that is the honest cost of it**: once by `measure`, at
+// rest, and once by `paint`, with the real state. A container measures its children twice as well,
+// so a button inside a column is built three times a frame -- which is the same double-measure
+// `layout.sysl` records rather than hides, and the same answer applies: it belongs to a cache on a
+// retained element, and there are no elements.
+//
+// What it buys is that nothing is stored. A `Reactive` holds one closure and no appearance, so the
+// hover state cannot go stale, cannot be left set by a pointer that has since moved, and cannot
+// disagree with what was drawn.
+struct Reactive
+    body: &Fn(Interaction) -> &View
+
+impl View for Reactive
+    measure(&self, c: *Canvas, avail: Size) -> Size = (self.body)(at_rest()).measure(c, avail)
+
+    // **The canvas is asked twice and answers three things**: where the pointer is, and where each
+    // of this view's two animations has got to on the way to matching it. A backend with no clock
+    // answers the target outright, so this is the step change it always was until something supplies
+    // time.
+    paint(&self, c: *Canvas, r: Rect)
+        val hover = c.phase(r, HOVER_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
+        val press = c.phase(r, PRESS_SLOT, if c.pressed(r) then 1.0 else 0.0, PRESS_RATE)
+
+        (self.body)(Interaction(hover, press)).paint(c, r)
+
+// Which of a `Reactive`'s two animations is which, in the canvas's store.
+//
+// **A slot rather than a name, because the key has to be cheap**: it is compared once per animated
+// view per frame, beside a rectangle that is four integers.
+private const HOVER_SLOT: int = 0
+private const PRESS_SLOT: int = 1
+
+// **The rectangle is the one this view was given**, which is why the question is asked here and not
+// anywhere else: `hovered` and `pressed` need geometry, and geometry exists only inside `paint`.
+reactive(body: &Fn(Interaction) -> &View) -> &View = Reactive(body)
+
+// ## The button, which is what all of the above was for
+
+// The accent a button wears when nothing has been said about it.
+const ACCENT: u32 = 0x3A6EA5
+
+// How far the ground moves for each state, as percentages toward white and toward black.
+//
+// **These are the numbers a theme would own** and they are constants here because syslUI has no
+// theme yet. Naming them is most of the work of gaining one: a `Theme` struct would hold these four
+// and `button` would read them off it instead of off the module.
+const HOVER_LIFT: int = 14
+const PRESS_SINK: int = 22
+const EDGE_LIFT: int = 26
+
+// A tappable label on a filled ground that answers to the pointer.
+//
+// **It is one `Reactive` wrapping a chain, rather than a widget**, so everything `on_tap`'s being a
+// modifier bought is still true: the chain below is the ordinary one anybody could write, and what
+// the button adds is the three grounds and the rule for choosing between them.
+//
+// **The label's colour is set here rather than left to the canvas**, because the ground is chosen
+// here: a button that picked a dark accent and let the text default to whatever the surrounding
+// panel had set would be the one combination nobody can read.
+button(label: string, on_tap: &Fn() -> unit, color: u32 = ACCENT, radius: int = 6) -> &View =
+    reactive(i -> button_face(label, color, radius, i)).on_tap(on_tap)
+
+// **A named function rather than a block inside the lambda**, so that the three states are readable
+// as three lines side by side. It is also the shape a `ButtonStyle` would have if styles became a
+// trait -- one function from a label and a state to a view -- which is the next thing this grows
+// into and the reason it is not written inline.
+private button_face(label: string, color: u32, radius: int, i: Interaction) -> &View
+    // **Layered rather than chosen**, which is what turns three appearances into a continuum: the
+    // hover lifts the accent toward white and the press sinks the result toward black, each by as
+    // much of its travel as it has actually made. At rest both are zero and the ground is the accent
+    // itself, so the resting look is unchanged from the version that had no animation in it.
+    val lifted = lighten(color, int(i.hover * real(HOVER_LIFT)))
+    val ground = darken(lifted, int(i.press * real(PRESS_SINK)))
+
+    text(label)
+        .foreground(WHITE)
+        .padding(8)
+        .background(ground, radius)
+        .border(lighten(ground, EDGE_LIFT), 1, radius)
