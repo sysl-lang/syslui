@@ -104,10 +104,9 @@ private const MAX_DEPTH: int = 8
 // rectangle the right answer rather than a fudge: a catcher has no appearance and no size of its
 // own, and the alternative is a `Canvas` member reporting the window's extent that exists solely so
 // that an invisible thing can be given a number it does not use.
-// A function rather than a `const` because a `const` in sysl is folded into its uses as a literal
-// and there is no literal for a struct -- the same reason `at_rest()` in `style.sysl` is one. That
-// is now the second place in this package where a struct constant would have read better.
-private everywhere() -> Rect = Rect(-1_000_000, -1_000_000, 2_000_000, 2_000_000)
+// **A module-level `val`, not a `const`.** `const` is compile-time folding and there is no literal
+// for a struct to fold to; a named struct value wants storage, which is what a `val` is.
+private val EVERYWHERE: Rect = Rect(-1_000_000, -1_000_000, 2_000_000, 2_000_000)
 
 // A view attached to another, appearing below it when a signal says so.
 //
@@ -143,7 +142,7 @@ impl View for Popover
             // content, so the content's own regions are later and win -- and it is raised after the
             // anchor was painted, so it beats the anchor's own tap too: clicking the button that
             // opened the menu closes it rather than toggling it twice.
-            c.raise_above(spacer().on_tap(() -> shut.set(false)), everywhere())
+            c.raise_above(spacer().on_tap(() -> shut.set(false)), EVERYWHERE)
             c.raise_above(self.content, Rect(r.x, y, s.w, s.h))
     end paint
 

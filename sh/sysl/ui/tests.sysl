@@ -3177,3 +3177,16 @@ private a_closed_popover_catches_nothing()
     assert(c.taps.tap(10, 8), "the trigger is still tappable")
     assert(hit.read(), "and its own handler runs")
 end a_closed_popover_catches_nothing
+
+// **A named struct value is a module-level `val`, not a `const`.** `const` in sysl is compile-time
+// folding -- a constant is substituted into its uses as a literal, and there is no literal for a
+// struct -- so `const AT_REST: Interaction = ...` is refused, and that refusal is the language being
+// coherent rather than a gap. What a named struct value wants is storage, which is what a `val` is.
+//
+// Both of this package's "I had to write a function instead" workarounds were this mistake.
+@test
+private a_named_struct_value_is_a_module_level_val()
+    assert(AT_REST == Interaction(0.0, 0.0), "a struct value with a name")
+    assert(!AT_REST.hovered(), "usable as an ordinary value")
+    assert(!AT_REST.pressed())
+end a_named_struct_value_is_a_module_level_val
