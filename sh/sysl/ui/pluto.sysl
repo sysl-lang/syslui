@@ -220,7 +220,7 @@ impl Canvas for PlutoCanvas
 
     hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
 
-    raise_above(*self, v: &View, at: Rect) = self.raised.push(Overlay(v, at))
+    raise_above(*self, v: &View, at: Rect) = self.raised.push(Overlay(v, at, self.look))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised

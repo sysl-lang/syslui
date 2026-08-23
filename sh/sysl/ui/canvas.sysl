@@ -196,6 +196,9 @@ trait Canvas
     // backend is made to think about it.
     raise_above(*self, v: &View, at: Rect)
 
+    // **The theme in force is captured with it**, so an overlay paints as though it were still where
+    // it was raised rather than in whatever the root was drawn in.
+    //
     // Take what has been raised, clearing it. `render` is what calls this.
     take_overlays(*self) -> Buf[Overlay]
 
@@ -369,7 +372,7 @@ impl Canvas for Recorder
     // opens and asserting what the menu looks like.
     raise_above(*self, v: &View, at: Rect)
         self.ops.push(s"raise ${at.x},${at.y} ${at.w}x${at.h}")
-        self.raised.push(Overlay(v, at))
+        self.raised.push(Overlay(v, at, self.look))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised

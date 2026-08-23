@@ -21,10 +21,21 @@ import sysl.buf.{Buf, buf}
 // contexts. Overlays are painted in the order they were raised, and something raised later is on top
 // of something raised earlier, which is the whole of the model.
 
-// One thing to paint after the tree, and where.
+// One thing to paint after the tree, where, and under what.
+//
+// **The theme is captured, and it has to be.** An overlay is painted after the tree has finished, by
+// which time every `push_theme` the tree made has been popped -- so a menu raised from inside a
+// restyled section would come back painted in the theme of the *root*, which is the one place it
+// obviously does not belong. Carrying the theme with the raise makes an overlay paint as though it
+// were still where it came from, which is what anybody would expect and what nobody would think to
+// check.
+//
+// Found by putting a modal at the root of the demo under a `.restyle`, where every colour in it came
+// out dark on a light interface.
 struct Overlay
     view: &View
     at: Rect
+    look: Theme
 end Overlay
 
 // Paint a whole frame: the tree, and then anything the tree raised above itself.
@@ -55,7 +66,9 @@ render(v: &View, c: *Canvas, at: Rect)
         if depth > MAX_DEPTH then break
 
         for i in 0..<p.len
+            c.push_theme(p[i].look)
             p[i].view.paint(c, p[i].at)
+            c.pop_theme()
 end render
 
 // How many times an overlay may raise another before this gives up on it.

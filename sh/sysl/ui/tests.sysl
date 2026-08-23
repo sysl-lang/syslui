@@ -2766,3 +2766,42 @@ private the_headers_sit_at_the_left()
     assert(c.dump().contains("text 8,8 8x16 'a'"), s"the first at the left edge:\n${c.dump()}")
     assert(c.dump().contains("text 32,8 8x16 'b'"), s"and the second right after it:\n${c.dump()}")
 end the_headers_sit_at_the_left
+
+// **An overlay paints in the theme it was raised under, not the one the root was drawn in.** It is
+// painted after the tree has finished, by which time every `push_theme` the tree made has been
+// popped -- so without capturing it, a menu raised inside a restyled section comes back wearing the
+// theme of the root, which is the one place it obviously does not belong.
+//
+// Found by putting a modal at the root of the demo under a `.restyle`, where every colour in it came
+// out dark on a light interface. Nothing would have thought to check it.
+@test
+private an_overlay_keeps_the_theme_it_was_raised_under()
+    val open = signal(true)
+    var c = recorder()
+
+    render(text("anchor").popover(open, text("menu").panel()).restyle(t -> light()),
+           &c, Rect(0, 0, 60, 16))
+
+    assert(c.dump().contains(s"fill 0,20 32x16 #${light().panel}"),
+           s"the light theme's panel, raised under it:\n${c.dump()}")
+    assert(!c.dump().contains(s"#${dark().panel}"), s"and none of the root's:\n${c.dump()}")
+end an_overlay_keeps_the_theme_it_was_raised_under
+
+// And the capture is per-overlay, so two raised under different themes each keep their own.
+@test
+private two_overlays_keep_their_own_themes()
+    val a = signal(true)
+    val b = signal(true)
+    var c = recorder()
+
+    render(column([
+               text("one").popover(a, text("x").panel()),
+               text("two").popover(b, text("y").panel()).restyle(t -> light())
+           ], 0),
+           &c, Rect(0, 0, 60, 32))
+
+    val d = c.dump()
+
+    assert(d.contains(s"#${dark().panel}"), s"the first kept the root's:\n${d}")
+    assert(d.contains(s"#${light().panel}"), s"and the second kept its own:\n${d}")
+end two_overlays_keep_their_own_themes
