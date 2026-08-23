@@ -126,6 +126,25 @@ trait Canvas
 
     pressed(*self, r: Rect) -> bool
 
+    // Does this rectangle own the pointer, having been the one the press began in?
+    //
+    // **This is what `pressed` cannot do, and the difference is a drag that works.** `pressed` is
+    // inside-and-held, so a slider read through it abandons its drag the moment the pointer strays
+    // above the track -- and a scrollbar thumb, eight pixels wide, is left almost at once. A browser
+    // captures the pointer at the press and keeps sending it to that element until the release, and
+    // a person has decades of expecting that.
+    //
+    // **Ask this and then ask `pointer()`**, which may by then be anywhere at all -- outside the
+    // rectangle, outside the window. Clamping what comes back is the caller's, and it is the same
+    // clamp a drag inside the track already needed.
+    //
+    // `slot` tells two grabbable things sharing a rectangle apart, the way it does for `phase`.
+    //
+    // **The default is `pressed`, so a backend that tracks no press point still works** -- it just
+    // asks the pointer to stay inside, which is what every widget did before this existed. Not
+    // implementing it costs the convenience and never the frame.
+    grab(*self, r: Rect, slot: int) -> bool = self.pressed(r)
+
     // Where the pointer actually is, in the same coordinates a view is painted in.
     //
     // **`hovered` and `pressed` answer a yes-or-no question and a drag is not one.** A slider has to
@@ -218,6 +237,9 @@ struct Recorder
     // Each entry is already intersected with the one below it, so the innermost is the whole answer.
     clips: Buf[Rect]
 
+    // Who owns the pointer while it is held, so a drag can be tested leaving the thing it drags.
+    hold: Grab
+
     // The animations in flight, so that easing can be tested without a clock or a window.
     //
     // **A test drives time by hand**, which is the only way an animation is testable at all: a
@@ -230,6 +252,7 @@ struct Recorder
         self.px = x
         self.py = y
         self.down = down
+        self.hold.moved(x, y, down)
     end point
 
     // Advance the clock by `dt` seconds. Until this is called nothing moves, so a recording made
@@ -306,6 +329,8 @@ impl Canvas for Recorder
 
     override pointer(*self) -> (int, int) = (self.px, self.py)
 
+    override grab(*self, r: Rect, slot: int) -> bool = self.hold.claim(r, slot)
+
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
@@ -321,7 +346,7 @@ end Recorder
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), phases())
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(), phases())
 
 // The rectangle two of them have in common, which is what nesting one clip inside another leaves.
 //

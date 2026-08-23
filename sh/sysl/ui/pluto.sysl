@@ -39,6 +39,10 @@ struct PlutoCanvas
     down: bool
 
     taps: Hits
+
+    // Who owns the pointer while it is held, so a drag survives leaving what it is dragging.
+    hold: Grab
+
     anim: Phases
 
     // The colour text is drawn in, and the colours to go back to.
@@ -71,6 +75,7 @@ struct PlutoCanvas
         self.px = x
         self.py = y
         self.down = down
+        self.hold.moved(x, y, down)
 
     // Start a frame worth `dt` seconds, forgetting the animations nothing asked about during the
     // last one.
@@ -167,6 +172,8 @@ impl Canvas for PlutoCanvas
 
     override pointer(*self) -> (int, int) = (self.px, self.py)
 
+    override grab(*self, r: Rect, slot: int) -> bool = self.hold.claim(r, slot)
+
     // **PlutoVG is asked rather than a clip stack being kept beside it**, which is one fewer thing
     // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a
     // second copy maintained here would be a second thing to be wrong. The comparison is in the
@@ -221,7 +228,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32, ink: u32 = 0xF
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), phases(), ink, buf(), dark(), buf(), map())
+                -1, -1, false, hits(), grabbing(), phases(), ink, buf(), dark(), buf(), map())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

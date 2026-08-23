@@ -1399,12 +1399,11 @@ private dragging_the_thumb_moves_the_offset()
     assert_eq(offset.read(), 0)
 end dragging_the_thumb_moves_the_offset
 
-// And a press that has wandered off the bar is not a press on it -- the same rule the slider has,
-// and the reason the clamp above is inside the track rather than over the whole window. A real
-// scrollbar captures the pointer at the press and follows it anywhere; capture is a window-level
-// idea and `Canvas` has no window.
+// **A drag that has left the bar keeps scrolling**, which is the whole point of capturing the
+// pointer: a thumb is eight pixels wide and nobody can keep a pointer inside one while dragging it
+// the length of a window. This test used to assert the opposite, and the opposite was a defect.
 @test
-private a_press_that_has_left_the_bar_stops_scrolling()
+private a_drag_that_has_left_the_bar_keeps_scrolling()
     val offset = signal(0)
     val list = scroll(column(generate(20usize, i -> text("x")), 0), offset, 100)
     var c = recorder()
@@ -1416,12 +1415,20 @@ private a_press_that_has_left_the_bar_stops_scrolling()
 
     assert(was > 0, "it scrolled while the pointer was on the bar")
 
-    // Still held, now well below the window.
-    c.point(96, 400, true)
+    // Still held, now far outside the bar -- off the left of the window entirely.
+    c.point(-200, 90, true)
     list.paint(&c, Rect(0, 0, 100, 100))
 
-    assert_eq(offset.read(), was)
-end a_press_that_has_left_the_bar_stops_scrolling
+    assert(offset.read() > was, "and it followed the pointer down anyway")
+
+    // Released: the grab ends, and a move afterwards does nothing.
+    val settled = offset.read()
+
+    c.point(-200, 10, false)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), settled)
+end a_drag_that_has_left_the_bar_keeps_scrolling
 
 // And a pointer merely resting on the bar moves nothing, which is the same guard the slider has and
 // for the same reason: an unguarded write would mark every frame dirty.
@@ -2091,3 +2098,123 @@ private a_grid_skips_children_outside_the_clip()
     assert(c.dump() == "clip 0,0 100x16\ntext 0,0 100x16 'a'\nunclip\n",
            s"only the first line is reachable:\n${c.dump()}")
 end a_grid_skips_children_outside_the_clip
+
+// -- capturing the pointer ------------------------------------------------------------------------
+//
+// **`pressed` is inside-and-held, and a drag is neither.** A slider read through it abandoned its
+// drag the moment the pointer strayed above a track sixteen pixels tall; a scrollbar thumb eight
+// pixels wide was lost almost at once. Every browser captures the pointer at the press and keeps
+// sending it to that element until the release.
+
+// The grab is claimed by where the press BEGAN, and released by the release.
+@test
+private a_grab_is_claimed_by_where_the_press_began()
+    var g = grabbing()
+    val r = Rect(0, 0, 10, 10)
+
+    assert(!g.claim(r, 0), "nothing is held while nothing is pressed")
+
+    g.moved(5, 5, true)
+
+    assert(g.claim(r, 0), "the press began inside")
+
+    // Wherever the pointer goes, it is still held.
+    g.moved(500, 500, true)
+
+    assert(g.claim(r, 0), "and it is still held a long way outside")
+
+    g.moved(500, 500, false)
+
+    assert(!g.claim(r, 0), "until the release")
+end a_grab_is_claimed_by_where_the_press_began
+
+// A press that began outside claims nothing, however far into the rectangle it later travels --
+// which is what stops a drag from being picked up by whatever it happens to pass over.
+@test
+private a_press_that_began_outside_never_claims()
+    var g = grabbing()
+    val r = Rect(0, 0, 10, 10)
+
+    g.moved(500, 500, true)
+
+    assert(!g.claim(r, 0), "the press began elsewhere")
+
+    g.moved(5, 5, true)
+
+    assert(!g.claim(r, 0), "and passing over it changes nothing")
+end a_press_that_began_outside_never_claims
+
+// **One thing owns the pointer at a time, and first claim wins** -- first meaning earliest painted,
+// which is the opposite of the hit list's last-wins rule and right for the opposite reason.
+@test
+private only_one_thing_owns_the_pointer()
+    var g = grabbing()
+    val outer = Rect(0, 0, 100, 100)
+    val inner = Rect(0, 0, 10, 10)
+
+    g.moved(5, 5, true)
+
+    assert(g.claim(outer, 0), "the outer one asked first")
+    assert(!g.claim(inner, 0), "so the inner one does not get it, though the press was inside it too")
+    assert(g.claim(outer, 0), "and the outer one still has it")
+end only_one_thing_owns_the_pointer
+
+// A slot tells two grabbable things sharing a rectangle apart.
+@test
+private a_slot_is_part_of_the_grab_key()
+    var g = grabbing()
+    val r = Rect(0, 0, 10, 10)
+
+    g.moved(5, 5, true)
+
+    assert(g.claim(r, 0), "the first slot claims it")
+    assert(!g.claim(r, 1), "and the second is a different thing")
+end a_slot_is_part_of_the_grab_key
+
+// The whole point, at the slider: a drag well outside the track still moves the value.
+@test
+private a_slider_drag_follows_the_pointer_outside_the_track()
+    val v = signal(0)
+    val s = slider(v, 0, 100, 220)
+    var c = recorder()
+
+    c.point(110, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 50)
+
+    // A hundred pixels above the track, which `pressed` would have called no press at all.
+    c.point(212, -100, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 100)
+
+    c.point(8, 900, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 0)
+end a_slider_drag_follows_the_pointer_outside_the_track
+
+// And a press that began somewhere else does not start dragging the slider it passes over.
+@test
+private a_pointer_dragged_over_a_slider_does_not_grab_it()
+    val v = signal(30)
+    var c = recorder()
+
+    // The press began far away and is still held.
+    c.point(900, 900, true)
+    c.point(110, 8, true)
+    slider(v, 0, 100, 220).paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 30)
+end a_pointer_dragged_over_a_slider_does_not_grab_it
+
+// **A backend that implements no grab still works** -- it asks the pointer to stay inside, which is
+// what every widget did before this existed. Not implementing it costs the convenience, never the
+// frame.
+@test
+private a_backend_with_no_grab_falls_back_to_pressed()
+    var b = blind()
+
+    assert(!b.grab(Rect(0, 0, 10, 10), 0), "a canvas with no pointer answers no to both")
+end a_backend_with_no_grab_falls_back_to_pressed

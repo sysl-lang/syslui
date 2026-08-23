@@ -42,6 +42,10 @@ private const CHECK_SLOT: int = 3
 private const KNOB_SLOT: int = 4
 private const FILL_SLOT: int = 5
 
+// Which grabbable thing a slider is, in the canvas's single grab. Slots are a namespace of their
+// own here rather than shared with the animation slots above, because they are stored apart.
+private const DRAG_SLOT: int = 0
+
 // How fast each settles. A switch and a checkbox are direct responses to a tap, so they move at the
 // press rate; a progress bar is reporting on something else's pace and should not look hurried.
 private const FLIP_RATE: real = 14.0
@@ -172,10 +176,11 @@ checkbox(on: &Signal[bool], label: string, role: Role = Role.Primary) -> &View
 // an unguarded write would mark every frame dirty for as long as a pointer rested on a slider it was
 // not moving.
 //
-// **A drag that leaves the track stops tracking**, because `pressed` is inside-and-held. A real
-// slider captures the pointer at the press and follows it anywhere until the release; capture is a
-// window-level idea and `Canvas` has no window, so this is the honest limit of what the surface
-// supports.
+// **A drag follows the pointer anywhere, including well outside the track**, which is what `grab`
+// is for: the canvas remembers which rectangle the press began in and keeps answering yes until the
+// release. Asking `pressed` instead -- which is inside-and-held -- abandoned the drag the moment the
+// pointer strayed a few pixels above a track sixteen pixels tall, which is not how any other slider
+// anywhere has ever behaved.
 struct Slider
     value: &Signal[int]
     lo: int
@@ -194,7 +199,7 @@ impl View for Slider
         val span = self.hi - self.lo
         val travel = r.w - KNOB
 
-        if c.pressed(r) && travel > 0 && span > 0
+        if c.grab(r, DRAG_SLOT) && travel > 0 && span > 0
             val (px, _) = c.pointer()
             val at = px - r.x - KNOB / 2
             val held = if at < 0 then 0 elif at > travel then travel else at

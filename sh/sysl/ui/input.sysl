@@ -60,3 +60,71 @@ struct Hits
 end Hits
 
 hits() -> Hits = Hits(buf())
+
+// Who owns the pointer while it is held down.
+//
+// **A drag must not stop when the pointer leaves the thing being dragged, and until this existed it
+// did.** A slider read `pressed(r)`, which is inside-and-held, so sliding a few pixels above the
+// track abandoned the drag -- and a scrollbar thumb dragged quickly down a long list left its own
+// eight-pixel-wide track almost immediately. Every other toolkit and every browser captures the
+// pointer at the press and keeps sending it to that element until the release, and a person has
+// forty years of expecting exactly that.
+//
+// **What made it hard is that capture is normally a window-level idea and `Canvas` has no window.**
+// The answer is the same one the hit list and the phases use: the canvas outlives the frame, so it
+// can remember what was grabbed, and a view asks about the rectangle it is currently painting into.
+// Nothing is stored in the tree and no widget holds any state of its own.
+//
+// **The key is where the press BEGAN rather than where the pointer is**, which is the whole trick: a
+// grab is claimed by whichever rectangle contained the press, once, and it stays claimed however far
+// the pointer travels afterwards.
+struct Grab
+    // Where the pointer was at the moment the button went down.
+    began_x: int
+    began_y: int
+
+    // Whether the button is down now, so that the press can be told from the hold.
+    down: bool
+
+    // What has claimed it, if anything.
+    held: bool
+    at: Rect
+    slot: int
+
+    // Told by the frame loop, through the canvas's `point`, once a frame.
+    //
+    // **The release is what ends a grab**, not the pointer leaving anything -- which is the entire
+    // difference between this and asking `pressed` every frame.
+    moved(*self, x: int, y: int, down: bool)
+        if down && !self.down
+            self.began_x = x
+            self.began_y = y
+
+        if !down then self.held = false
+
+        self.down = down
+    end moved
+
+    // Does this rectangle own the pointer? Claims it if the press began inside and nothing else has.
+    //
+    // **First claim wins, and first means earliest painted.** Two overlapping draggable things would
+    // otherwise both follow one pointer; the outer one is painted first and takes it, which is the
+    // opposite of the hit list's last-wins rule and right for the opposite reason -- a hit is matched
+    // against what is on top, and a grab is claimed by whatever asked while the press was new.
+    claim(*self, r: Rect, slot: int) -> bool
+        if !self.down then return false
+
+        if self.held then return self.at == r && self.slot == slot
+
+        if r.holds(self.began_x, self.began_y)
+            self.held = true
+            self.at = r
+            self.slot = slot
+
+            return true
+
+        false
+    end claim
+end Grab
+
+grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0)

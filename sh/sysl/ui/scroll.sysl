@@ -32,8 +32,9 @@ struct Scroll
     // list that is exactly its window's height would sit one row from flipping between two layouts.
     // Overlaying keeps the content's width a property of the window alone.
     //
-    // **It is dragged, and that costs nothing new**: the pointer's position is already on `Canvas`
-    // because a slider needed it, and this is the same arithmetic on the other axis.
+    // **It is dragged, and the drag follows the pointer anywhere.** The pointer's position is on
+    // `Canvas` because a slider needed it, and the grab is there because a thumb eight pixels wide
+    // is a thing nobody can keep a pointer inside while dragging it the length of a window.
     private bar(&self, c: *Canvas, window: Rect, content: int)
         // How far the content can travel, and how far the thumb can, which are not the same number
         // and are the two the whole control is a ratio between.
@@ -47,7 +48,7 @@ struct Scroll
         val thumb = if ideal < MIN_THUMB then MIN_THUMB else ideal
         val travel = track.h - thumb
 
-        if c.pressed(track) && travel > 0
+        if c.grab(track, BAR_GRAB) && travel > 0
             val (_, py) = c.pointer()
 
             // The thumb is grabbed by its middle, so it lands where the pointer is rather than
@@ -78,6 +79,10 @@ end Scroll
 private const BAR_W: int = 8
 private const MIN_THUMB: int = 24
 private const BAR_SLOT: int = 6
+
+// The bar's identity in the canvas's grab, which is what lets a thumb be dragged the length of a
+// window without the pointer having to stay inside a track eight pixels wide.
+private const BAR_GRAB: int = 1
 
 impl View for Scroll
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(avail.w, self.height)
