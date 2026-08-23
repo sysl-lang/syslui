@@ -1,0 +1,104 @@
+module sh.sysl.ui
+
+// Application state, as values a module declares rather than a struct threaded through everything.
+//
+// **This is Jotai's shape, and syslUI arrives at it from a stronger position than React does.**
+//
+// Jotai exists because React's state lives *inside* components — `useState` hangs a value on a
+// component's position in the tree — so sharing it between two components means lifting it to a
+// common ancestor, or a context, or a store. Its answer is that state should be a set of small
+// values declared outside the tree entirely.
+//
+// **syslUI has components — a component here is a function returning `&View`, which is what `button`
+// and `table` are — but a component cannot own state at all.** There is no reconciler and no element
+// identity, so there is nowhere to hang a value between one rebuild and the next; `scroll.sysl` is
+// the worked example, where the offset has to be a `&Signal` the application owns because a `Scroll`
+// keeping its own field would lose it on the first rebuild.
+//
+// So there is nothing to lift, because nothing was ever down there. **Every piece of application
+// state is already outside the tree**, and the only question left is how it reaches the functions
+// that read it. Threading a `Model` through `screen` and then through everything `screen` calls is
+// prop drilling arrived at from the other end — the state was never in a component, and it is still
+// being passed down through every level that does not use it.
+//
+// **A module-level `val` is the whole mechanism**, and it works because sysl orders module
+// initialization by dependency rather than by text:
+//
+//     module my.app
+//
+//     val count: &Signal[int] = signal(0)
+//     val volume: &Signal[int] = signal(40)
+//     val loud: &Derived[bool] = derived(() -> volume.read() > 80)
+//
+// Two rules, both of them the compiler's rather than this file's. **A module-level `val` must state
+// its type** — `a module-level 'val' states its type` — and **it must not be in the entry file**,
+// whose top-level bindings are the entry body's locals rather than module storage. So an
+// application's atoms go in a file of their own, which is where anybody would look for them.
+//
+// **Nothing here is required.** A `&Signal` passed as a parameter is still a `&Signal`, and the
+// controls take one either way; `scroll` and `table` ask for the offset because a *widget* should
+// not reach for an application's globals. What this changes is where an *application* keeps its own
+// state, which is its business and not the toolkit's.
+
+// A value computed from others, which stays right without being told anything.
+//
+// **The one thing a plain `Signal` cannot do.** `signal(count.read() * 2)` is computed once, at the
+// moment it is constructed, and then frozen — which is exactly what a module-level `val` of that
+// shape would silently give you. A `Derived` holds the *computation* instead of its answer.
+//
+// ## Why an epoch rather than a dependency graph
+//
+// **A write bumps one global counter, and a derivation recomputes when that counter has moved since
+// it last looked.** That is the whole implementation. What it costs is that a write to *anything*
+// makes every derivation recompute on its next read, rather than only the ones that actually read
+// what changed.
+//
+// The alternative was built far enough to know it works: a `Versioned` trait erasing `Signal[T]` and
+// `Derived[T]` behind one handle, a tracking stack so that `count.read()` inside a derivation
+// records the dependency with nothing written, and a per-dependency version check. It is perhaps
+// forty lines more, and it is the right answer *if* a derivation is ever expensive enough to notice.
+//
+// It is not the right answer today, and the reason is the architecture rather than laziness: **a
+// signal write already rebuilds the whole view tree**, which at three thousand rows is 126 µs and
+// six thousand allocations. A derivation that recomputed when it did not need to is lost several
+// orders of magnitude inside that. Paying forty lines and a global mutable stack to avoid it would
+// be optimizing the cheapest thing in the frame.
+//
+// **The API does not change if that day comes**, which is what makes this the right order to do it
+// in: `derived(f)` and `.read()` say nothing about how freshness is decided.
+//
+// ## What it does NOT do
+//
+// **It is not glitch-free in the way a push-based system has to worry about, because it is
+// pull-based.** A diamond — two derivations over one atom, and a third over both — recomputes once,
+// when it is read, from whatever the atoms hold at that moment. There is no intermediate state for
+// anything to observe, because nothing is pushed and nothing runs on write.
+//
+// **A derivation must not read itself**, directly or through another. Nothing detects it and the
+// result is unbounded recursion.
+struct Derived[T]
+    compute: &Fn() -> T
+
+    // The last answer, and the epoch it was the answer at. `seen` starts before any possible epoch
+    // so that the first read always computes.
+    cached: T
+    seen: int
+
+    // The value, recomputed if anything has been written since it was last worked out.
+    read(*self) -> T
+        val now = writes()
+
+        if self.seen != now
+            self.cached = (self.compute)()
+            self.seen = now
+
+        self.cached
+    end read
+end Derived
+
+// A value computed from other values.
+//
+// **The initial value is computed eagerly, here, and then again on the first read**, which costs one
+// evaluation and buys a `Derived[T]` that has a `T` in it from the moment it exists — there is no
+// "not yet computed" state for anything to trip over, and no `Option` in the type a caller sees.
+derived[T](f: &Fn() -> T) -> &Derived[T] = Derived(f, f(), -1)

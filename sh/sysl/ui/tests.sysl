@@ -2345,3 +2345,171 @@ private a_restyle_reaches_one_field_of_the_table_style()
     assert_eq(t.table.head, dark().table.head)
     assert_eq(t.primary, dark().primary)
 end a_restyle_reaches_one_field_of_the_table_style
+
+// -- application state ----------------------------------------------------------------------------
+//
+// **A component here is a function returning `&View`, and it cannot own state** -- there is no
+// reconciler and no element identity, so there is nowhere to hang a value between rebuilds. Every
+// piece of application state is therefore already outside the tree, and these are the two things
+// that makes bearable: a count of writes nobody has to subscribe to, and values computed from other
+// values.
+
+// **A write moves the clock whether or not anything was watching**, which is what makes `writes()` a
+// complete account of whether state has changed. A signal nothing subscribed to is still state.
+@test
+private every_write_moves_the_clock()
+    val a = signal(0)
+    val b = signal("x")
+    val before = writes()
+
+    a.set(1)
+
+    assert(writes() > before, "a write nobody subscribed to still counts")
+
+    val between = writes()
+
+    b.set("y")
+
+    assert(writes() > between, "and so does a write to something else entirely")
+end every_write_moves_the_clock
+
+// Reading changes nothing, or a frame loop comparing the clock would rebuild for ever.
+@test
+private reading_does_not_move_the_clock()
+    val a = signal(7)
+    val before = writes()
+
+    assert_eq(a.read(), 7)
+    assert_eq(a.read(), 7)
+    assert_eq(writes(), before)
+end reading_does_not_move_the_clock
+
+// **This is what replaces a `watch` per signal.** A frame loop keeps the number it last saw and
+// rebuilds when it differs -- which cannot be forgotten, however many pieces of state there are.
+@test
+private a_frame_loop_can_tell_that_anything_changed()
+    val a = signal(0)
+    val b = signal(0)
+
+    var seen = writes()
+    var rebuilds = 0
+
+    // Three frames, one write between the first and the second.
+    for i in 0..<3
+        if i == 1 then a.set(9)
+
+        if writes() != seen
+            rebuilds += 1
+            seen = writes()
+
+    assert_eq(rebuilds, 1)
+
+    // A write to a different signal is seen by the same comparison, with nothing added anywhere.
+    b.set(1)
+
+    assert(writes() != seen, "and the second signal needed no line of its own")
+end a_frame_loop_can_tell_that_anything_changed
+
+// **A plain signal built from another is computed once and then frozen**, which is the trap a
+// module-level `val` makes easy to fall into and the whole reason `derived` exists.
+@test
+private a_signal_built_from_another_is_frozen()
+    val count = signal(1)
+    val stale = signal(count.read() * 2)
+
+    count.set(50)
+
+    assert_eq(stale.read(), 2, "it holds the answer, not the question")
+end a_signal_built_from_another_is_frozen
+
+// A derivation holds the computation instead, so it is right whenever it is asked.
+@test
+private a_derivation_stays_right()
+    val count = signal(1)
+    val doubled = derived(() -> count.read() * 2)
+
+    assert_eq(doubled.read(), 2)
+
+    count.set(50)
+
+    assert_eq(doubled.read(), 100)
+
+    count.set(0)
+
+    assert_eq(doubled.read(), 0)
+end a_derivation_stays_right
+
+// It recomputes only when something has been written, not on every read.
+//
+// **The counter cannot itself be a signal**, which is worth knowing: writing one inside a derivation
+// moves the clock the derivation is deciding freshness by, so it would be stale the instant it
+// finished and would recompute on every read for ever.
+struct Ticks
+    n: int
+
+    take(*self) -> int
+        self.n += 1
+        self.n
+    end take
+end Ticks
+
+@test
+private a_derivation_caches_between_writes()
+    val marker = signal(0)
+    val runs = Ticks(0)
+    val counted = derived(() -> runs.take())
+
+    // One evaluation at construction, one on the first read.
+    assert_eq(counted.read(), 2)
+    assert_eq(counted.read(), 2)
+    assert_eq(counted.read(), 2, "three reads and it worked it out once")
+
+    marker.set(1)
+
+    assert_eq(counted.read(), 3, "and once more, after something was written")
+    assert_eq(counted.read(), 3)
+end a_derivation_caches_between_writes
+
+// **A derivation of a derivation works, and a diamond recomputes once**, because nothing is pushed:
+// a value is worked out when it is asked for, from whatever the atoms hold at that moment, so there
+// is no intermediate state for anything to observe.
+@test
+private a_diamond_settles_in_one_read()
+    val base = signal(2)
+    val left = derived(() -> base.read() + 1)
+    val right = derived(() -> base.read() * 10)
+    val both = derived(() -> left.read() + right.read())
+
+    assert_eq(both.read(), 23)
+
+    base.set(5)
+
+    assert_eq(both.read(), 56)
+end a_diamond_settles_in_one_read
+
+// A derivation over several atoms follows all of them.
+@test
+private a_derivation_may_read_more_than_one_atom()
+    val first = signal("Ada")
+    val last = signal("Lovelace")
+    val whole = derived(() -> first.read() + " " + last.read())
+
+    assert(whole.read() == "Ada Lovelace", whole.read())
+
+    last.set("Byron")
+
+    assert(whole.read() == "Ada Byron", whole.read())
+end a_derivation_may_read_more_than_one_atom
+
+// And it may be anything, not only a number: this is what a screen actually asks a derivation for.
+@test
+private a_derivation_may_produce_a_view()
+    val loud = signal(false)
+    val label = derived(() -> if loud.read() then "LOUD" else "quiet")
+
+    assert(label.read() == "quiet", label.read())
+
+    loud.set(true)
+
+    assert(label.read() == "LOUD", label.read())
+end a_derivation_may_produce_a_view

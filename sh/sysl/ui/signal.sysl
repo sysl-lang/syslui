@@ -2,13 +2,45 @@ module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 
-// A value that says who read it, so a write can tell exactly them.
+// State, and the two ways anything finds out that it changed.
 //
 // **This is what stands in for a reconciler.** Diffing an erased tree would need to ask a node what
 // type it is, and `02 § Object safety` refuses that: there is no way back from an erasure. Fine-
 // grained reactivity sidesteps the question rather than answering it -- a write notifies what read,
 // nothing walks the tree, and nothing needs to know a node's type. SolidJS, Svelte 5, Angular and
 // Swift Observation have all landed here, from four different starting points.
+//
+// **There are two mechanisms here and they answer different questions.** `writes()` is a count of
+// every write anybody has made, and it is what a frame loop and a `Derived` both watch: it cannot be
+// forgotten and it says nothing about *what* changed. `watch` is the per-signal dependent list,
+// which says exactly what changed and has to be remembered. The first is what an application should
+// use; the second is what a fine-grained rebuild would need, and card 0203 asked whether it works.
+
+// How many times anything anywhere has been written.
+//
+// **One counter for the whole application, and it is what replaces remembering to subscribe.** A
+// frame loop that compares it against what it last saw rebuilds when any state has changed, whatever
+// that state is and however much of it there is -- where a `watch` per signal is a line per signal,
+// and the one somebody forgets is a control that draws correctly and silently never updates. That is
+// the worst failure a user interface has, because nothing reports it.
+//
+// It is also what `Derived` decides freshness by; `atom.sysl` argues that at length.
+//
+// **A struct rather than a bare module-level `var`, because module storage is reached through a
+// counted reference** -- `clock` below is a module-level `val`, and moving what it points at is an
+// ordinary `*self` method on the thing it points at.
+struct Epoch
+    n: int
+
+    bump(*self) = self.n += 1
+end Epoch
+
+private val clock: &Epoch = Epoch(0)
+
+// How many writes have happened. Compare it against what you last saw.
+writes() -> int = clock.n
+
+// A value that says who read it, so a write can tell exactly them.
 //
 // **A dependent is held weakly, and that is the whole lifetime story.** A subtree that has been
 // dropped must stop being notified, and the alternative to a weak edge is an explicit unsubscribe
@@ -31,19 +63,31 @@ struct Signal[T]
 
     // Read the value and register the caller as a dependent.
     //
-    // **The registration is explicit here, and in a finished framework it would not be.** A real
-    // implementation keeps a stack of "who is currently building", so a plain `.get` inside a view
-    // body subscribes that view with nothing written. The probe is asking whether the mechanism
-    // works at all, not whether it is pleasant, so the dependent is passed in.
+    // **A read registers nothing, and that is now a decision rather than a shortcoming.** This file
+    // used to say a finished framework would keep a stack of "who is currently building" so that a
+    // plain read subscribed the reader. It would -- and `writes()` gets the same result for an
+    // application without one, because the tree is rebuilt whole anyway. The tracking stack is what
+    // a *fine-grained* rebuild needs, and it is worth building the day there is one.
     read(self) -> T = self.value
 
     // Register `f` to be called whenever this changes.
+    //
+    // **Nothing in the toolkit uses this any more, and it is kept deliberately.** It is card 0203's
+    // third question — whether `weak Fn() -> unit` is a working dependent list whose drop is the
+    // unsubscribe — and it is the mechanism a *fine-grained* rebuild would need, where only the
+    // subtree that read a signal is built again. What replaced it for the ordinary case is
+    // `writes()`, which cannot be forgotten; what it still answers is a question about the
+    // architecture, and its two tests are that answer.
     watch(*self, f: &Fn() -> unit)
         self.deps.push(f)
 
-    // Write, and tell everything still alive that read.
+    // Write, tell everything still alive that read, and move the clock.
+    //
+    // **The clock moves whether or not anything is watching**, which is what makes `writes()` a
+    // complete account of whether state has changed. A signal nothing subscribed to is still state.
     set(*self, v: T)
         self.value = v
+        clock.bump()
         self.notify()
 
     // Call every live dependent, and forget the ones that have gone.
