@@ -45,10 +45,14 @@ struct Overlay
     at: Rect
     look: Theme
 
-    // The text colour in force where this was raised. `Foreground` sets it and puts it back, so by
-    // the time an overlay is painted the tree's has long been popped -- and the dialog draws in
-    // whatever the backend was constructed with, which on a light interface is invisible.
-    tint: u32
+    // A text colour pushed over the theme's where this was raised, if there was one.
+    //
+    // **`None` is the ordinary case and means "the theme's ink"**, which is what makes a dialog
+    // readable with no `foreground` anywhere in the tree. Capturing a colour here matters only when
+    // an explicit `foreground` was in force at the raise -- and it is worth knowing that in the
+    // demo it was *not*, because `.modal` sits outside `.foreground` in the chain, so the capture
+    // was faithfully recording a moment at which nothing had been set.
+    tint: Option[u32]
 end Overlay
 
 // Paint a whole frame: the tree, and then anything the tree raised above itself.
@@ -80,9 +84,14 @@ render(v: &View, c: *Canvas, at: Rect)
 
         for i in 0..<p.len
             c.push_theme(p[i].look)
-            c.ink(p[i].tint)
-            p[i].view.paint(c, p[i].at)
-            c.unink()
+
+            p[i].tint match
+                Some(colour) ->
+                    c.ink(colour)
+                    p[i].view.paint(c, p[i].at)
+                    c.unink()
+                None -> p[i].view.paint(c, p[i].at)
+
             c.pop_theme()
 end render
 

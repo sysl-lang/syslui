@@ -2570,9 +2570,8 @@ private render_paints_the_tree_and_then_what_it_raised()
 
     render(text("menu").popover(open, text("one")), &c, Rect(0, 0, 40, 16))
 
-    assert(c.dump() == "text 0,0 40x16 'menu'\nraise 0,20 24x16\n" +
-                       s"ink #${dark().ink}\ntext 0,20 24x16 'one'\nunink\n",
-           s"the overlay is painted last, outside the anchor, in the ink it was raised under:\n${c.dump()}")
+    assert(c.dump() == "text 0,0 40x16 'menu'\nraise 0,20 24x16\ntext 0,20 24x16 'one'\n",
+           s"the overlay is painted last, outside the anchor:\n${c.dump()}")
 end render_paints_the_tree_and_then_what_it_raised
 
 // **An overlay escapes the clip in force where it was raised**, which is the whole reason it exists:
@@ -2587,7 +2586,7 @@ private an_overlay_escapes_the_clip_it_was_raised_under()
 
     // The raise happens inside the clip and the paint happens after `unclip`, at y = 20, which is
     // outside the sixteen-pixel window entirely.
-    assert(c.dump().contains("unclip\n" + s"ink #${dark().ink}\n" + "text 0,20 24x16 'one'"),
+    assert(c.dump().contains("unclip\ntext 0,20 24x16 'one'"),
            s"painted after the clip was unwound:\n${c.dump()}")
 end an_overlay_escapes_the_clip_it_was_raised_under
 
@@ -2889,3 +2888,79 @@ private a_tab_panel_is_not_flush_against_the_rule()
     assert(c.dump().contains("text 8,43 184x16 'panel 0'"),
            s"eight below the rule, not on it:\n${c.dump()}")
 end a_tab_panel_is_not_flush_against_the_rule
+
+// **The demo's exact shape, which is what actually went wrong.** `.modal` sits outside
+// `.foreground`, so by the time the modal raised its content the `Foreground` had already put the
+// ink back -- the capture was working and was faithfully capturing a moment at which nothing was
+// set. Twice I fixed the capture and twice the dialog stayed invisible.
+//
+// **The fix is not an ordering rule for callers to remember.** It is that text with nothing pushed
+// over it takes the THEME's ink, so a dialog is readable without anybody having said so -- and a
+// backend that carried its own default text colour was carrying one no theme could reach.
+@test
+private text_takes_the_themes_ink_when_nothing_says_otherwise()
+    var c = recorder()
+
+    assert_eq(c.text_ink(), dark().ink)
+
+    c.push_theme(light())
+
+    assert_eq(c.text_ink(), light().ink, "it follows the theme, with nothing pushed over it")
+
+    c.pop_theme()
+
+    assert_eq(c.text_ink(), dark().ink)
+end text_takes_the_themes_ink_when_nothing_says_otherwise
+
+// An explicit `foreground` still wins, and still puts back what it found rather than a default.
+@test
+private an_explicit_foreground_overrides_the_theme()
+    var c = recorder()
+
+    c.ink(0xFF0000u32)
+
+    assert_eq(c.text_ink(), 0xFF0000u32)
+
+    c.ink(0x00FF00u32)
+
+    assert_eq(c.text_ink(), 0x00FF00u32, "and they nest")
+
+    c.unink()
+
+    assert_eq(c.text_ink(), 0xFF0000u32, "the outer one is still standing")
+
+    c.unink()
+
+    assert_eq(c.text_ink(), dark().ink, "and then it is the theme's again, not a backend's")
+end an_explicit_foreground_overrides_the_theme
+
+// **A backend that pushes nothing and remembers nothing still draws in the theme's ink**, which is
+// the default body doing the whole of the work.
+@test
+private a_backend_that_tracks_no_ink_still_follows_the_theme()
+    var b = blind()
+
+    assert_eq(b.text_ink(), dark().ink)
+end a_backend_that_tracks_no_ink_still_follows_the_theme
+
+// And the dialog case end to end: a modal outside a foreground, under a restyle, with the content
+// painted in the restyled theme's ink rather than anything the root or the backend had.
+@test
+private a_dialog_is_readable_with_no_foreground_anywhere()
+    val open = signal(true)
+    var c = recorder()
+
+    render(text("page").foreground(0x111111u32).modal(open, text("Reset?")).restyle(_ -> light()),
+           &c, Rect(0, 0, 100, 100))
+
+    val d = c.dump()
+
+    // The page's own foreground was pushed and popped inside the tree, and nothing of it is left
+    // standing over the dialog -- there is no `ink` around the raised content at all.
+    assert(d.contains("text 26,42 48x16 'Reset?'"), s"the dialog's text is painted:\n${d}")
+    assert(!d.contains("ink #1118481\ntext 26,42"), s"and not under the page's ink:\n${d}")
+
+    // What colour that text actually comes out is `text_ink` at the moment it is painted, and the
+    // two halves of that are pinned above: an overlay keeps the theme it was raised under, and text
+    // with nothing pushed over it takes that theme's ink.
+end a_dialog_is_readable_with_no_foreground_anywhere

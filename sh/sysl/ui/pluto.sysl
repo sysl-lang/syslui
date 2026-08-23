@@ -48,12 +48,12 @@ struct PlutoCanvas
 
     anim: Phases
 
-    // The colour text is drawn in, and the colours to go back to.
+    // The text colours pushed over the theme's, innermost last.
     //
-    // **A stack rather than a field, because `unink` restores what it found.** A coloured label
-    // inside a coloured panel has to leave the panel's colour standing for the siblings after it,
-    // which is the same discipline `clip` has and the reason `Foreground` nests at all.
-    tint: u32
+    // **A stack rather than a field, because `unink` restores what it found** -- a coloured label
+    // inside a coloured panel has to leave the panel's colour standing for the siblings after it.
+    // **And empty means the theme's `ink`, not a colour of this canvas's own**: a backend with its
+    // own default text colour has one no theme can reach, which is how a dialog came out invisible.
     tints: Buf[u32]
 
     // The theme in force and the ones to go back to. See `Canvas.theme`.
@@ -148,7 +148,7 @@ impl Canvas for PlutoCanvas
         self.vg.save()
         self.path(r, 0)
         self.vg.clip()
-        self.use(self.tint)
+        self.use(self.text_ink())
         self.vg.set_font(self.face, self.size)
         self.vg.fill_text(t, f32(r.x), f32(r.y + self.ascent))
         self.vg.restore()
@@ -160,14 +160,11 @@ impl Canvas for PlutoCanvas
 
     unclip(*self) = self.vg.restore()
 
-    ink(*self, color: u32)
-        self.tints.push(self.tint)
-        self.tint = color
+    ink(*self, color: u32) = self.tints.push(color)
 
     unink(*self)
-        self.tints.pop() match
-            Some(c) -> self.tint = c
-            None -> ()
+        self.tints.pop()
+        ()
 
     hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
 
@@ -190,6 +187,12 @@ impl Canvas for PlutoCanvas
 
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
         self.anim.at(r, slot, target, rate)
+
+    override text_ink(*self) -> u32
+        val v = self.tints.view()
+
+        if v.len == 0 then self.look.ink else v[v.len - 1]
+    end text_ink
 
     override theme(*self) -> Theme = self.look
 
@@ -220,8 +223,12 @@ impl Canvas for PlutoCanvas
 
     hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
 
-    raise_above(*self, v: &View, at: Rect) =
-        self.raised.push(Overlay(v, at, self.look, self.tint))
+    raise_above(*self, v: &View, at: Rect)
+        val on = self.tints.view()
+
+        self.raised.push(Overlay(v, at, self.look,
+                                 if on.len == 0 then None else Some(on[on.len - 1])))
+    end raise_above
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised
@@ -233,15 +240,20 @@ end PlutoCanvas
 
 // A canvas over a plutovg canvas and a face, at a size in pixels.
 //
+// **It takes no text colour, and that is deliberate.** It used to, and a backend that carries its
+// own default text colour carries one the theme cannot reach -- which is how a dialog raised above
+// a light interface came out drawn in a dark theme's ink. Text with nothing pushed over it is the
+// theme's `ink`, and the theme is the only place that decides.
+//
 // **The vertical metrics are read once here rather than per run.** `descent` is signed by whichever
 // convention the face carries, so the line height is computed from its magnitude — a face whose
 // descent is negative and one whose descent is positive describe the same font, and a line height
 // that believed the sign would be wrong for one of them.
-pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32, ink: u32 = 0xFFFFFF) -> PlutoCanvas
+pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), grabbing(), buf(), phases(), ink, buf(), dark(), buf(), map())
+                -1, -1, false, hits(), grabbing(), buf(), phases(), buf(), dark(), buf(), map())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

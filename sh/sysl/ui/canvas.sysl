@@ -100,7 +100,13 @@ trait Canvas
 
     pop_theme(*self) = ()
 
-    // The colour text is drawn in, until the matching `unink`.
+    // Override the colour text is drawn in, until the matching `unink`.
+    //
+    // **What text is drawn in when nothing has said otherwise is the THEME's `ink`**, and that is
+    // the important half. A backend that carried its own default text colour had one the theme could
+    // not reach -- so a dialog raised above a restyled tree came out in the colour the backend was
+    // constructed with, which on a light interface is invisible. This is a stack of *overrides*
+    // over the theme, not a colour of its own.
     //
     // **Text colour is canvas state rather than a parameter on `text`, and that is what makes a
     // hover effect possible at all.** A tree is built before anything knows where the pointer is,
@@ -112,6 +118,14 @@ trait Canvas
     ink(*self, color: u32)
 
     unink(*self)
+
+    // The colour text would be drawn in right now: whatever `ink` pushed over it, or the theme's.
+    //
+    // **The default body is the whole rule** -- a backend that pushes nothing and remembers nothing
+    // still draws text in the theme's ink, which is what makes a tree with no `foreground` anywhere
+    // readable under any theme. A backend carrying a default text colour of its own would be
+    // carrying one no theme could reach.
+    text_ink(*self) -> u32 = self.theme().ink
 
     // Is the pointer inside `r` right now, and is it held down there?
     //
@@ -266,13 +280,8 @@ struct Recorder
     // What has been raised above the tree and not yet painted.
     raised: Buf[Overlay]
 
-    // The text colour in force, and the ones to go back to.
-    //
-    // **The recorder writes `ink` into the recording and used to keep nothing**, which was fine
-    // while nothing asked what colour was current -- and stopped being fine the moment an overlay
-    // had to capture it. A backend that records what it is told but cannot answer what it was told
-    // is one that can only be tested for what it draws, never for what it knows.
-    tint: u32
+    // The text colours pushed over the theme's, innermost last. Empty means "whatever the theme
+    // says", which is what makes a tree with no `foreground` in it readable under any theme.
     tints: Buf[u32]
 
     // The animations in flight, so that easing can be tested without a clock or a window.
@@ -341,6 +350,12 @@ impl Canvas for Recorder
 
         v.len == 0 || r.overlaps(v[v.len - 1])
 
+    override text_ink(*self) -> u32
+        val v = self.tints.view()
+
+        if v.len == 0 then self.look.ink else v[v.len - 1]
+    end text_ink
+
     override theme(*self) -> Theme = self.look
 
     override push_theme(*self, t: Theme)
@@ -354,15 +369,11 @@ impl Canvas for Recorder
 
     ink(*self, color: u32)
         self.ops.push(s"ink #${color}")
-        self.tints.push(self.tint)
-        self.tint = color
+        self.tints.push(color)
 
     unink(*self)
         self.ops.push("unink")
-
-        self.tints.pop() match
-            Some(c) -> self.tint = c
-            None -> ()
+        self.tints.pop()
 
     hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
 
@@ -388,7 +399,7 @@ impl Canvas for Recorder
     // opens and asserting what the menu looks like.
     raise_above(*self, v: &View, at: Rect)
         self.ops.push(s"raise ${at.x},${at.y} ${at.w}x${at.h}")
-        self.raised.push(Overlay(v, at, self.look, self.tint))
+        self.raised.push(Overlay(v, at, self.look, override_ink(self.tints)))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised
@@ -402,7 +413,17 @@ end Recorder
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
     Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(),
-             buf(), dark().ink, buf(), phases())
+             buf(), buf(), phases())
+
+// The override in force, if anything has pushed one.
+//
+// **`None` is not "no colour" -- it is "the theme's"**, which is the whole of the fix: a backend
+// with a default text colour of its own has one the theme cannot reach.
+private override_ink(tints: Buf[u32]) -> Option[u32]
+    val v = tints.view()
+
+    if v.len == 0 then None else Some(v[v.len - 1])
+end override_ink
 
 // The rectangle two of them have in common, which is what nesting one clip inside another leaves.
 //
