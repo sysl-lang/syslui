@@ -538,6 +538,23 @@ rectangle layout settled on, the smaller radius that inset corner takes, the cha
 a line height read from a `descent` whose sign is a matter of convention — is lifted out of the
 delegation and tested as ordinary functions, so none of it needs a font to be checked.
 
+## Nothing in it is computed module storage, and that is a portability constraint
+
+A program built by `sysl build-c` — every Android app, every Pico program, anything whose link
+belongs to CMake or Gradle — has **no sysl `main`**, so nothing runs module initializers. Reaching
+computed module storage from an `@export`ed function is refused for exactly that reason:
+
+```
+'sdl_main' is exported and reaches 'sh.sysl.ui.clock', which is module storage an initializer fills
+before the program's own statements run.
+```
+
+The write counter was a boxed `&Epoch` with a `bump` method until an Android build said so; it is a
+bare `var int` now, which is laid straight into the object file. **The package's own tests cannot
+catch a regression here** — `sysl test` links a sysl program and runs the initializers — so what
+catches it is a `sysl build-c` of something that uses the toolkit, which is what
+`sysl-lang/syslui-android` is.
+
 ## Layout
 
 - `sh/sysl/ui/view.sysl` — the `View` trait, the leaves, and the modifiers

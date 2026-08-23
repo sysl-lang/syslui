@@ -26,19 +26,26 @@ import sysl.buf.{Buf, buf}
 //
 // It is also what `Derived` decides freshness by; `atom.sysl` argues that at length.
 //
-// **A struct rather than a bare module-level `var`, because module storage is reached through a
-// counted reference** -- `clock` below is a module-level `val`, and moving what it points at is an
-// ordinary `*self` method on the thing it points at.
-struct Epoch
-    n: int
-
-    bump(*self) = self.n += 1
-end Epoch
-
-private val clock: &Epoch = Epoch(0)
+// **It is a bare module-level `var` and it must stay one, which is a portability constraint rather
+// than a style.** It was a `&Epoch` -- a boxed counter with a `bump` method -- until an Android
+// build refused the whole toolkit:
+//
+//     'sdl_main' is exported and reaches 'sh.sysl.ui.clock', which is module storage an initializer
+//     fills before the program's own statements run. A C project linking this supplies its own
+//     'main', so nothing fills it and the function would read whatever the loader left.
+//
+// A program built by `sysl build-c` -- which is every Android app, every Pico program and anything
+// else whose link belongs to CMake or Gradle -- has no sysl `main` to run module initializers, so
+// **computed** module storage is unreachable from an `@export`ed function. Storage whose initializer
+// is constant data is laid straight into the object file and is fine, which is what this is.
+//
+// **Nothing in the package's own test suite can catch a regression here**, because `sysl test` links
+// a sysl program and runs the initializers: what catches it is a `sysl build-c` of a program that
+// uses the toolkit, and `sysl-lang/syslui-android` is that program.
+private var clock: int = 0
 
 // How many writes have happened. Compare it against what you last saw.
-writes() -> int = clock.n
+writes() -> int = clock
 
 // A value that says who read it, so a write can tell exactly them.
 //
@@ -87,7 +94,7 @@ struct Signal[T]
     // complete account of whether state has changed. A signal nothing subscribed to is still state.
     set(*self, v: T)
         self.value = v
-        clock.bump()
+        clock += 1
         self.notify()
 
     // Call every live dependent, and forget the ones that have gone.
