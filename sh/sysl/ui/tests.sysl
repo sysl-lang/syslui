@@ -2964,3 +2964,154 @@ private a_dialog_is_readable_with_no_foreground_anywhere()
     // two halves of that are pinned above: an overlay keeps the theme it was raised under, and text
     // with nothing pushed over it takes that theme's ink.
 end a_dialog_is_readable_with_no_foreground_anywhere
+
+// -- selecting text -------------------------------------------------------------------------------
+//
+// **The toolkit selects and the application copies.** A selection is geometry and state, which is
+// what a view knows; the clipboard is the window system's, which a view should not reach.
+
+// **A hit test is measuring prefixes**, which is why no backend has to implement it: a canvas that
+// can measure a run can measure the front of one. The recorder's font is eight pixels a byte.
+@test
+private a_click_lands_on_the_character_it_points_at()
+    var c = recorder()
+
+    assert_eq(c.text_at("hello", 0), 0usize)
+    assert_eq(c.text_at("hello", -40), 0usize, "before the run is the start of it")
+
+    // Past the middle of a character snaps past it, so a click lands where a person points rather
+    // than always before the letter they aimed at.
+    assert_eq(c.text_at("hello", 3), 0usize, "still in the first half of 'h'")
+    assert_eq(c.text_at("hello", 5), 1usize, "past its middle")
+    assert_eq(c.text_at("hello", 8), 1usize, "on the boundary")
+
+    assert_eq(c.text_at("hello", 400), 5usize, "past the end is the end")
+end a_click_lands_on_the_character_it_points_at
+
+// **And it never lands inside a multi-byte character**, because it walks characters and builds the
+// prefix as it goes rather than dividing a width by a byte count.
+@test
+private an_offset_is_always_on_a_character_boundary()
+    var c = recorder()
+
+    // "héllo" is six bytes and five characters; the recorder charges eight pixels a *byte*, so 'é'
+    // is sixteen wide to it -- which is wrong for a font and exactly right for this test, because a
+    // hit test that divided by bytes would answer 2 and land inside it.
+    assert_eq("héllo".len, 6usize)
+    assert_eq(c.text_at("héllo", 9), 1usize, "the front half of the two-byte character")
+    assert_eq(c.text_at("héllo", 20), 3usize, "and past it -- 3, never 2")
+end an_offset_is_always_on_a_character_boundary
+
+// The other direction, which is what draws the highlight.
+@test
+private a_boundary_has_a_position()
+    var c = recorder()
+
+    assert_eq(c.text_x("hello", 0usize), 0)
+    assert_eq(c.text_x("hello", 2usize), 16)
+    assert_eq(c.text_x("hello", 5usize), 40)
+    assert_eq(c.text_x("hello", 99usize), 40, "past the end is the end")
+end a_boundary_has_a_position
+
+// A selection keeps its direction, so a drag leftward has its head below its anchor -- which is what
+// a shift-click would extend from. `lo` and `hi` are what everything else asks for.
+@test
+private a_selection_keeps_which_way_it_was_dragged()
+    val back = Selection(5usize, 2usize)
+
+    assert_eq(back.lo(), 2usize)
+    assert_eq(back.hi(), 5usize)
+    assert(!back.empty(), "and it is not empty")
+    assert(Selection(3usize, 3usize).empty(), "one that never moved is")
+end a_selection_keeps_which_way_it_was_dragged
+
+// **The substring is bounded against the run rather than trusted**, because a selection outlives the
+// text it was made in: a rebuild can shorten what is under a selection nobody cleared.
+@test
+private selected_text_is_bounded_against_the_run()
+    assert(selected_text("hello", Selection(1usize, 4usize)) == "ell",
+           selected_text("hello", Selection(1usize, 4usize)))
+    assert(selected_text("hello", Selection(4usize, 1usize)) == "ell", "either direction")
+    assert(selected_text("hello", Selection(2usize, 2usize)) == "", "an empty selection is nothing")
+    assert(selected_text("hi", Selection(0usize, 99usize)) == "hi", "past the end is clamped")
+    assert(selected_text("", Selection(3usize, 9usize)) == "", "and an empty run is safe")
+end selected_text_is_bounded_against_the_run
+
+// Nothing selected draws no highlight, only the run.
+@test
+private an_unselected_run_is_just_text()
+    val sel = signal(nothing_selected())
+
+    assert_paints(selectable("hello", sel), Size(200, 200), Rect(0, 0, 40, 16),
+                  "text 0,0 40x16 'hello'\n")
+end an_unselected_run_is_just_text
+
+// **The highlight goes behind the run**, because `Canvas` has no alpha and a colour over the letters
+// would hide them.
+@test
+private a_selection_is_painted_behind_the_text()
+    val sel = signal(Selection(1usize, 3usize))
+
+    assert_paints(selectable("hello", sel), Size(200, 200), Rect(0, 0, 40, 16),
+                  s"fill 8,0 16x16 #${dark().selection}\n" +
+                  "text 0,0 40x16 'hello'\n")
+end a_selection_is_painted_behind_the_text
+
+// **Both ends come from where the press began and where the pointer is now**, recomputed every
+// frame -- so the view stores no anchor, there is no first frame to notice, and a drag cannot be
+// left half-set.
+@test
+private dragging_selects_from_the_press_to_the_pointer()
+    val sel = signal(nothing_selected())
+    val v = selectable("hello", sel)
+    var c = recorder()
+
+    // Press inside 'e' and drag into the first 'l'. The values are deliberately away from a
+    // character's midpoint, which is the one place either answer is defensible.
+    c.point(10, 8, true)
+    v.paint(&c, Rect(0, 0, 40, 16))
+
+    assert_eq(sel.read().lo(), 1usize)
+    assert_eq(sel.read().hi(), 1usize, "the drag has not moved yet")
+
+    c.point(22, 8, true)
+    v.paint(&c, Rect(0, 0, 40, 16))
+
+    assert(selected_text("hello", sel.read()) == "el", selected_text("hello", sel.read()))
+
+    // Dragging back past the start keeps the anchor and moves the head the other way.
+    c.point(2, 8, true)
+    v.paint(&c, Rect(0, 0, 40, 16))
+
+    assert(selected_text("hello", sel.read()) == "h", selected_text("hello", sel.read()))
+end dragging_selects_from_the_press_to_the_pointer
+
+// And the drag follows the pointer off the run entirely, because it is the same capture a slider
+// uses -- a person selecting a line does not keep the pointer inside it.
+@test
+private a_selection_drag_follows_the_pointer_off_the_run()
+    val sel = signal(nothing_selected())
+    val v = selectable("hello", sel)
+    var c = recorder()
+
+    c.point(0, 8, true)
+    v.paint(&c, Rect(0, 0, 40, 16))
+
+    c.point(900, 900, true)
+    v.paint(&c, Rect(0, 0, 40, 16))
+
+    assert(selected_text("hello", sel.read()) == "hello", "the whole run")
+end a_selection_drag_follows_the_pointer_off_the_run
+
+// A press that began somewhere else does not start selecting a run it is dragged across.
+@test
+private dragging_over_a_run_does_not_select_it()
+    val sel = signal(nothing_selected())
+    var c = recorder()
+
+    c.point(900, 900, true)
+    c.point(20, 8, true)
+    selectable("hello", sel).paint(&c, Rect(0, 0, 40, 16))
+
+    assert(sel.read().empty(), "nothing was selected")
+end dragging_over_a_run_does_not_select_it

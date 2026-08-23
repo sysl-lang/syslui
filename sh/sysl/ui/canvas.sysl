@@ -186,6 +186,52 @@ trait Canvas
     // a backend opts into rather than something every backend owes.
     phase(*self, r: Rect, slot: int, target: real, rate: real) -> real = target
 
+    // Where the press that owns the pointer began, in the same coordinates a view is painted in.
+    //
+    // **This is what makes selecting text stateless.** A drag has two ends -- where it started and
+    // where it is now -- and a view that had to remember the first would need somewhere to keep it
+    // between frames, which is the one thing the tree cannot do. The canvas already knows, because
+    // capturing the pointer meant recording where the press began.
+    press_origin(*self) -> (int, int) = (-1, -1)
+
+    // The byte offset in `s` of the character boundary nearest `x` pixels from the run's left edge.
+    //
+    // **The default body is written in terms of `text_size`, so no backend has to implement it** --
+    // a canvas that can measure a run can measure its prefixes, and that is all a hit test is. It
+    // walks characters and builds the prefix as it goes, which is how the offset comes out on a
+    // character boundary and never inside a multi-byte one.
+    //
+    // It is linear in the length of the run and allocates a prefix per character, which is honest
+    // rather than good: a backend with a real shaper knows the answer directly and should override
+    // this. It is not on a per-frame path -- only a drag asks.
+    //
+    // **Past the middle of a character snaps past it**, which is what makes a click land where a
+    // person points rather than always before the letter they aimed at.
+    text_at(*self, s: string, x: int) -> usize
+        if x <= 0 then return 0usize
+
+        var prefix = ""
+        var before = 0
+
+        for ch in s.chars
+            val next = prefix + s"${ch}"
+            val after = self.text_size(next).w
+
+            if x < (before + after) / 2 then return prefix.len
+            if x < after then return next.len
+
+            prefix = next
+            before = after
+
+        s.len
+    end text_at
+
+    // How far into the run the boundary at byte offset `at` is.
+    //
+    // The same default trick: a prefix is a run, and a run can be measured.
+    text_x(*self, s: string, at: usize) -> int =
+        if at >= s.len then self.text_size(s).w else self.text_size(s[0..<at]).w
+
     // How much room `s` takes in this canvas's font. A view measures through this or it is guessing.
     //
     // **`*self` rather than `self` because a real canvas has a cache.** Measuring a run of text is a
@@ -382,6 +428,8 @@ impl Canvas for Recorder
     override pointer(*self) -> (int, int) = (self.px, self.py)
 
     override grab(*self, r: Rect, slot: int) -> bool = self.hold.claim(r, slot)
+
+    override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
 
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.

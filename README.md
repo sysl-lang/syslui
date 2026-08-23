@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred and seventy-seven tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred and ninety-one tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -369,6 +369,30 @@ text("hi").background(red).padding(8)    // margin  — the ground stops at the 
 
 A second name for the same wrapper would be two ways to write one thing.
 
+## Selecting text
+
+**The toolkit selects; the application copies.** A selection is geometry and state, which is what a
+view knows about; the clipboard belongs to the window system, which a view shouldn't reach. `sdl3`
+has `clipboard_text` / `set_clipboard_text`, and a program binding ⌘C reads the selection signal and
+hands the substring over.
+
+```
+selectable(line, sel)                    // drag to select, highlight painted behind the run
+selected_text(line, sel.read())          // what to put on the clipboard
+```
+
+Two `Canvas` members do the work, **both with default bodies so no backend implements them**:
+`text_at(s, x)` gives the byte offset nearest a pixel and `text_x(s, at)` the reverse. The default
+walks characters and measures prefixes — which is why an offset is **never inside a multi-byte
+character**. A hit test that divided a width by a byte count would split an `é`; there's a test on
+exactly that.
+
+**The selection is stateless in the view.** A `Selectable` holds no anchor: both ends are recomputed
+every frame from where the press *began* and where the pointer is now. The canvas already knew the
+first, because capturing the pointer for the slider meant recording it — so there is no first frame
+of a drag to notice and no half-set state to leave behind. `press_origin()` is what made that
+possible.
+
 ## Culling
 
 A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
@@ -443,6 +467,7 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/tabs.sysl` — a tab bar, built entirely out of the files above it
 - `sh/sysl/ui/overlay.sysl` — `render`, popovers and modals: the second paint pass
 - `sh/sysl/ui/atom.sysl` — application state a module declares, and values derived from it
+- `sh/sysl/ui/select.sysl` — selecting a run of text with the pointer
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives, and the scrollbar
 - `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against; a
   recorder that draws nothing and remembers everything, so the tree can be asserted with no window;

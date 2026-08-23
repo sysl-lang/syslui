@@ -1,0 +1,93 @@
+module sh.sysl.ui
+
+// Selecting text with the pointer, so that it can be copied.
+//
+// **The toolkit selects; the application copies.** A selection is geometry and state, which is what
+// a view knows about; the clipboard is the window system's, which a view does not and should not
+// reach. `sdl3` already has `clipboard_text` and `set_clipboard_text`, and an application binding
+// ⌘C reads the selection signal and hands the substring over. That split is the same one that keeps
+// `Canvas` free of a window: the toolkit answers *what is selected* and the program decides what
+// that is worth.
+//
+// **A selection is stateless in the view, and that is what makes dragging work.** A `Selectable`
+// holds no anchor: both ends are recomputed every frame from where the press *began* and where the
+// pointer is now, which the canvas already knows because a drag needed pointer capture. Nothing has
+// to notice the first frame of a drag, and nothing can be left half-set by a press the view never
+// saw the end of.
+
+// What is selected, as byte offsets into the run.
+//
+// **Byte offsets rather than character counts**, because that is what a string is indexed by and
+// what a slice is taken at. They are always at character boundaries, since the only thing that
+// produces them is `Canvas.text_at`.
+//
+// **`anchor` is where the press began and `head` is where the pointer is**, so a selection dragged
+// leftward has `head` below `anchor`. Keeping the direction is what a shift-click would extend from,
+// and `lo`/`hi` are what everything else asks for.
+struct Selection deriving Eq
+    anchor: usize
+    head: usize
+
+    lo(self) -> usize = if self.anchor < self.head then self.anchor else self.head
+    hi(self) -> usize = if self.anchor < self.head then self.head else self.anchor
+
+    empty(self) -> bool = self.anchor == self.head
+end Selection
+
+// Nothing selected.
+nothing_selected() -> Selection = Selection(0, 0)
+
+// The selected part of `s`, which is what an application puts on the clipboard.
+//
+// **Bounded against the string rather than trusted**, because a selection outlives the run it was
+// made in: a rebuild can shorten the text under a selection nobody has cleared, and slicing past the
+// end of a string is not something a copy should be able to do.
+selected_text(s: string, sel: Selection) -> string
+    val n = s.len
+    val lo = if sel.lo() > n then n else sel.lo()
+    val hi = if sel.hi() > n then n else sel.hi()
+
+    if lo >= hi then "" else s[lo..<hi]
+end selected_text
+
+// A run of text the pointer can select.
+//
+// **The selection is the application's**, like the scroll offset and everything else that outlives a
+// rebuild -- a `Selectable` keeping its own would lose it the first time anything was written.
+struct Selectable
+    s: string
+    sel: &Signal[Selection]
+
+impl View for Selectable
+    measure(&self, c: *Canvas, avail: Size) -> Size = c.text_size(self.s)
+
+    paint(&self, c: *Canvas, r: Rect)
+        // **Both ends from where the press began and where the pointer is now**, recomputed every
+        // frame. The view stores no anchor, so there is no first frame to notice and no half-set
+        // state to leave behind.
+        if c.grab(r, SELECT_SLOT)
+            val (ox, _) = c.press_origin()
+            val (px, _) = c.pointer()
+            val want = Selection(c.text_at(self.s, ox - r.x), c.text_at(self.s, px - r.x))
+
+            // Guarded on the value moving, exactly as the slider's is: an unguarded write would mark
+            // every frame dirty for as long as a pointer rested on a word.
+            if want != self.sel.read() then self.sel.set(want)
+
+        val cur = self.sel.read()
+        val h = c.text_size(self.s).h
+
+        if !cur.empty()
+            val x0 = c.text_x(self.s, cur.lo())
+            val x1 = c.text_x(self.s, cur.hi())
+
+            c.fill(Rect(r.x + x0, r.y, x1 - x0, h), c.theme().selection)
+
+        c.text(r, self.s)
+    end paint
+
+// Which grabbable thing a selection is, in the canvas's single grab.
+private const SELECT_SLOT: int = 2
+
+// A run of text that can be selected with the pointer.
+selectable(s: string, sel: &Signal[Selection]) -> &View = Selectable(s, sel)
