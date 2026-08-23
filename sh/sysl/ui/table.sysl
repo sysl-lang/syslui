@@ -79,13 +79,10 @@ struct Table
 
     // Called with the index of a row that was tapped, if anything was.
     on_row: Option[&Fn(usize) -> unit]
-
-    // Whether alternate rows take the theme's `alt` ground.
-    striped: bool
 end Table
 
-// How tall one row is: a line of text and the theme's padding above and below it.
-private row_height(c: *Canvas, t: Theme) -> int = c.text_size("Ag").h + 2 * t.pad
+// How tall one row is: a line of text and the table style's inset above and below it.
+private row_height(c: *Canvas, s: TableStyle) -> int = c.text_size("Ag").h + 2 * s.pad
 
 // The width every column ends up with, in order.
 //
@@ -97,11 +94,11 @@ private row_height(c: *Canvas, t: Theme) -> int = c.text_size("Ag").h + 2 * t.pa
 // of a table whose columns do not shift as you scroll. It is measurement rather than drawing, so it
 // goes through the canvas's cache, and a column of a thousand distinct strings is a thousand shaping
 // passes once rather than per frame. A table that cannot afford it wants `Fixed`.
-private widths(c: *Canvas, t: Theme, cols: []Col, rows: [][]string, avail: int) -> Buf[int]
+private widths(c: *Canvas, s: TableStyle, cols: []Col, rows: [][]string, avail: int) -> Buf[int]
     var out: Buf[int] = buf()
     var taken = 0
     var flexes = 0
-    val gap = t.pad
+    val gap = s.pad
 
     for i in 0..<cols.len
         cols[i].width match
@@ -135,16 +132,16 @@ private widths(c: *Canvas, t: Theme, cols: []Col, rows: [][]string, avail: int) 
 end widths
 
 // One row of cells, laid out to the widths the table settled on.
-private cells(t: Theme, cols: []Col, values: []string, w: Buf[int]) -> &View
+private cells(s: TableStyle, cols: []Col, values: []string, w: Buf[int]) -> &View
     var out: Buf[&View] = buf()
     val v = w.view()
 
     for i in 0..<cols.len
-        val s = if i < values.len then values[i] else ""
+        val text_of = if i < values.len then values[i] else ""
 
         // **A fixed frame is what makes the columns line up**, and it is the one thing the table
         // does that a hand-written row could not: the cell is told its width rather than asked.
-        out.push(align(text(s), cols[i].right, v[i], t))
+        out.push(align(text(text_of), cols[i].right, v[i], s.pad))
 
     row(out.view(), 0)
 end cells
@@ -154,37 +151,41 @@ end cells
 // Right alignment is a `Row` of a spacer and the text, which works because a `Row` gives a child the
 // width it measured to and a `Spacer` measures to nothing -- so the text lands hard against the
 // right edge of the frame it is wrapped in.
-private align(v: &View, right: bool, w: int, t: Theme) -> &View =
+private align(v: &View, right: bool, w: int, pad: int) -> &View =
     if right then
-        row([spacer(), v.padding(t.pad)], 0).frame(w, 0)
+        row([spacer(), v.padding(pad)], 0).frame(w, 0)
     else
-        row([v.padding(t.pad), spacer()], 0).frame(w, 0)
+        row([v.padding(pad), spacer()], 0).frame(w, 0)
 
 impl View for Table
     measure(&self, c: *Canvas, avail: Size) -> Size =
-        Size(avail.w, self.height + row_height(c, c.theme()))
+        Size(avail.w, self.height + row_height(c, c.theme().table))
 
     paint(&self, c: *Canvas, r: Rect)
-        val t = c.theme()
-        val h = row_height(c, t)
-        val w = widths(c, t, self.columns, self.rows, r.w)
+        val s = c.theme().table
+        val h = row_height(c, s)
+        val w = widths(c, s, self.columns, self.rows, r.w)
 
         // The header, which does not scroll.
-        header(t, self.columns, w).paint(c, Rect(r.x, r.y, r.w, h))
-        c.fill(Rect(r.x, r.y + h - 1, r.w, 1), t.edge)
+        header(s, self.columns, w).paint(c, Rect(r.x, r.y, r.w, h))
+        c.fill(Rect(r.x, r.y + h - 1, r.w, 1), s.rule)
 
-        scroll(body(t, self, w, h), self.offset, self.height)
+        scroll(body(s, self, w, h), self.offset, self.height)
             .paint(c, Rect(r.x, r.y + h, r.w, self.height))
     end paint
 
-// The header row: the column titles on the theme's panel, over a rule.
-private header(t: Theme, cols: []Col, w: Buf[int]) -> &View
+// The header row: the column titles on the style's own ground, over a rule.
+//
+// **`head_ink` is a colour the style names rather than one computed here.** It was
+// `mix(t.ink, t.panel, 35)` until `TableStyle` existed, which is a colour a theme could not reach and
+// therefore could not change -- exactly the thing a theme is for.
+private header(s: TableStyle, cols: []Col, w: Buf[int]) -> &View
     var titles: Buf[string] = buf()
 
     for i in 0..<cols.len
         titles.push(cols[i].title)
 
-    cells(t, cols, titles.view(), w).foreground(mix(t.ink, t.panel, 35)).background(t.panel)
+    cells(s, cols, titles.view(), w).foreground(s.head_ink).background(s.head)
 end header
 
 // The rows that can actually be seen, with a gap standing in for the ones above and below.
@@ -199,7 +200,7 @@ end header
 // **The gaps above and below are framed spacers**, so the column still measures to the full content
 // height -- which is what the scrollbar's thumb is a fraction of, and what stops the list changing
 // length as it is scrolled.
-private body(t: Theme, table: &Table, w: Buf[int], h: int) -> &View
+private body(s: TableStyle, table: &Table, w: Buf[int], h: int) -> &View
     var out: Buf[&View] = buf()
     val n = int(table.rows.len)
 
@@ -210,24 +211,40 @@ private body(t: Theme, table: &Table, w: Buf[int], h: int) -> &View
     if first > 0 then out.push(spacer().frame(0, first * h))
 
     for i in first..<last
-        var v = cells(t, table.columns, table.rows[usize(i)], w).frame(0, h)
+        val ground = if s.striped && i % 2 == 1 then s.stripe else s.ground
+        val line = cells(s, table.columns, table.rows[usize(i)], w).frame(0, h)
 
-        if table.striped && i % 2 == 1 then v = v.background(t.alt)
-
-        table.on_row match
-            Some(f) ->
-                // **The index is captured, not the row**, so a handler outlives whatever the table
-                // was built from and an application looks the row up in its own model -- which is
-                // where the row actually lives.
-                val at = usize(i)
-
-                out.push(v.on_tap(() -> f(at)))
-            None -> out.push(v)
+        out.push(dressed(s, line, ground, table.on_row, usize(i)))
 
     if last < n then out.push(spacer().frame(0, (n - last) * h))
 
     column(out.view(), 0)
 end body
+
+// One row with its ground, its rule and its handler.
+//
+// **The row under the pointer is a `Reactive`, so it eases in like everything else.** The same
+// `Interaction` that drives a button drives a table row, and nothing new was needed for it -- which
+// is the argument for `Reactive` being a general thing rather than a button's private business.
+//
+// **Every row's ground is painted rather than left to whatever is behind.** `Canvas` has no alpha,
+// so a row that wanted to be "the surface underneath" would have to know what that was; naming it in
+// the style makes the stripe, the hover and the ordinary row one arithmetic rather than three cases.
+private dressed(s: TableStyle, line: &View, ground: u32, on_row: Option[&Fn(usize) -> unit],
+                at: usize) -> &View
+    var v = if s.highlight then
+                reactive((i, _) -> line.background(mix(ground, s.hover, int(i.hover * 100.0))))
+            else
+                line.background(ground)
+
+    if s.lined then v = v.border(s.rule, 1, 0)
+
+    on_row match
+        // **The index is captured, not the row**, so a handler outlives whatever the table was built
+        // from and an application looks the row up in its own model -- which is where the row lives.
+        Some(f) -> v.on_tap(() -> f(at))
+        None -> v
+end dressed
 
 // The first row the window can reach, and the last.
 //
@@ -257,6 +274,15 @@ end window_last
 // **`offset` is the application's**, like every other piece of state that has to outlive a rebuild:
 // a table that kept its own scroll position would lose it on the first signal write, which is the
 // finding `scroll.sysl` was written around.
+// **Striping, the hover, the rules and every colour are the THEME's**, not this call's: a table in
+// another shape is
+//
+//     table(cols, rows, offset, 340)
+//         .restyle(t -> t with { table = t.table with { striped = false, lined = true } })
+//
+// which is the same sentence as changing a colour and applies to every table below it. A flag here
+// would have been one table's appearance decided at one call site, which is the thing a theme is for
+// preventing.
 table(columns: []Col, rows: [][]string, offset: &Signal[int], height: int,
-      on_row: Option[&Fn(usize) -> unit] = None, striped: bool = true) -> &View =
-    Table(columns, rows, offset, height, on_row, striped)
+      on_row: Option[&Fn(usize) -> unit] = None) -> &View =
+    Table(columns, rows, offset, height, on_row)

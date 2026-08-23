@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred and twenty-nine tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred and forty-four tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -272,8 +272,31 @@ fraction of.
 | only the window | **933** | **1.21 ms** |
 | …at 3000 rows | **933** | **1.33 ms** |
 
-**The whole of its appearance comes off the theme** — header, stripes, rule, scrollbar — so a
-`.restyle(t -> light())` anywhere above it restyles all of it.
+### Controlling how it looks
+
+A table has more surface than everything else here put together, so its appearance is a
+**`TableStyle` block inside the `Theme`** rather than ten more fields on `Theme` — header ground and
+ink, the ordinary row, the stripe, the hovered row, the rule, whether rows are striped, ruled or
+highlighted, and the cell inset that decides the row height.
+
+```
+table(cols, rows, offset, 340)
+    .restyle(t -> t with { table = t.table with { striped = false, lined = true } })
+```
+
+**Striping is the theme's, not the call's.** A flag on `table(...)` would be one table's appearance
+decided at one call site, which is the thing a theme exists to prevent — and striping and rules are
+alternatives rather than companions, since both say "this row ends here".
+
+Until this block existed the header's text was `mix(ink, panel, 35)` computed inside `table.sysl` — a
+colour a theme could not name and therefore could not change, which is exactly what a theme is for.
+
+**Every row paints its own ground**, because `Canvas` has no alpha: a row that wanted to be "the
+surface underneath" would have to know what that was. Naming it makes the stripe, the hover and the
+ordinary row one piece of arithmetic rather than three special cases.
+
+**The hovered row is a `Reactive`**, so it eases in — the same `Interaction` that drives a button
+drives a table row, and nothing new was needed for it.
 
 ## Culling
 

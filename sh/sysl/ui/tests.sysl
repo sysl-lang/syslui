@@ -1764,18 +1764,22 @@ private striping_gives_every_other_row_the_themes_alt_ground()
 
     val d = c.dump()
 
-    assert(d.contains(s"fill 0,64 400x32 #${dark().alt}"), s"the second row is striped:\n${d}")
-    assert(!d.contains(s"fill 0,32 400x32 #${dark().alt}"), s"and the first is not:\n${d}")
+    assert(d.contains(s"fill 0,64 400x32 #${dark().table.stripe}"), s"the second row is striped:\n${d}")
+    assert(!d.contains(s"fill 0,32 400x32 #${dark().table.stripe}"), s"and the first is not:\n${d}")
 end striping_gives_every_other_row_the_themes_alt_ground
 
+// **Striping is the theme's, not the call's**, so turning it off is the same sentence as changing a
+// colour and applies to every table below it.
 @test
 private striping_can_be_turned_off()
     val offset = signal(0)
     var c = recorder()
 
-    table([col("name")], demo_rows(), offset, 200, None, false).paint(&c, Rect(0, 0, 400, 232))
+    table([col("name")], demo_rows(), offset, 200)
+        .restyle(t -> t with { table = t.table with { striped = false } })
+        .paint(&c, Rect(0, 0, 400, 232))
 
-    assert(!c.dump().contains(s"#${dark().alt}"), s"no stripe anywhere:\n${c.dump()}")
+    assert(!c.dump().contains(s"#${dark().table.stripe}"), s"no stripe anywhere:\n${c.dump()}")
 end striping_can_be_turned_off
 
 // **A tap is answered with the row's index, not its contents**, so a handler outlives whatever the
@@ -1822,9 +1826,9 @@ private a_table_is_restyled_from_above()
 
     val d = c.dump()
 
-    assert(d.contains(s"#${light().panel}"), s"the light theme's header:\n${d}")
-    assert(d.contains(s"#${light().alt}"), s"and its stripe:\n${d}")
-    assert(!d.contains(s"#${dark().alt}"), s"and none of the dark one's:\n${d}")
+    assert(d.contains(s"#${light().table.head}"), s"the light theme's header:\n${d}")
+    assert(d.contains(s"#${light().table.stripe}"), s"and its stripe:\n${d}")
+    assert(!d.contains(s"#${dark().table.stripe}"), s"and none of the dark one's:\n${d}")
 end a_table_is_restyled_from_above
 
 // And the rows below the window are culled like any other list, because the body *is* an ordinary
@@ -2218,3 +2222,126 @@ private a_backend_with_no_grab_falls_back_to_pressed()
 
     assert(!b.grab(Rect(0, 0, 10, 10), 0), "a canvas with no pointer answers no to both")
 end a_backend_with_no_grab_falls_back_to_pressed
+
+// -- the table's own style ------------------------------------------------------------------------
+//
+// **A table has more surface than everything else here put together**, so its appearance is a
+// `TableStyle` block in the theme rather than ten more fields on `Theme`. Until it existed the
+// header's text was `mix(ink, panel, 35)` computed inside `table.sysl` -- a colour a theme could not
+// name and therefore could not change, which is exactly what a theme is for.
+
+// The header takes the style's own ground and ink rather than colours derived from elsewhere.
+@test
+private a_header_takes_the_styles_own_colours()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200)
+        .restyle(t -> t with { table = t.table with { head = 0x402020u32, head_ink = 0xFFCCCCu32 } })
+        .paint(&c, Rect(0, 0, 400, 232))
+
+    val d = c.dump()
+
+    assert(d.contains(s"fill 0,0 400x32 #${0x402020u32}"), s"the header's ground:\n${d}")
+    assert(d.contains(s"ink #${0xFFCCCCu32}"), s"and its text:\n${d}")
+end a_header_takes_the_styles_own_colours
+
+// **Every row's ground is painted rather than left to whatever is behind**, because `Canvas` has no
+// alpha -- so a row that wanted to be "the surface underneath" would have to know what that was.
+@test
+private every_row_paints_its_own_ground()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200)
+        .restyle(t -> t with { table = t.table with { ground = 0x101010u32, stripe = 0x202020u32 } })
+        .paint(&c, Rect(0, 0, 400, 232))
+
+    val d = c.dump()
+
+    assert(d.contains(s"fill 0,32 400x32 #${0x101010u32}"), s"the first row:\n${d}")
+    assert(d.contains(s"fill 0,64 400x32 #${0x202020u32}"), s"and the striped second:\n${d}")
+end every_row_paints_its_own_ground
+
+// **The row under the pointer lights, and it eases in like everything else** -- a lit row is a
+// `Reactive`, so the same `Interaction` that drives a button drives a table row and nothing new was
+// needed for it.
+@test
+private the_row_under_the_pointer_lights()
+    val offset = signal(0)
+    val v = table([col("name")], demo_rows(), offset, 200)
+
+    var away = recorder()
+    var over = recorder()
+
+    away.point(900, 900)
+
+    // Inside the second row, which runs from 64 to 96 with a 32-pixel header above it.
+    over.point(50, 80)
+
+    v.paint(&away, Rect(0, 0, 400, 232))
+    v.paint(&over, Rect(0, 0, 400, 232))
+
+    assert(over.dump().contains(s"fill 0,64 400x32 #${dark().table.hover}"),
+           s"the row under the pointer:\n${over.dump()}")
+    assert(!away.dump().contains(s"#${dark().table.hover}"),
+           s"and none of them when the pointer is elsewhere:\n${away.dump()}")
+end the_row_under_the_pointer_lights
+
+// And the highlight can be turned off, which is what a table nobody can click wants.
+@test
+private the_highlight_can_be_turned_off()
+    val offset = signal(0)
+    var c = recorder()
+
+    c.point(50, 80)
+    table([col("name")], demo_rows(), offset, 200)
+        .restyle(t -> t with { table = t.table with { highlight = false } })
+        .paint(&c, Rect(0, 0, 400, 232))
+
+    assert(!c.dump().contains(s"#${dark().table.hover}"), s"nothing lights:\n${c.dump()}")
+end the_highlight_can_be_turned_off
+
+// **Rules between rows and striping are alternatives rather than companions**: both say "this row
+// ends here", and an interface doing both says it twice. So `lined` is off by default and turning it
+// on is one word.
+@test
+private rows_can_be_ruled_instead_of_striped()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200)
+        .restyle(t -> t with { table = t.table with { striped = false, lined = true } })
+        .paint(&c, Rect(0, 0, 400, 232))
+
+    val d = c.dump()
+
+    assert(d.contains(s"stroke 0,32 400x32 #${dark().table.rule} w1"), s"a rule round a row:\n${d}")
+    assert(!d.contains(s"#${dark().table.stripe}"), s"and no stripe:\n${d}")
+end rows_can_be_ruled_instead_of_striped
+
+// The cell inset decides how tall a row is, so a denser table is one number.
+@test
+private the_cell_inset_decides_the_row_height()
+    val offset = signal(0)
+
+    val roomy = table([col("name")], demo_rows(), offset, 200)
+    val dense = table([col("name")], demo_rows(), offset, 200)
+                    .restyle(t -> t with { table = t.table with { pad = 2 } })
+
+    // A sixteen-pixel line plus the inset twice, and the header is one row tall.
+    assert(measured(roomy, Size(400, 400)) == Size(400, 232), "eight a side")
+    assert(measured(dense, Size(400, 400)) == Size(400, 220), "two a side")
+end the_cell_inset_decides_the_row_height
+
+// **A `TableStyle` nests inside a `Theme`, and a restyle reaches into it** -- which is what makes
+// changing one field of it a sentence rather than a reconstruction of all ten.
+@test
+private a_restyle_reaches_one_field_of_the_table_style()
+    val t = dark() with { table = dark().table with { lined = true } }
+
+    assert(t.table.lined, "the one field asked for")
+    assert(t.table.striped, "and the other nine are the ones it started with")
+    assert_eq(t.table.head, dark().table.head)
+    assert_eq(t.primary, dark().primary)
+end a_restyle_reaches_one_field_of_the_table_style

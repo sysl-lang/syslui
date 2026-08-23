@@ -69,7 +69,48 @@ enum Variant
     Soft
 end Variant
 
-// A whole appearance, as nineteen numbers.
+// How a table looks, which is a block of its own rather than ten more fields on `Theme`.
+//
+// **A table is the one widget with enough surface to need this.** Everything else here is a colour
+// and a corner; a table has a header, a body, alternate rows, a row under the pointer, rules and a
+// cell inset, and folding those into the general theme would have made a `Theme` nobody could read
+// while leaving them derived and unreachable. They were derived until this existed -- the header's
+// text was `mix(ink, panel, 35)` computed in `table.sysl`, which is a colour a theme could not name
+// and therefore could not change.
+//
+// **Every row's ground is painted rather than left to whatever is behind.** `Canvas` has no alpha,
+// so a row that wanted to be "the surface underneath" would have to know what that was; naming it
+// makes striping, the hover and the ordinary row one arithmetic rather than three special cases.
+struct TableStyle deriving Eq
+    // The header's ground and its text. Dimmer than `ink` on purpose: a column title is a label for
+    // what is below it and should not compete with the data.
+    head: u32
+    head_ink: u32
+
+    // An ordinary row, and every other row when `striped`.
+    ground: u32
+    stripe: u32
+    striped: bool
+
+    // The row under the pointer, and whether to light it at all.
+    //
+    // **It eases in like everything else**, because a row is a `Reactive` when this is on -- so the
+    // same `Interaction` that drives a button drives a table row, and nothing new was needed.
+    hover: u32
+    highlight: bool
+
+    // The hairline under the header, and between rows when `lined`.
+    //
+    // Lines between rows and striping are alternatives rather than companions: both say "this row
+    // ends here", and an interface doing both says it twice.
+    rule: u32
+    lined: bool
+
+    // The inset a cell takes, which is also what decides how tall a row is.
+    pad: int
+end TableStyle
+
+// A whole appearance, as nineteen numbers and a table.
 //
 // **Every one of these is something a control reads and nothing computes for itself.** A control
 // that reached past this for a colour would be one a theme could not restyle, which is the whole
@@ -125,6 +166,10 @@ struct Theme deriving Eq
     // How far a `Soft` ground is mixed from `ground` toward the role's colour, as a percentage.
     soft: int
 
+    // How a table looks. A block of its own, because a table has more surface than everything else
+    // here put together.
+    table: TableStyle
+
     // How many columns a `grid` divides its width into, and how much room is left between them.
     //
     // **In the theme rather than on the container, because a grid is a property of the design.** A
@@ -162,7 +207,16 @@ dark() -> Theme =
           ground = 0x22262F, panel = 0x1C2030, edge = 0x2A2F3A, alt = 0x181B26,
           radius = 6, pad = 8,
           hover_lift = 14, press_sink = 22, edge_lift = 26, soft = 22,
-          columns = COLUMNS_24, gutter = 8)
+          table = dark_table(), columns = COLUMNS_24, gutter = 8)
+
+// **`head_ink` is exactly `mix(ink, panel, 35)`**, which is what `table.sysl` computed before there
+// was anything to name it -- so naming it moved no recorded frame.
+dark_table() -> TableStyle =
+    TableStyle(head = 0x1C2030, head_ink = 0x9FA2AC,
+               ground = 0x1C2030, stripe = 0x181B26, striped = true,
+               hover = 0x2A3550, highlight = true,
+               rule = 0x2A2F3A, lined = false,
+               pad = 8)
 
 // The same interface on paper rather than on glass.
 //
@@ -180,7 +234,14 @@ light() -> Theme =
           ground = 0xFFFFFF, panel = 0xF2F4F8, edge = 0xD8DDE6, alt = 0xE9ECF2,
           radius = 6, pad = 8,
           hover_lift = 8, press_sink = 16, edge_lift = 12, soft = 14,
-          columns = COLUMNS_24, gutter = 8)
+          table = light_table(), columns = COLUMNS_24, gutter = 8)
+
+light_table() -> TableStyle =
+    TableStyle(head = 0xF2F4F8, head_ink = 0x6B7280,
+               ground = 0xF2F4F8, stripe = 0xE9ECF2, striped = true,
+               hover = 0xDCE6F7, highlight = true,
+               rule = 0xD8DDE6, lined = false,
+               pad = 8)
 
 // A view drawn under a changed theme, and everything below it with it.
 //
