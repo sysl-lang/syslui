@@ -138,6 +138,23 @@ trait View
     // there is no `align` parameter on anything.
     flex(&self) -> int = 0
 
+    // How many of a grid's columns this view takes, and how many to skip before it.
+    //
+    // **Zero means "no opinion", and a grid reads that as "the whole width".** Like `flex`, this is
+    // a defaulted member rather than something a container recognises: an erased child cannot be
+    // asked what type it is, so the child says instead and nothing has to be recognised.
+    //
+    // It is answered by `Cell`, which `.cell(span)` wraps a view in -- and which must therefore be
+    // the last link in a chain, since a wrapper outside it would answer for itself.
+    place(&self) -> (int, int) = (0, 0)
+
+    // Take `span` of a grid's columns, after skipping `offset` of them.
+    //
+    // **The last link in the chain**: `text("a").padding(4).cell(6)` is right and
+    // `text("a").cell(6).padding(4)` is not, because the padding would answer the grid's question
+    // for itself and the span would be lost inside it.
+    cell(&self, span: int, offset: int = 0) -> &View = Cell(self, span, offset)
+
     // Call `f` when this view is tapped.
     //
     // **A fourth modifier rather than a `Button` widget**, which is worth more than the line it

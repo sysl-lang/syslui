@@ -1,0 +1,162 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// Positioning by fractions of the width, rather than by flowing things until they fit.
+//
+// **`Row` and `Column` answer "what comes after what" and a grid answers "where".** A row gives each
+// child the width that child measured to, so a form laid out as rows has its labels ending wherever
+// their text ends and its fields starting there -- which looks like an accident, because it is one.
+// A grid divides the width into equal columns and a child says how many it takes, so two children in
+// different rows line up because they were given the same fractions rather than because their
+// contents happened to be the same length.
+//
+// **The divisions live in the `Theme`**, for the same reason the colours do: how finely an interface
+// is divided is a property of the design rather than of any one screen, and a subtree wanting
+// something else says so with the same `.restyle` everything else uses.
+//
+//     grid():
+//         text("Name").cell(6)
+//         field(name).cell(18)
+//         text("Address").cell(6)
+//         field(addr).cell(18)
+//
+// Both labels are six twenty-fourths wide and both fields eighteen, whatever is written in them.
+
+// The two divisions worth having, and why they are these two.
+//
+// **A grid's usefulness is entirely in how many ways its count divides**, and between them these two
+// cover every proportion anybody lays anything out in.
+//
+// Twenty-four gives halves, thirds, quarters, sixths, **eighths** and twelfths. That is what an
+// ordinary layout asks for, and it is where most design systems settle.
+//
+// Sixty gives all of those except eighths, and adds **fifths**, tenths, fifteenths, twentieths and
+// thirtieths. Five columns, or a strip a fifth of the width, is the one common shape twenty-four
+// cannot express -- 24 does not divide by 5.
+//
+// **A hundred and twenty is the obvious third and is deliberately not here.** Its whole claim is
+// having eight *and* five in one grid, and twenty-four already has the eight -- so the second grid
+// only ever needed to bring the five, and sixty brings it at half the count. A finer grid than it
+// needs to be is a grid whose numbers stop meaning anything at a glance: a span of 40 in 120 reads
+// as a number, where 20 in 60 reads as a third.
+const COLUMNS_24: int = 24
+const COLUMNS_60: int = 60
+
+// How many columns this view takes, and how many to skip before it.
+//
+// **A wrapper rather than a parameter on the grid**, so that the children of a grid are an ordinary
+// list of views and a trailing block builds one -- the same shape every other container has.
+//
+// **It must be the last link in a chain.** `text("a").padding(4).cell(6)` is right and
+// `text("a").cell(6).padding(4)` is not: a grid asks its child what it takes, an erased wrapper
+// answers for itself, and `Padding` has no opinion -- so the span would be lost inside it. That is
+// the same rule `frame` and `flex` follow, where wrapping a `Spacer` in a frame deliberately stops
+// it being flexible.
+struct Cell
+    child: &View
+    span: int
+    skip: int
+
+impl View for Cell
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    override place(&self) -> (int, int) = (self.span, self.skip)
+
+    paint(&self, c: *Canvas, r: Rect) = self.child.paint(c, r)
+
+// Children placed on the theme's grid, wrapping to a new line when one runs out of columns.
+struct Grid
+    children: Buf[&View]
+end Grid
+
+// Where every child goes, and how tall the whole thing is.
+//
+// **The edges are computed from the column index rather than from a column width**, which is what
+// keeps a grid true at any width: `w / cols` loses the remainder, and twenty-four columns each a
+// third of a pixel short is a grid eight pixels narrower than the space it was given, with the error
+// all at the right-hand end. Taking each edge as `col * (w + gutter) / cols` puts the rounding
+// between the columns instead, where nobody can see it, and the last edge lands exactly on `w`.
+private lay(c: *Canvas, v: []&View, cols: int, gutter: int, w: int) -> (Buf[Rect], int)
+    var out: Buf[Rect] = buf()
+    var at = 0
+    var y = 0
+    var line = 0
+
+    for i in 0..<v.len
+        val (asked, skip) = v[i].place()
+
+        // A child with no opinion takes the whole width, which is what a paragraph between two rows
+        // of fields wants and is the least surprising thing an unmarked child can do.
+        val span = if asked <= 0 || asked > cols then cols else asked
+
+        var start = at + skip
+
+        // Wrap, but only off a line that has something on it -- otherwise a skip wider than the grid
+        // would push an empty line ahead of itself for ever.
+        if start + span > cols && at > 0
+            y += line + gutter
+            at = 0
+            line = 0
+            start = skip
+
+        if start + span > cols then start = 0
+
+        val x = edge(start, w, gutter, cols)
+        val width = edge(start + span, w, gutter, cols) - x - gutter
+        val s = v[i].measure(c, Size(width, 1_000_000))
+
+        out.push(Rect(x, y, width, s.h))
+
+        if s.h > line then line = s.h
+
+        at = start + span
+
+    (out, y + line)
+end lay
+
+// The left edge of column `col`, counting the gutter that sits before it.
+private edge(col: int, w: int, gutter: int, cols: int) -> int = col * (w + gutter) / cols
+
+// What a grid divides by, which is the theme's unless something above it said otherwise.
+private divisions(t: Theme) -> (int, int) =
+    (if t.columns > 0 then t.columns else COLUMNS_24, if t.gutter < 0 then 0 else t.gutter)
+
+impl View for Grid
+    // **A grid is as wide as it is offered and as tall as its lines came out**, which is the one
+    // shape that makes sense: the whole point is dividing a known width, so a grid that asked for a
+    // width of its own would have nothing to divide.
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        val (cols, gutter) = divisions(c.theme())
+        val (_, h) = lay(c, self.children.view(), cols, gutter, avail.w)
+
+        Size(avail.w, h)
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        val (cols, gutter) = divisions(c.theme())
+        val v = self.children.view()
+        val (places, _) = lay(c, v, cols, gutter, r.w)
+        val p = places.view()
+
+        for i in 0..<v.len
+            val at = Rect(r.x + p[i].x, r.y + p[i].y, p[i].w, p[i].h)
+
+            if c.visible(at) then v[i].paint(c, at)
+    end paint
+end Grid
+
+// Children on the theme's grid.
+//
+// **It takes no column count and no gutter, because the theme has both.** A screen that wants fifths
+// wraps the part that does in `.restyle(t -> t with { columns = COLUMNS_60 })`, which is the same
+// sentence as changing a colour and applies to everything below it rather than to one container --
+// and a grid that differed from its neighbours by a literal at one call site is exactly the thing a
+// grid exists to prevent.
+grid(children: []&View) -> &View
+    var b: Buf[&View] = buf()
+
+    b.extend(children)
+
+    Grid(b)
+end grid

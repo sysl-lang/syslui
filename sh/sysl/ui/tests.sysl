@@ -1952,3 +1952,133 @@ private a_scrolled_table_keeps_its_full_height()
     assert(top.dump().contains("fill 192,32 8x24"), s"the thumb at the top:\n${top.dump()}")
     assert(down.dump().contains("fill 192,69 8x24"), s"and part way down:\n${down.dump()}")
 end a_scrolled_table_keeps_its_full_height
+
+// -- the grid -------------------------------------------------------------------------------------
+//
+// **A grid answers "where" and a row answers "what comes after what".** A form laid out as rows has
+// its fields starting wherever its labels' text happened to end; on a grid two children in different
+// lines line up because they were given the same fractions.
+
+// Halves, thirds and quarters of a width that does not divide evenly by any of them.
+@test
+private a_grid_divides_the_width_it_was_given()
+    // 24 columns, no gutter, 100 wide: the edges are 0, 50, 100 for halves.
+    assert_paints(grid([text("a").cell(12), text("b").cell(12)]).restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 0,0 50x16 'a'\ntext 50,0 50x16 'b'\n")
+end a_grid_divides_the_width_it_was_given
+
+// **The rounding goes between the columns, not all at the right-hand end.** Three columns of a
+// hundred pixels cannot each be 33, and a grid that computed a column width would come out eight
+// pixels short of the space it was given.
+@test
+private a_grid_lands_its_last_edge_exactly_on_the_width()
+    assert_paints(grid([text("a").cell(8), text("b").cell(8), text("c").cell(8)])
+                      .restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 0,0 33x16 'a'\ntext 33,0 33x16 'b'\ntext 66,0 34x16 'c'\n")
+end a_grid_lands_its_last_edge_exactly_on_the_width
+
+// A gutter is taken out between the columns and not off the ends.
+@test
+private a_gutter_sits_between_the_columns_and_not_outside_them()
+    assert_paints(grid([text("a").cell(12), text("b").cell(12)]).restyle(t -> t with { gutter = 10 }),
+                  Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 0,0 45x16 'a'\ntext 55,0 45x16 'b'\n")
+end a_gutter_sits_between_the_columns_and_not_outside_them
+
+// **A line wraps when it runs out of columns**, and the next one starts below the tallest thing on
+// the one before it.
+@test
+private a_grid_wraps_when_a_line_is_full()
+    val v = grid([text("a").cell(16), text("b").cell(16), text("c").cell(16)])
+                .restyle(t -> t with { gutter = 0 })
+
+    assert_paints(v, Size(200, 200), Rect(0, 0, 90, 32),
+                  "text 0,0 60x16 'a'\ntext 0,16 60x16 'b'\ntext 0,32 60x16 'c'\n")
+end a_grid_wraps_when_a_line_is_full
+
+// An offset skips columns before a child, which is how something is put in the middle of a line
+// without an empty view standing in for the gap.
+@test
+private an_offset_skips_columns_before_a_child()
+    assert_paints(grid([text("a").cell(6, 12)]).restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 50,0 25x16 'a'\n")
+end an_offset_skips_columns_before_a_child
+
+// A child with no opinion takes the whole width, which is the least surprising thing an unmarked
+// child can do -- a paragraph between two lines of fields.
+@test
+private an_unmarked_child_takes_the_whole_width()
+    assert_paints(grid([text("a")]).restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 0,0 100x16 'a'\n")
+end an_unmarked_child_takes_the_whole_width
+
+// **The divisions come off the theme**, so a subtree wanting fifths says so the same way it would
+// want another colour -- and 24 cannot express a fifth, which is the whole reason 60 is offered.
+@test
+private a_restyle_changes_what_the_grid_divides_by()
+    val fifths = grid([text("a").cell(12)])
+                     .restyle(t -> t with { columns = COLUMNS_60, gutter = 0 })
+
+    assert_paints(fifths, Size(200, 200), Rect(0, 0, 100, 16), "text 0,0 20x16 'a'\n")
+
+    // The same span on the coarse grid is half the width rather than a fifth of it.
+    assert_paints(grid([text("a").cell(12)]).restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 16), "text 0,0 50x16 'a'\n")
+end a_restyle_changes_what_the_grid_divides_by
+
+// Sixty is the second grid because twenty-four already has the eight. Between them they cover every
+// proportion anybody lays anything out in, and a hundred and twenty would only repeat them.
+@test
+private the_two_counts_cover_what_a_layout_asks_for()
+    assert_eq(COLUMNS_24 % 8, 0)
+    assert_eq(COLUMNS_24 % 3, 0)
+    assert_eq(COLUMNS_60 % 5, 0)
+    assert_eq(COLUMNS_60 % 3, 0)
+
+    // The one thing each cannot do, which is why there are two of them.
+    assert(COLUMNS_24 % 5 != 0, "twenty-four has no fifth")
+    assert(COLUMNS_60 % 8 != 0, "and sixty has no eighth")
+end the_two_counts_cover_what_a_layout_asks_for
+
+// A grid is as tall as its lines came out, and as wide as it was offered -- the whole point being to
+// divide a known width, so a grid that asked for one of its own would have nothing to divide.
+@test
+private a_grid_measures_to_the_width_it_was_offered()
+    val v = grid([text("a").cell(12), text("b").cell(12), text("c").cell(24)])
+
+    assert(measured(v, Size(300, 500)) == Size(300, 40), "two lines of sixteen and a gutter between")
+end a_grid_measures_to_the_width_it_was_offered
+
+// **`.cell` must be the last link in a chain**, because a wrapper outside it answers the grid's
+// question for itself. This is that rule pinned rather than only written down.
+@test
+private a_cell_inside_a_wrapper_loses_its_span()
+    // The right way round: the padding is inside the cell, and the span survives.
+    assert_paints(grid([text("a").padding(2).cell(12)]).restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 20),
+                  "text 2,2 46x16 'a'\n")
+
+    // The wrong way round: the padding answers, has no opinion, and the child takes the whole width.
+    assert_paints(grid([text("a").cell(12).padding(2)]).restyle(t -> t with { gutter = 0 }),
+                  Size(200, 200), Rect(0, 0, 100, 20),
+                  "text 2,2 96x16 'a'\n")
+end a_cell_inside_a_wrapper_loses_its_span
+
+// A grid culls what is outside the clip, like every other container.
+@test
+private a_grid_skips_children_outside_the_clip()
+    var c = recorder()
+
+    c.clip(Rect(0, 0, 100, 16))
+    grid([text("a").cell(24), text("b").cell(24), text("c").cell(24)])
+        .restyle(t -> t with { gutter = 0 })
+        .paint(&c, Rect(0, 0, 100, 48))
+    c.unclip()
+
+    assert(c.dump() == "clip 0,0 100x16\ntext 0,0 100x16 'a'\nunclip\n",
+           s"only the first line is reachable:\n${c.dump()}")
+end a_grid_skips_children_outside_the_clip

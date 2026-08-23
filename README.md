@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred and eighteen tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred and twenty-nine tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -184,6 +184,51 @@ an unknown surface.
 pixels on and that many off. A general dash array would be a slice a backend has to keep alive past
 the call, and what a dashed border is *for* is saying "provisional" at a glance.
 
+## Positioning: the grid
+
+`Row` and `Column` answer *what comes after what*. A grid answers *where*.
+
+A row gives each child the width that child measured to, so a form laid out as rows has its fields
+starting wherever their labels' text happened to end — which looks like an accident, because it is
+one. A grid divides the width into equal columns and a child says how many it takes, so two children
+in different lines line up because they were given the same fractions rather than because their
+contents were the same length.
+
+```
+grid():
+    text("volume").padding(4).cell(4)
+    slider(volume, 0, 100).cell(16)
+    text(s"${volume.read()}%").padding(4).cell(4)
+
+    text("progress").padding(4).cell(4)
+    progress(done, 380, .Success).cell(16)
+    text("").cell(4)
+```
+
+**Two counts, and the reason is how many ways each divides.** `COLUMNS_24` gives halves, thirds,
+quarters, sixths, **eighths** and twelfths — what an ordinary layout asks for. `COLUMNS_60` gives all
+of those except eighths and adds **fifths**, tenths, fifteenths and twentieths; five columns is the
+one common shape 24 cannot express.
+
+A hundred and twenty is the obvious third and is deliberately absent: its whole claim is having eight
+*and* five in one grid, and 24 already has the eight — so the second grid only ever needed to bring
+the five, and 60 brings it at half the count. A span of 40 in 120 reads as a number; 20 in 60 reads
+as a third.
+
+**The count lives in the `Theme`**, for the same reason the colours do: what makes a grid worth
+having is that things in different parts of an interface line up, and they can only do that if
+nobody chose separately. A section wanting fifths writes
+`.restyle(t -> t with { columns = COLUMNS_60 })`.
+
+`.cell(span, offset)` skips `offset` columns first, a line wraps when it runs out, and an unmarked
+child takes the whole width. **`.cell` must be the last link in a chain** — a wrapper outside it
+would answer the grid's question for itself, the same rule that makes `.frame()` stop a `Spacer`
+being flexible.
+
+The edges are computed as `col * (w + gutter) / cols` rather than from a column width, so the
+rounding falls between columns instead of accumulating at the right-hand end, and the last edge lands
+exactly on the width.
+
 ## The table
 
 A scrollable, sortable-width, striped, tappable table — and **it adds no drawing at all**. It is a
@@ -292,7 +337,8 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/color.sysl` — `mix`, `lighten` and `darken`
 - `sh/sysl/ui/phases.sysl` — where an animation lives, in a framework with nowhere to put it
 - `sh/sysl/ui/signal.sysl` — `Signal[T]` and its weak dependent list
-- `sh/sysl/ui/layout.sysl` — `Column` and `Row`
+- `sh/sysl/ui/layout.sysl` — `Column` and `Row`, and the leftover a `Spacer` takes
+- `sh/sysl/ui/grid.sysl` — positioning by fractions of the width
 - `sh/sysl/ui/table.sysl` — a scrollable table, built entirely out of the files above it
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives, and the scrollbar
 - `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against; a

@@ -125,6 +125,16 @@ struct Theme deriving Eq
     // How far a `Soft` ground is mixed from `ground` toward the role's colour, as a percentage.
     soft: int
 
+    // How many columns a `grid` divides its width into, and how much room is left between them.
+    //
+    // **In the theme rather than on the container, because a grid is a property of the design.** A
+    // screen whose containers each named their own division would have no grid at all -- what makes
+    // one worth having is that two things in different parts of an interface line up, and they can
+    // only do that if nobody chose separately. `COLUMNS_24` and `COLUMNS_60` are the two worth
+    // reaching for, and the reason is in `grid.sysl`.
+    columns: int
+    gutter: int
+
     // The colour of a role, which is the whole of what a role is.
     //
     // **A method on the theme rather than a table anywhere else**, so that a theme with a different
@@ -151,7 +161,8 @@ dark() -> Theme =
           on_fill = 0xFFFFFF, ink = 0xE6E8EF, inert = 0x3A3F4B,
           ground = 0x22262F, panel = 0x1C2030, edge = 0x2A2F3A, alt = 0x181B26,
           radius = 6, pad = 8,
-          hover_lift = 14, press_sink = 22, edge_lift = 26, soft = 22)
+          hover_lift = 14, press_sink = 22, edge_lift = 26, soft = 22,
+          columns = COLUMNS_24, gutter = 8)
 
 // The same interface on paper rather than on glass.
 //
@@ -168,7 +179,8 @@ light() -> Theme =
           on_fill = 0xFFFFFF, ink = 0x1A1D24, inert = 0xC3C8D2,
           ground = 0xFFFFFF, panel = 0xF2F4F8, edge = 0xD8DDE6, alt = 0xE9ECF2,
           radius = 6, pad = 8,
-          hover_lift = 8, press_sink = 16, edge_lift = 12, soft = 14)
+          hover_lift = 8, press_sink = 16, edge_lift = 12, soft = 14,
+          columns = COLUMNS_24, gutter = 8)
 
 // A view drawn under a changed theme, and everything below it with it.
 //
