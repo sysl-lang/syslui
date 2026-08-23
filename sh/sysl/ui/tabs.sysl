@@ -1,0 +1,78 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// A row of headers, one of them chosen, and the panel that belongs to it.
+//
+// **There is no `Tabs` view in this file, and that is the whole of what it demonstrates.** A tab bar
+// is a `Row` of `Reactive` headers, each a `Column` of a label over a two-pixel `divider` in the
+// accent, above a rule and the chosen panel. Every one of those already existed. If tabs had needed
+// a new `View` or a new `Canvas` operation it would have meant something below was missing, and the
+// interesting result is that nothing was.
+//
+// **The panel is built lazily and only the chosen one**, which is why the body is a function of the
+// index rather than a list of views. A list would build every panel on every rebuild -- including
+// the three nobody is looking at, each of which may be a whole screen -- to show one.
+//
+// **Which tab is chosen is the application's**, like every other piece of state that outlives a
+// rebuild. A `Tabs` keeping its own index would lose it the first time anything else was written.
+
+// The headers and the panel below them.
+//
+//     tabs(["Details", "History", "Notes"], chosen, i ->
+//         i match
+//             0 -> details_panel()
+//             1 -> history_panel()
+//             _ -> notes_panel())
+tabs(labels: []string, chosen: &Signal[int], body: &Fn(int) -> &View) -> &View
+    var bar: Buf[&View] = buf()
+
+    val at = chosen.read()
+    val safe = if at < 0 || at >= int(labels.len) then 0 else at
+
+    for i in 0..<labels.len
+        bar.push(tab_header(labels[i], int(i), int(i) == safe, chosen))
+
+    // **The row ends with a flexible gap**, so the headers sit at the left rather than being spread
+    // across the width -- a `Row` gives each child what it measured to and the spacer takes the
+    // rest, which is the alignment story doing its ordinary job.
+    bar.push(spacer())
+
+    column([row(bar.view(), 0), divider(), body(safe)], 0)
+end tabs
+
+// One header: a label over an indicator, lit while the pointer is on it.
+//
+// Named `tab_header` rather than `header` because `table.sysl` has a private one of that name --
+// **`private` in sysl is file-private, but the name still resolves across the module**, so two files
+// cannot each keep a private helper of one name.
+//
+// **The indicator is a `divider` restyled**, not something drawn -- a two-pixel rule in the accent
+// under the chosen one and in the panel colour under the others, so every header is the same shape
+// and only its colour says which is which. A header that gained a rule when chosen would be a
+// header that changed height, and the bar would shift as tabs were clicked.
+// **Whether this header is the chosen one is decided at BUILD time and captured**, not read from the
+// signal while painting -- which matters because the panel below is also built once. A header that
+// read the signal live would move its indicator on the frame a tab was tapped, while the panel it
+// points at waited for the rebuild; for one frame the bar would be highlighting the wrong thing.
+//
+// The hover is the opposite and is read while painting, because it is not application state and
+// there is nothing to be out of step with.
+private tab_header(label: string, at: int, on: bool, chosen: &Signal[int]) -> &View =
+    reactive((i, t) -> header_face(t, label, on, i)).on_tap(() -> chosen.set(at))
+
+private header_face(t: Theme, label: string, on: bool, i: Interaction) -> &View
+    // The chosen one is full strength; the others are mixed toward the panel and come back toward
+    // full as the pointer crosses them.
+    val ink = if on then t.ink else mix(t.ink, t.panel, DIM - int(i.hover * real(DIM - LIT)))
+    val bar = if on then t.primary else t.panel
+
+    column([
+        text(label).foreground(ink).padding(t.pad),
+        divider(2).restyle(th -> th with { edge = bar })
+    ], 0)
+end header_face
+
+// How far an unchosen header is mixed toward the panel, at rest and under the pointer.
+private const DIM: int = 45
+private const LIT: int = 15

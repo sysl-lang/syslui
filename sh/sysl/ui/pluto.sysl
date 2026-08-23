@@ -43,6 +43,9 @@ struct PlutoCanvas
     // Who owns the pointer while it is held, so a drag survives leaving what it is dragging.
     hold: Grab
 
+    // What has been raised above the tree and not yet painted.
+    raised: Buf[Overlay]
+
     anim: Phases
 
     // The colour text is drawn in, and the colours to go back to.
@@ -216,6 +219,15 @@ impl Canvas for PlutoCanvas
     end text_size
 
     hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
+
+    raise_above(*self, v: &View, at: Rect) = self.raised.push(Overlay(v, at))
+
+    take_overlays(*self) -> Buf[Overlay]
+        val out = self.raised
+
+        self.raised = buf()
+        out
+    end take_overlays
 end PlutoCanvas
 
 // A canvas over a plutovg canvas and a face, at a size in pixels.
@@ -228,7 +240,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32, ink: u32 = 0xF
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), grabbing(), phases(), ink, buf(), dark(), buf(), map())
+                -1, -1, false, hits(), grabbing(), buf(), phases(), ink, buf(), dark(), buf(), map())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

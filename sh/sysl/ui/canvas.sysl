@@ -180,6 +180,25 @@ trait Canvas
     // and its hit list -- once per measurement to avoid a mutation it is entitled to make.
     text_size(*self, s: string) -> Size
 
+    // Paint this view after the whole tree has been painted, above everything, at `at`.
+    //
+    // **Everything else composes downward and this is the one thing that does not.** A dropdown is
+    // anchored to something small and has to spill out over what comes after it; a dialog covers the
+    // window from somewhere deep inside it. Raising is how: by the time these are painted every
+    // clip has been unwound, so an overlay is unclipped without asking, and because the hit list is
+    // last-wins it is on top for input without asking either.
+    //
+    // **This has no default body, unlike every other member added since the trait was written.** The
+    // rule elsewhere is that not implementing something costs the feature and never the frame -- a
+    // backend that ignores `visible` is merely slower, one that ignores `grab` merely asks the
+    // pointer to stay inside. A backend that ignored this would draw a frame with the dialog
+    // *missing*, which is a wrong picture rather than a plainer one, so it is required and a new
+    // backend is made to think about it.
+    raise_above(*self, v: &View, at: Rect)
+
+    // Take what has been raised, clearing it. `render` is what calls this.
+    take_overlays(*self) -> Buf[Overlay]
+
     // Say that `r` answers to a tap, and what to do about it.
     //
     // **Input is collected by the paint pass rather than by a pass of its own**, which is the
@@ -239,6 +258,9 @@ struct Recorder
 
     // Who owns the pointer while it is held, so a drag can be tested leaving the thing it drags.
     hold: Grab
+
+    // What has been raised above the tree and not yet painted.
+    raised: Buf[Overlay]
 
     // The animations in flight, so that easing can be tested without a clock or a window.
     //
@@ -341,12 +363,27 @@ impl Canvas for Recorder
     hit(*self, r: Rect, f: &Fn() -> unit)
         self.ops.push(s"hit ${r.x},${r.y} ${r.w}x${r.h}")
         self.taps.add(r, f)
+
+    // **Recorded as well as kept**, so a test can see that something was raised without having to
+    // run a whole frame through `render` -- which is the difference between asserting that a menu
+    // opens and asserting what the menu looks like.
+    raise_above(*self, v: &View, at: Rect)
+        self.ops.push(s"raise ${at.x},${at.y} ${at.w}x${at.h}")
+        self.raised.push(Overlay(v, at))
+
+    take_overlays(*self) -> Buf[Overlay]
+        val out = self.raised
+
+        self.raised = buf()
+        out
+    end take_overlays
 end Recorder
 
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(), phases())
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(),
+             buf(), phases())
 
 // The rectangle two of them have in common, which is what nesting one clip inside another leaves.
 //
@@ -403,6 +440,12 @@ impl Canvas for Blind
     text_size(*self, s: string) -> Size = Size(0, 0)
 
     hit(*self, r: Rect, f: &Fn() -> unit) = ()
+
+    // A backend that draws nothing raises nothing, which is the one case where dropping an overlay
+    // is the right answer rather than a missing dialog.
+    raise_above(*self, v: &View, at: Rect) = ()
+
+    take_overlays(*self) -> Buf[Overlay] = buf()
 end Blind
 
 blind() -> Blind = Blind()

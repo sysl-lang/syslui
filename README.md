@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred and forty-four tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred and sixty-nine tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -298,6 +298,53 @@ ordinary row one piece of arithmetic rather than three special cases.
 **The hovered row is a `Reactive`**, so it eases in — the same `Interaction` that drives a button
 drives a table row, and nothing new was needed for it.
 
+## Overlays — the one thing that does not compose downward
+
+Everything else here composes downward: a view is given a rectangle and must not draw outside it, a
+container clips its children, and culling skips what the clip cannot reach. That is exactly wrong for
+a dropdown, which is anchored to something small and has to spill out over what comes after it.
+
+**The answer is a second pass, not a second tree.** A view that wants to be above everything doesn't
+paint itself — it hands the canvas a view and a rectangle, and the frame paints those after the tree.
+By then every clip has been unwound, so an overlay is unclipped without asking; and because the hit
+list is last-wins, it is on top for input without asking either. Neither needed a special case.
+
+```
+button("Options", () -> open.set(!open.read()))
+    .popover(open, menu)              // anchored below the trigger, escapes any clip
+
+body.modal(confirming, confirm_panel, Some(cancel))   // centred, everything under it untappable
+```
+
+Use **`render(tree, c, rect)`** rather than `measure` and `paint` by hand — an application that
+painted the tree itself would silently never draw a dialog, which is the same class of failure as
+forgetting to subscribe a signal, designed out the same way.
+
+`raise_above` is the only member on `Canvas` with **no default body**. Elsewhere the rule is that not
+implementing something costs the feature and never the frame — a backend ignoring `visible` is merely
+slower. A backend ignoring this would draw a frame with the dialog *missing*, which is a wrong
+picture rather than a plainer one.
+
+**What is missing, for a stated reason:** a modal has no dimmed backdrop. Dimming needs alpha and
+`Canvas` has none — a solid rectangle would hide the interface rather than subdue it. What a modal
+must do regardless is stop what's behind being clicked, and a full-size region that swallows taps
+does that on its own.
+
+## Tabs
+
+`tabs(labels, chosen, i -> panel(i))` — **and there is no `Tabs` view.** A tab bar is a `Row` of
+`Reactive` headers, each a `Column` of a label over a restyled two-pixel `divider`, above a rule and
+the chosen panel. All of that already existed; if tabs had needed a new `View` or a new `Canvas`
+operation it would have meant something below was missing.
+
+The panel is a **function of the index**, so only the chosen one is built — a list of views would
+build every panel on every rebuild, including the ones nobody is looking at, to show one.
+
+**Whether a header is chosen is captured at build time, not read while painting**, because the panel
+below it is also built once. A header reading the signal live would move its indicator on the frame a
+tab was tapped while the panel waited for the rebuild — one frame of the bar highlighting the wrong
+thing.
+
 ## Culling
 
 A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
@@ -369,6 +416,9 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/layout.sysl` — `Column` and `Row`, and the leftover a `Spacer` takes
 - `sh/sysl/ui/grid.sysl` — positioning by fractions of the width
 - `sh/sysl/ui/table.sysl` — a scrollable table, built entirely out of the files above it
+- `sh/sysl/ui/tabs.sysl` — a tab bar, built entirely out of the files above it
+- `sh/sysl/ui/overlay.sysl` — `render`, popovers and modals: the second paint pass
+- `sh/sysl/ui/atom.sysl` — application state a module declares, and values derived from it
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives, and the scrollbar
 - `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against; a
   recorder that draws nothing and remembers everything, so the tree can be asserted with no window;

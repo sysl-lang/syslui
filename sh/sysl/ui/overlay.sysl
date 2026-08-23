@@ -1,0 +1,134 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// Things drawn above the tree rather than inside it: a dialog, a menu, a popover, a tooltip.
+//
+// **Everything else in this toolkit composes downward.** A view is given a rectangle and must not
+// draw outside it; a container clips its children; culling skips what the clip cannot reach. That is
+// what makes layout one pass and makes a list of three thousand rows affordable, and it is exactly
+// wrong for a dropdown menu, which is anchored to something small and has to spill out over
+// everything after it.
+//
+// **The answer is a second pass rather than a second tree.** A view that wants to be above
+// everything does not paint itself -- it hands the canvas a view and a rectangle, and the frame
+// paints those after the tree is finished. By then every clip has been unwound, so an overlay is
+// naturally unclipped; and because the hit list is last-wins and overlays are recorded last, an
+// overlay is naturally on top for input too. Neither of those needed a special case.
+//
+// **This is the first thing here that is not simply another view**, and it is the one card 0168's
+// architecture did not already answer. It stays small on purpose: no z-index, no layers, no stacking
+// contexts. Overlays are painted in the order they were raised, and something raised later is on top
+// of something raised earlier, which is the whole of the model.
+
+// One thing to paint after the tree, and where.
+struct Overlay
+    view: &View
+    at: Rect
+end Overlay
+
+// Paint a whole frame: the tree, and then anything the tree raised above itself.
+//
+// **Use this rather than `measure` and `paint` by hand.** An application that painted the tree
+// itself would silently never draw a dialog, and nothing would report it -- which is the same class
+// of failure as forgetting to subscribe a signal, and is designed out the same way, by there being
+// one call that does everything.
+//
+// **An overlay may raise an overlay** -- a menu inside a dialog -- so this drains until nothing new
+// is raised. The depth bound is a backstop against a view that raises itself for ever; eight is far
+// past anything an interface has ever needed, and stopping quietly is better than a frame that never
+// returns.
+render(v: &View, c: *Canvas, at: Rect)
+    v.measure(c, Size(at.w, at.h))
+    v.paint(c, at)
+
+    var depth = 0
+
+    loop
+        val raised = c.take_overlays()
+        val p = raised.view()
+
+        if p.len == 0 then break
+
+        depth += 1
+
+        if depth > MAX_DEPTH then break
+
+        for i in 0..<p.len
+            p[i].view.paint(c, p[i].at)
+end render
+
+// How many times an overlay may raise another before this gives up on it.
+private const MAX_DEPTH: int = 8
+
+// A view attached to another, appearing below it when a signal says so.
+//
+// **The anchor decides where it goes, and the anchor only knows that while painting** -- which is
+// why this is a view rather than something an application positions. A menu under a button has to
+// be under *that* button, wherever layout has put it this frame.
+struct Popover
+    anchor: &View
+    content: &View
+    open: &Signal[bool]
+
+    // Which way it opens, and how far off the anchor it sits.
+    below: bool
+    gap: int
+
+impl View for Popover
+    // **The anchor's size, and never the content's.** A view that measured to include what it might
+    // pop up would reserve room for a closed menu, which is the whole thing an overlay exists to
+    // avoid.
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.anchor.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.anchor.paint(c, r)
+
+        if self.open.read()
+            // Measured unbounded, because what it may take is not what the anchor was given.
+            val s = self.content.measure(c, Size(1_000_000, 1_000_000))
+            val y = if self.below then r.bottom() + self.gap else r.y - self.gap - s.h
+
+            c.raise_above(self.content, Rect(r.x, y, s.w, s.h))
+    end paint
+
+// A view over the whole of what it wraps, with everything under it made untappable.
+//
+// **The catcher is what makes it modal, and it is a hit region rather than a colour.** A scrim that
+// dimmed what is behind needs alpha, and `Canvas` has none -- a solid rectangle would hide the
+// interface rather than subdue it. What a modal has to do regardless is stop the thing behind being
+// clicked, and a full-size region that swallows a tap does that on its own. **The dimming is the
+// part that is missing, and it is missing for a stated reason rather than an oversight.**
+//
+// It is raised *before* the content, so the content's own regions are later and win -- the hit
+// list is last-wins, which is what makes this work with no notion of layers.
+struct Modal
+    child: &View
+    content: &View
+    open: &Signal[bool]
+
+    // What a tap outside the content does. `None` is a modal that must be answered.
+    on_dismiss: Option[&Fn() -> unit]
+
+impl View for Modal
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.child.paint(c, r)
+
+        if self.open.read()
+            val s = self.content.measure(c, Size(r.w, r.h))
+
+            c.raise_above(catcher(self.on_dismiss), r)
+            c.raise_above(self.content,
+                    Rect(r.x + (r.w - s.w) / 2, r.y + (r.h - s.h) / 2, s.w, s.h))
+    end paint
+
+// A view that draws nothing and swallows a tap.
+private catcher(f: Option[&Fn() -> unit]) -> &View =
+    f match
+        Some(g) -> spacer().on_tap(g)
+        None -> spacer().on_tap(() -> ())
+
+// **A `Spacer` is flexible, so it takes the whole rectangle it is raised at** -- which is exactly
+// what a catcher wants, and is the flexible gap doing a second job it was not built for.

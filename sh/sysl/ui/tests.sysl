@@ -2444,6 +2444,8 @@ end a_derivation_stays_right
 // **The counter cannot itself be a signal**, which is worth knowing: writing one inside a derivation
 // moves the clock the derivation is deciding freshness by, so it would be stale the instant it
 // finished and would recompute on every read for ever.
+// **Reached through a reference, or a closure capturing it would count in a copy** -- which is what
+// made a tab test read zero while the thing it was counting had run.
 struct Ticks
     n: int
 
@@ -2453,10 +2455,12 @@ struct Ticks
     end take
 end Ticks
 
+private ticks() -> &Ticks = Ticks(0)
+
 @test
 private a_derivation_caches_between_writes()
     val marker = signal(0)
-    val runs = Ticks(0)
+    val runs = ticks()
     val counted = derived(() -> runs.take())
 
     // One evaluation at construction, one on the first read.
@@ -2513,3 +2517,252 @@ private a_derivation_may_produce_a_view()
 
     assert(label.read() == "LOUD", label.read())
 end a_derivation_may_produce_a_view
+
+// -- overlays -------------------------------------------------------------------------------------
+//
+// **Everything else in the toolkit composes downward** -- a view is given a rectangle and must not
+// draw outside it, and culling skips what a clip cannot reach. That is exactly wrong for a dropdown,
+// which is anchored to something small and has to spill out over what comes after it. An overlay is
+// raised rather than painted, and the frame paints it after the tree.
+
+// A closed popover raises nothing at all, and reserves nothing either.
+@test
+private a_closed_popover_is_not_there()
+    val open = signal(false)
+    val v = text("menu").popover(open, text("one"))
+
+    assert_paints(v, Size(200, 200), Rect(0, 0, 40, 16), "text 0,0 40x16 'menu'\n")
+    assert(measured(v, Size(200, 200)) == Size(32, 16), "and it measures to the anchor alone")
+end a_closed_popover_is_not_there
+
+// **An open one is raised, not painted in place** -- and still measures to the anchor, or a closed
+// menu would reserve room for itself.
+@test
+private an_open_popover_is_raised_below_its_anchor()
+    val open = signal(true)
+    val v = text("menu").popover(open, text("one"))
+    var c = recorder()
+
+    v.paint(&c, Rect(10, 20, 40, 16))
+
+    assert(c.dump() == "text 10,20 40x16 'menu'\nraise 10,40 24x16\n",
+           s"the anchor, then a raise four below it:\n${c.dump()}")
+    assert(measured(v, Size(200, 200)) == Size(32, 16), "and it still measures to the anchor")
+end an_open_popover_is_raised_below_its_anchor
+
+// It may open upward instead, which is what a menu near the bottom of a window wants.
+@test
+private a_popover_may_open_upward()
+    val open = signal(true)
+    var c = recorder()
+
+    text("menu").popover(open, text("one"), false).paint(&c, Rect(10, 100, 40, 16))
+
+    assert(c.dump().contains("raise 10,80 24x16"), s"above the anchor:\n${c.dump()}")
+end a_popover_may_open_upward
+
+// **`render` is what paints them**, after the tree -- which is why an application should use it
+// rather than calling `measure` and `paint` itself and silently never drawing a dialog.
+@test
+private render_paints_the_tree_and_then_what_it_raised()
+    val open = signal(true)
+    var c = recorder()
+
+    render(text("menu").popover(open, text("one")), &c, Rect(0, 0, 40, 16))
+
+    assert(c.dump() == "text 0,0 40x16 'menu'\nraise 0,20 24x16\ntext 0,20 24x16 'one'\n",
+           s"the overlay is painted last, outside the anchor:\n${c.dump()}")
+end render_paints_the_tree_and_then_what_it_raised
+
+// **An overlay escapes the clip in force where it was raised**, which is the whole reason it exists:
+// a menu on a row of a scrolling list must not be cut off at the list's edge.
+@test
+private an_overlay_escapes_the_clip_it_was_raised_under()
+    val open = signal(true)
+    val offset = signal(0)
+    var c = recorder()
+
+    render(scroll(text("menu").popover(open, text("one")), offset, 16), &c, Rect(0, 0, 40, 16))
+
+    // The raise happens inside the clip and the paint happens after `unclip`, at y = 20, which is
+    // outside the sixteen-pixel window entirely.
+    assert(c.dump().contains("unclip\ntext 0,20 24x16 'one'"),
+           s"painted after the clip was unwound:\n${c.dump()}")
+end an_overlay_escapes_the_clip_it_was_raised_under
+
+// And it is on top for input, because the hit list is last-wins and an overlay is recorded last.
+@test
+private an_overlay_takes_the_tap_from_what_is_under_it()
+    val open = signal(true)
+    val hit = signal("nothing")
+    val under: &Fn() -> unit = () -> hit.set("under")
+    val over: &Fn() -> unit = () -> hit.set("over")
+    var c = recorder()
+
+    // The anchor and the overlay are given the same rectangle, so a tap could be either.
+    render(text("menu").on_tap(under).popover(open, text("one").on_tap(over), true, -16),
+           &c, Rect(0, 0, 40, 16))
+
+    assert(c.taps.tap(10, 8), "something answered")
+    assert(hit.read() == "over", s"and it was the overlay: ${hit.read()}")
+end an_overlay_takes_the_tap_from_what_is_under_it
+
+// A modal covers what it wraps, centres its content, and swallows a tap on everything else.
+@test
+private a_modal_centres_its_content_and_catches_what_misses_it()
+    val open = signal(true)
+    val behind = signal(0)
+    val tapped: &Fn() -> unit = () -> behind.set(behind.read() + 1)
+    var c = recorder()
+
+    render(text("page").on_tap(tapped).modal(open, text("hi")), &c, Rect(0, 0, 100, 100))
+
+    // Sixteen wide and sixteen tall, centred in a hundred square.
+    assert(c.dump().contains("text 42,42 16x16 'hi'"), s"centred:\n${c.dump()}")
+
+    assert(c.taps.tap(5, 5), "a tap outside the content is answered")
+    assert_eq(behind.read(), 0, "by the catcher, not by the page underneath")
+end a_modal_centres_its_content_and_catches_what_misses_it
+
+// **A dismissible modal closes when the tap misses**, which is the whole of what the catcher is for
+// beyond blocking. `None` is a modal that has to be answered.
+@test
+private a_dismissible_modal_closes_on_a_tap_outside_it()
+    val open = signal(true)
+    val shut: &Fn() -> unit = () -> open.set(false)
+    var c = recorder()
+
+    render(text("page").modal(open, text("hi"), Some(shut)), &c, Rect(0, 0, 100, 100))
+
+    assert(c.taps.tap(5, 5), "the catcher answered")
+    assert(!open.read(), "and it closed")
+end a_dismissible_modal_closes_on_a_tap_outside_it
+
+// An overlay may raise an overlay -- a menu inside a dialog -- and `render` drains until nothing new
+// is raised.
+@test
+private an_overlay_may_raise_another()
+    val dialog = signal(true)
+    val menu = signal(true)
+    var c = recorder()
+
+    render(text("page").modal(dialog, text("in").popover(menu, text("deep"))),
+           &c, Rect(0, 0, 100, 100))
+
+    assert(c.dump().contains("'deep'"), s"the second round was painted too:\n${c.dump()}")
+end an_overlay_may_raise_another
+
+// Taking them clears them, so a second frame does not paint the first frame's overlays again.
+@test
+private overlays_are_taken_once()
+    val open = signal(true)
+    var c = recorder()
+
+    text("menu").popover(open, text("one")).paint(&c, Rect(0, 0, 40, 16))
+
+    assert(c.take_overlays().view().len == 1usize, "one was raised")
+    assert(c.take_overlays().view().len == 0usize, "and taking it emptied the store")
+end overlays_are_taken_once
+
+// -- tabs -----------------------------------------------------------------------------------------
+//
+// **There is no `Tabs` view**, and that is what these check: a tab bar is a `Row` of `Reactive`
+// headers, each a `Column` of a label over a restyled `divider`, above a rule and the chosen panel.
+// If tabs had needed a new `View` or a new `Canvas` operation it would have meant something below
+// was missing.
+
+private panels(i: int) -> &View = text(s"panel ${i}")
+
+// Only the chosen panel is built, which is why the body is a function of the index rather than a
+// list: a list would build every panel on every rebuild to show one.
+@test
+private only_the_chosen_panel_is_built()
+    val chosen = signal(0)
+    val built = ticks()
+    val v = tabs(["a", "b", "c"], chosen, i -> text(s"panel ${built.take()}"))
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 200, 100))
+
+    assert_eq(built.n, 1, "three tabs and one panel built")
+end only_the_chosen_panel_is_built
+
+// The chosen header carries the accent under it and the others carry the panel colour, so every
+// header is the same shape and only its colour says which is which.
+@test
+private the_chosen_header_wears_the_accent()
+    val chosen = signal(1)
+    var c = recorder()
+
+    tabs(["a", "b"], chosen, panels).paint(&c, Rect(0, 0, 200, 100))
+
+    val d = c.dump()
+    val look = dark()
+
+    assert(d.contains(s"#${look.primary}"), s"the chosen one's indicator:\n${d}")
+    assert(d.contains(s"#${look.panel}"), s"and the other's, which is the same shape:\n${d}")
+end the_chosen_header_wears_the_accent
+
+// Tapping a header chooses it, and the panel that comes back is the new one.
+@test
+private tapping_a_header_chooses_it()
+    val chosen = signal(0)
+    val v = tabs(["one", "two"], chosen, panels)
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 200, 100))
+
+    assert(c.dump().contains("'panel 0'"), s"the first panel:\n${c.dump()}")
+
+    // "one" is three characters plus the theme's padding either side: 24 + 16 = 40 wide, so "two"
+    // starts at 40.
+    assert(c.taps.tap(50, 10), "the second header")
+    assert_eq(chosen.read(), 1)
+
+    // **Rebuilt rather than repainted**, which is what an application does when anything is written:
+    // the whole widget is a snapshot of the state it was built from, so the bar and the panel can
+    // never disagree.
+    var after = recorder()
+
+    tabs(["one", "two"], chosen, panels).paint(&after, Rect(0, 0, 200, 100))
+
+    assert(after.dump().contains("'panel 1'"), s"and now the second panel:\n${after.dump()}")
+end tapping_a_header_chooses_it
+
+// **A header does not change height when it is chosen**, or the bar would shift as tabs were
+// clicked -- which is why the indicator is always there and only its colour changes.
+@test
+private choosing_a_tab_moves_nothing()
+    val chosen = signal(0)
+    val v = tabs(["one", "two"], chosen, panels)
+
+    val before = measured(v, Size(200, 200))
+
+    chosen.set(1)
+
+    assert(measured(v, Size(200, 200)) == before, "the same size whichever is chosen")
+end choosing_a_tab_moves_nothing
+
+// An index outside the list shows the first panel rather than reading past the end.
+@test
+private an_index_outside_the_list_falls_back()
+    val chosen = signal(9)
+    var c = recorder()
+
+    tabs(["a", "b"], chosen, panels).paint(&c, Rect(0, 0, 200, 100))
+
+    assert(c.dump().contains("'panel 0'"), s"the first, not a crash:\n${c.dump()}")
+end an_index_outside_the_list_falls_back
+
+// The headers sit at the left rather than spreading, because the row ends with a flexible gap.
+@test
+private the_headers_sit_at_the_left()
+    val chosen = signal(0)
+    var c = recorder()
+
+    tabs(["a", "b"], chosen, panels).paint(&c, Rect(0, 0, 400, 100))
+
+    // Each label is one character at eight pixels plus eight of padding a side: 24 wide.
+    assert(c.dump().contains("text 8,8 8x16 'a'"), s"the first at the left edge:\n${c.dump()}")
+    assert(c.dump().contains("text 32,8 8x16 'b'"), s"and the second right after it:\n${c.dump()}")
+end the_headers_sit_at_the_left

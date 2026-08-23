@@ -155,6 +155,24 @@ trait View
     // for itself and the span would be lost inside it.
     cell(&self, span: int, offset: int = 0) -> &View = Cell(self, span, offset)
 
+    // Attach a view that appears below this one when `open` reads true, above everything else.
+    //
+    // **The anchor decides where it goes, and only knows that while painting** -- a menu under a
+    // button has to be under *that* button, wherever layout put it this frame. Nothing is reserved
+    // for it while it is closed, which is the whole point of an overlay.
+    popover(&self, open: &Signal[bool], content: &View, below: bool = true,
+            gap: int = 4) -> &View =
+        Popover(self, content, open, below, gap)
+
+    // Cover this view with `content`, centred, and make everything under it untappable.
+    //
+    // **Applied at the root**, because it centres in the rectangle *it* was given -- which is the
+    // window only if it wraps the whole tree. `on_dismiss` is what a tap outside the content does;
+    // `None` is a modal that has to be answered.
+    modal(&self, open: &Signal[bool], content: &View,
+          on_dismiss: Option[&Fn() -> unit] = None) -> &View =
+        Modal(self, content, open, on_dismiss)
+
     // Call `f` when this view is tapped.
     //
     // **A fourth modifier rather than a `Button` widget**, which is worth more than the line it
