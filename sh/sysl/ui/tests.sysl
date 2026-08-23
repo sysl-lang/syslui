@@ -2020,8 +2020,8 @@ end an_unmarked_child_takes_the_whole_width
 // want another colour -- and 24 cannot express a fifth, which is the whole reason 60 is offered.
 @test
 private a_restyle_changes_what_the_grid_divides_by()
-    val fifths = grid([text("a").cell(12)])
-                     .restyle(t -> t with { columns = COLUMNS_60, gutter = 0 })
+    val fifths = grid([text("a").cell(6)])
+                     .restyle(t -> t with { columns = COLUMNS_30, gutter = 0 })
 
     assert_paints(fifths, Size(200, 200), Rect(0, 0, 100, 16), "text 0,0 20x16 'a'\n")
 
@@ -2030,19 +2030,28 @@ private a_restyle_changes_what_the_grid_divides_by()
                   Size(200, 200), Rect(0, 0, 100, 16), "text 0,0 50x16 'a'\n")
 end a_restyle_changes_what_the_grid_divides_by
 
-// Sixty is the second grid because twenty-four already has the eight. Between them they cover every
-// proportion anybody lays anything out in, and a hundred and twenty would only repeat them.
+// **The two counts are complementary rather than coarse and fine**, which is the whole reason there
+// are two: each gives something the other cannot, and both give the proportions everything needs.
 @test
-private the_two_counts_cover_what_a_layout_asks_for()
-    assert_eq(COLUMNS_24 % 8, 0)
-    assert_eq(COLUMNS_24 % 3, 0)
-    assert_eq(COLUMNS_60 % 5, 0)
-    assert_eq(COLUMNS_60 % 3, 0)
+private the_two_counts_are_complementary()
+    // What they share, and what everything is mostly made of.
+    for c in [COLUMNS_24, COLUMNS_30]
+        assert_eq(c % 2, 0)
+        assert_eq(c % 3, 0)
+        assert_eq(c % 6, 0)
 
-    // The one thing each cannot do, which is why there are two of them.
+    // Twenty-four's own: quarters and eighths.
+    assert_eq(COLUMNS_24 % 4, 0)
+    assert_eq(COLUMNS_24 % 8, 0)
+
+    // Thirty's own: fifths and tenths.
+    assert_eq(COLUMNS_30 % 5, 0)
+    assert_eq(COLUMNS_30 % 10, 0)
+
+    // And neither has the other's, which is why one grid would not do.
     assert(COLUMNS_24 % 5 != 0, "twenty-four has no fifth")
-    assert(COLUMNS_60 % 8 != 0, "and sixty has no eighth")
-end the_two_counts_cover_what_a_layout_asks_for
+    assert(COLUMNS_30 % 4 != 0, "and thirty has no quarter")
+end the_two_counts_are_complementary
 
 // A grid is as tall as its lines came out, and as wide as it was offered -- the whole point being to
 // divide a known width, so a grid that asked for one of its own would have nothing to divide.

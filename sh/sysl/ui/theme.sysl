@@ -130,7 +130,7 @@ struct Theme deriving Eq
     // **In the theme rather than on the container, because a grid is a property of the design.** A
     // screen whose containers each named their own division would have no grid at all -- what makes
     // one worth having is that two things in different parts of an interface line up, and they can
-    // only do that if nobody chose separately. `COLUMNS_24` and `COLUMNS_60` are the two worth
+    // only do that if nobody chose separately. `COLUMNS_24` and `COLUMNS_30` are the two worth
     // reaching for, and the reason is in `grid.sysl`.
     columns: int
     gutter: int

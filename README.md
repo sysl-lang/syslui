@@ -205,20 +205,26 @@ grid():
     text("").cell(4)
 ```
 
-**Two counts, and the reason is how many ways each divides.** `COLUMNS_24` gives halves, thirds,
-quarters, sixths, **eighths** and twelfths — what an ordinary layout asks for. `COLUMNS_60` gives all
-of those except eighths and adds **fifths**, tenths, fifteenths and twentieths; five columns is the
-one common shape 24 cannot express.
+**Two counts, chosen to be complementary rather than coarse and fine.** Both give halves, thirds and
+sixths; each gives one thing the other cannot.
 
-A hundred and twenty is the obvious third and is deliberately absent: its whole claim is having eight
-*and* five in one grid, and 24 already has the eight — so the second grid only ever needed to bring
-the five, and 60 brings it at half the count. A span of 40 in 120 reads as a number; 20 in 60 reads
-as a third.
+| | halves | thirds | quarters | fifths | sixths | eighths | tenths |
+|---|---|---|---|---|---|---|---|
+| **24** | 12 | 8 | 6 | — | 4 | 3 | — |
+| **30** | 15 | 10 | — | 6 | 5 | — | 3 |
+
+`COLUMNS_24` is the default — quarters and eighths are what an ordinary layout is made of.
+`COLUMNS_30` is for a layout with fifths in it, which 24 simply cannot express.
+
+**60 and 120 are the obvious alternatives and are deliberately absent.** Each exists only to hold
+both families at once, and the price is a count whose spans stop meaning anything at a glance: a span
+of 40 in 120 reads as a number, where 6 in 30 reads as a fifth. Two small grids you can do arithmetic
+on in your head beat one large one you cannot.
 
 **The count lives in the `Theme`**, for the same reason the colours do: what makes a grid worth
 having is that things in different parts of an interface line up, and they can only do that if
 nobody chose separately. A section wanting fifths writes
-`.restyle(t -> t with { columns = COLUMNS_60 })`.
+`.restyle(t -> t with { columns = COLUMNS_30 })`.
 
 `.cell(span, offset)` skips `offset` columns first, a line wraps when it runs out, and an unmarked
 child takes the whole width. **`.cell` must be the last link in a chain** — a wrapper outside it

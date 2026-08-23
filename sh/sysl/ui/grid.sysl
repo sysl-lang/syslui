@@ -25,23 +25,26 @@ import sysl.buf.{Buf, buf}
 
 // The two divisions worth having, and why they are these two.
 //
-// **A grid's usefulness is entirely in how many ways its count divides**, and between them these two
-// cover every proportion anybody lays anything out in.
+// **A grid's usefulness is entirely in how many ways its count divides**, and these two are chosen
+// to be complementary rather than one to be finer than the other. Both give halves, thirds and
+// sixths; each gives one thing the other cannot.
 //
-// Twenty-four gives halves, thirds, quarters, sixths, **eighths** and twelfths. That is what an
-// ordinary layout asks for, and it is where most design systems settle.
+// | | halves | thirds | quarters | fifths | sixths | eighths | tenths |
+// |---|---|---|---|---|---|---|---|
+// | **24** | 12 | 8 | 6 | — | 4 | 3 | — |
+// | **30** | 15 | 10 | — | 6 | 5 | — | 3 |
 //
-// Sixty gives all of those except eighths, and adds **fifths**, tenths, fifteenths, twentieths and
-// thirtieths. Five columns, or a strip a fifth of the width, is the one common shape twenty-four
-// cannot express -- 24 does not divide by 5.
+// **Twenty-four is the one to reach for by default**: quarters and eighths are what an ordinary
+// layout is made of, and it is where most design systems settle. **Thirty is for a layout with
+// fifths in it** -- five equal panels, or a strip a tenth of the width -- which twenty-four simply
+// cannot express, since 24 does not divide by 5.
 //
-// **A hundred and twenty is the obvious third and is deliberately not here.** Its whole claim is
-// having eight *and* five in one grid, and twenty-four already has the eight -- so the second grid
-// only ever needed to bring the five, and sixty brings it at half the count. A finer grid than it
-// needs to be is a grid whose numbers stop meaning anything at a glance: a span of 40 in 120 reads
-// as a number, where 20 in 60 reads as a third.
+// **Sixty and a hundred and twenty are the obvious alternatives and are deliberately absent.** Each
+// exists only to hold both families at once, and the price of that is a count whose spans stop
+// meaning anything at a glance: a span of 40 in 120 reads as a number, where 6 in 30 reads as a
+// fifth. Two small grids you can do arithmetic on in your head beat one large one you cannot.
 const COLUMNS_24: int = 24
-const COLUMNS_60: int = 60
+const COLUMNS_30: int = 30
 
 // How many columns this view takes, and how many to skip before it.
 //
@@ -148,8 +151,8 @@ end Grid
 
 // Children on the theme's grid.
 //
-// **It takes no column count and no gutter, because the theme has both.** A screen that wants fifths
-// wraps the part that does in `.restyle(t -> t with { columns = COLUMNS_60 })`, which is the same
+// **It takes no column count and no gutter, because the theme has both.** A screen with fifths in it
+// wraps the part that does in `.restyle(t -> t with { columns = COLUMNS_30 })`, which is the same
 // sentence as changing a colour and applies to everything below it rather than to one container --
 // and a grid that differed from its neighbours by a literal at one call site is exactly the thing a
 // grid exists to prevent.
