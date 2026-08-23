@@ -1661,3 +1661,294 @@ private a_backend_with_no_theme_draws_in_the_default_one()
 
     assert(b.theme() == dark(), "and a push it did not implement changes nothing")
 end a_backend_with_no_theme_draws_in_the_default_one
+
+// -- the table ------------------------------------------------------------------------------------
+//
+// **A table adds no drawing at all**, which is the claim the file exists to make: it is a `Column`
+// of `Row`s inside a `Scroll` inside a header, and every one of those already existed. What it adds
+// is the one thing containers cannot do for themselves -- columns that line up.
+
+private demo_rows() -> [][]string =
+    [["a", "1"], ["bbbb", "22"], ["cc", "333"]]
+
+// **Every cell in a column gets the same width**, which is the whole of what a table is. A `Row`
+// gives each child what that child measured to, so without this the second row's edges would sit
+// four characters right of the first's.
+@test
+private a_column_is_as_wide_as_its_widest_cell_and_every_row_agrees()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name"), col("n", true)], demo_rows(), offset, 200).paint(&c, Rect(0, 0, 400, 232))
+
+    // "bbbb" is four characters at eight pixels, plus the theme's padding either side: 32 + 16.
+    // Every row's second column therefore starts at 48, header included.
+    val d = c.dump()
+
+    assert(d.contains("text 8,8 32x16 'name'"), s"the header's first cell:\n${d}")
+    assert(d.contains("text 8,40 8x16 'a'"), s"and a short cell in the same column:\n${d}")
+    assert(d.contains("text 8,72 32x16 'bbbb'"), s"and the widest one, which set the width:\n${d}")
+end a_column_is_as_wide_as_its_widest_cell_and_every_row_agrees
+
+// A fixed column takes exactly what it was given, whatever is in it.
+@test
+private a_fixed_column_ignores_what_is_in_it()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([fixed_col("name", 40), col("n")], demo_rows(), offset, 200).paint(&c, Rect(0, 0, 400, 232))
+
+    // The second column starts at 40 rather than at 48, because the first was told its width.
+    assert(c.dump().contains("text 48,40 8x16 '1'"), s"the second column at 40:\n${c.dump()}")
+end a_fixed_column_ignores_what_is_in_it
+
+// **A right-aligned column lands its text against its right edge**, which is what makes a column of
+// numbers read as one -- and it is a property of the column rather than of any cell, since a cell
+// deciding for itself would get it wrong for the one row whose value happened to be short.
+@test
+private a_right_aligned_column_pushes_its_cells_to_the_end()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([fixed_col("n", 100, true)], [["7"], ["999"]], offset, 200).paint(&c, Rect(0, 0, 400, 232))
+
+    val d = c.dump()
+
+    // One digit is eight wide and three are twenty-four; both end eight from the right edge of the
+    // hundred-pixel column, so they start at different places and finish at the same one.
+    assert(d.contains("text 84,40 8x16 '7'"), s"one digit:\n${d}")
+    assert(d.contains("text 68,72 24x16 '999'"), s"three digits, ending in the same place:\n${d}")
+end a_right_aligned_column_pushes_its_cells_to_the_end
+
+// A flex column takes what is left over, which is what stops a table having a ragged right edge.
+@test
+private a_flex_column_takes_the_room_left_over()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([fixed_col("a", 100), flex_col("b")], [["x", "y"]], offset, 200).paint(&c, Rect(0, 0, 400, 232))
+
+    // 400 less the fixed 100 and one gap a column: the second cell starts where the first ended.
+    assert(c.dump().contains("text 108,40 8x16 'y'"), s"the flex column starts at 100:\n${c.dump()}")
+end a_flex_column_takes_the_room_left_over
+
+// **The header does not scroll**, which is the reason a table is not simply a scrolling column: it
+// is painted outside the scroller, above it.
+@test
+private a_header_stays_where_it_is_when_the_body_scrolls()
+    val offset = signal(1000)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 60).paint(&c, Rect(0, 0, 400, 92))
+
+    val d = c.dump()
+
+    assert(d.contains("text 8,8 32x16 'name'"), s"the header is still at the top:\n${d}")
+    assert(!d.contains("'bbbb'"), s"and every row has scrolled out of sight:\n${d}")
+end a_header_stays_where_it_is_when_the_body_scrolls
+
+// Striping is a `background` on alternate rows, which is what keeps the table free of drawing.
+@test
+private striping_gives_every_other_row_the_themes_alt_ground()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200).paint(&c, Rect(0, 0, 400, 232))
+
+    val d = c.dump()
+
+    assert(d.contains(s"fill 0,64 400x32 #${dark().alt}"), s"the second row is striped:\n${d}")
+    assert(!d.contains(s"fill 0,32 400x32 #${dark().alt}"), s"and the first is not:\n${d}")
+end striping_gives_every_other_row_the_themes_alt_ground
+
+@test
+private striping_can_be_turned_off()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200, None, false).paint(&c, Rect(0, 0, 400, 232))
+
+    assert(!c.dump().contains(s"#${dark().alt}"), s"no stripe anywhere:\n${c.dump()}")
+end striping_can_be_turned_off
+
+// **A tap is answered with the row's index, not its contents**, so a handler outlives whatever the
+// table was built from and an application looks the row up in its own model -- which is where the
+// row actually lives.
+@test
+private tapping_a_row_reports_which_one()
+    val offset = signal(0)
+    val seen = signal(-1)
+    val pick: &Fn(usize) -> unit = i -> seen.set(int(i))
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200, Some(pick)).paint(&c, Rect(0, 0, 400, 232))
+
+    // The header is 32 tall, so the second row starts 32 below the first.
+    assert(c.taps.tap(50, 80), "the second row")
+    assert_eq(seen.read(), 1)
+
+    assert(c.taps.tap(50, 48), "and the first")
+    assert_eq(seen.read(), 0)
+end tapping_a_row_reports_which_one
+
+// A table with no handler offers nothing to click, rather than offering a region that does nothing.
+@test
+private a_table_with_no_handler_registers_no_regions()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200).paint(&c, Rect(0, 0, 400, 232))
+
+    assert(c.taps.len() == 0usize, "nothing to click")
+end a_table_with_no_handler_registers_no_regions
+
+// **The table is styled entirely by the theme**, which is what "stylable" has to mean when a caller
+// cannot see the theme: a restyle at any level above it moves the header, the stripes and the rule.
+@test
+private a_table_is_restyled_from_above()
+    val offset = signal(0)
+    var c = recorder()
+
+    table([col("name")], demo_rows(), offset, 200)
+        .restyle(t -> light())
+        .paint(&c, Rect(0, 0, 400, 232))
+
+    val d = c.dump()
+
+    assert(d.contains(s"#${light().panel}"), s"the light theme's header:\n${d}")
+    assert(d.contains(s"#${light().alt}"), s"and its stripe:\n${d}")
+    assert(!d.contains(s"#${dark().alt}"), s"and none of the dark one's:\n${d}")
+end a_table_is_restyled_from_above
+
+// And the rows below the window are culled like any other list, because the body *is* an ordinary
+// column inside an ordinary scroller.
+@test
+private a_tables_rows_are_culled_like_any_other_list()
+    val offset = signal(0)
+    var rows: Buf[[]string] = buf()
+
+    for i in 0..<200
+        rows.push(["row", "x"])
+
+    var c = recorder()
+
+    table([col("a"), col("b")], rows.view(), offset, 64).paint(&c, Rect(0, 0, 400, 96))
+
+    // Two rows fit in sixty-four pixels, so four cells are drawn and not four hundred.
+    var drawn = 0
+    val d = c.dump()
+
+    for i in 0..<d.len
+        if d[i] == u8('\'') then drawn += 1
+
+    // Two header cells and two rows of two, each quoted twice.
+    assert_eq(drawn / 2, 6)
+end a_tables_rows_are_culled_like_any_other_list
+
+// -- the flexible gap -----------------------------------------------------------------------------
+//
+// **`Spacer` was documented as "the flexible gap" and was nothing of the kind**: it measured to zero
+// and no container ever gave it anything, so every `spacer()` in a row occupied no space at all. It
+// was found by a table's right-aligned column landing its text against the left edge -- which is the
+// value of building something out of the pieces rather than beside them.
+
+// One spacer before a view pushes that view to the end.
+@test
+private a_spacer_pushes_what_follows_it_to_the_end()
+    assert_paints(row([spacer(), text("hi")], 0), Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 84,0 16x16 'hi'\n")
+end a_spacer_pushes_what_follows_it_to_the_end
+
+// Two of them, one either side, centre it -- because a leftover is shared in proportion and that is
+// the whole of the alignment story.
+@test
+private two_spacers_centre_what_is_between_them()
+    assert_paints(row([spacer(), text("hi"), spacer()], 0), Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 42,0 16x16 'hi'\n")
+end two_spacers_centre_what_is_between_them
+
+// And a column stretches on the other axis, from the same code.
+@test
+private a_spacer_works_downwards_too()
+    assert_paints(column([spacer(), text("hi")], 0), Size(200, 200), Rect(0, 0, 40, 100),
+                  "text 0,84 40x16 'hi'\n")
+end a_spacer_works_downwards_too
+
+// **A framed spacer is not flexible**, which is what `frame` means: exactly this size, whatever else
+// is going on. That is what the demo relied on while the flexible one did not work.
+@test
+private a_framed_spacer_takes_only_its_frame()
+    assert_paints(row([spacer().frame(20, 1), text("hi")], 0), Size(200, 200), Rect(0, 0, 100, 16),
+                  "text 20,0 16x16 'hi'\n")
+end a_framed_spacer_takes_only_its_frame
+
+// Nothing is stretched when there is nothing spare, and nothing overflows when there is less than
+// nothing -- a row of children wider than the rectangle it was given still starts them in order.
+@test
+private a_row_with_nothing_to_spare_stretches_nothing()
+    assert_paints(row([spacer(), text("hi")], 0), Size(200, 200), Rect(0, 0, 8, 16),
+                  "text 0,0 16x16 'hi'\n")
+end a_row_with_nothing_to_spare_stretches_nothing
+
+// A view's natural size does not include the stretch, or a row containing a spacer would measure to
+// the whole space offered and a column could not place it.
+@test
+private a_spacer_asks_for_nothing_when_measured()
+    assert(measured(row([spacer(), text("hi")], 0), Size(500, 500)) == Size(16, 16),
+           "sixteen pixels of text and a gap that wants nothing of its own")
+end a_spacer_asks_for_nothing_when_measured
+
+// **A table builds only the rows that can be seen**, which is the one thing it can do that a column
+// of arbitrary views cannot. Culling already stops an invisible row being *painted* -- but the row
+// still has to exist to be culled, and a table's body is built during paint, so at three hundred
+// rows that was twelve thousand boxes made and thrown away every frame. Every row being the same
+// height is what turns "which rows are visible" into arithmetic.
+@test
+private the_window_is_arithmetic_rather_than_a_measurement()
+    // Nothing scrolled: the first row, and the window's worth plus two.
+    assert_eq(window_first(0, 32, 300), 0)
+    assert_eq(window_last(0, 320, 32, 300), 12)
+
+    // Scrolled by ten rows.
+    assert_eq(window_first(320, 32, 300), 10)
+    assert_eq(window_last(10, 320, 32, 300), 22)
+
+    // Part way through a row: that row is still the first, because it is still half visible.
+    assert_eq(window_first(335, 32, 300), 10)
+
+    // Neither end runs past the list, however far it is scrolled.
+    assert_eq(window_first(999_999, 32, 300), 300)
+    assert_eq(window_last(295, 320, 32, 300), 300)
+    assert_eq(window_first(-40, 32, 300), 0)
+
+    // A degenerate row height asks for everything rather than dividing by nothing.
+    assert_eq(window_first(100, 0, 300), 0)
+    assert_eq(window_last(0, 320, 0, 300), 300)
+end the_window_is_arithmetic_rather_than_a_measurement
+
+// And the rows outside the window are a gap rather than nothing, so the list keeps its full height
+// -- which is what the scrollbar's thumb is a fraction of.
+@test
+private a_scrolled_table_keeps_its_full_height()
+    val offset = signal(0)
+    var rows: Buf[[]string] = buf()
+
+    for i in 0..<100
+        rows.push([s"${i}"])
+
+    var top = recorder()
+    var down = recorder()
+
+    val v = table([col("n")], rows.view(), offset, 96)
+
+    v.paint(&top, Rect(0, 0, 200, 128))
+
+    offset.set(1600)
+    v.paint(&down, Rect(0, 0, 200, 128))
+
+    // A hundred rows of 32 is 3200 in a 96 window, so the thumb is at its 24-pixel minimum on a
+    // 96-pixel track that starts below the 32-pixel header. Scrolled by 1600 of the 3104 it can
+    // travel, it has moved 1600 * 72 / 3104 = 37 of the 72 pixels left over.
+    assert(top.dump().contains("fill 192,32 8x24"), s"the thumb at the top:\n${top.dump()}")
+    assert(down.dump().contains("fill 192,69 8x24"), s"and part way down:\n${down.dump()}")
+end a_scrolled_table_keeps_its_full_height

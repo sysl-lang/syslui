@@ -125,6 +125,19 @@ trait View
     // cannot be restyled. Both are worth having and they are not the same request.
     panel(&self) -> &View = Panel(self)
 
+    // How much of a container's leftover room this view wants, relative to its siblings.
+    //
+    // **Zero for everything but a `Spacer`, and that is what makes a flexible gap possible in a
+    // tree whose nodes are erased.** A `Row` cannot ask a child what type it is -- object safety
+    // refuses it -- so a container that wanted to stretch one child would have no way to find it.
+    // A defaulted member turns the question round: the child says, and nothing has to be
+    // recognised.
+    //
+    // **A leftover is shared in proportion**, so two spacers either side of a view centre it and one
+    // spacer before it pushes it to the end. That is the whole of the alignment story, and it is why
+    // there is no `align` parameter on anything.
+    flex(&self) -> int = 0
+
     // Call `f` when this view is tapped.
     //
     // **A fourth modifier rather than a `Button` widget**, which is worth more than the line it
@@ -158,7 +171,11 @@ impl View for Text
             c.text(Rect(r.x, r.y + (r.h - h) / 2, r.w, h), self.s)
     end paint
 
-// A leaf that takes whatever it is offered and draws nothing -- the flexible gap.
+// A leaf that takes whatever is left over and draws nothing -- the flexible gap.
+//
+// **It measures to nothing and is then given a share of what nobody else took**, which is the only
+// way round that works: a natural size of "everything" would make a row containing one as wide as
+// the space offered, and a `Row` measures to what it needs so that a `Column` can place it.
 //
 // **The one place an `end` marker is load-bearing rather than a readability choice**: a struct with
 // no fields has no indented body to dedent out of, so `end Spacer` is what says the declaration is
@@ -167,6 +184,8 @@ struct Spacer end Spacer
 
 impl View for Spacer
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(0, 0)
+
+    override flex(&self) -> int = 1
 
     paint(&self, c: *Canvas, r: Rect) = ()
 

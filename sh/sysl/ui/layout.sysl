@@ -48,17 +48,24 @@ impl View for Column
     // affordable: the height is still needed to know where the next child starts, and the drawing --
     // which is nearly all of the cost -- is skipped. A backend that does not track its clip answers
     // `true` and nothing changes but the bill.
+    //
+    // **And what nobody took is shared between the children that asked for it**, which is what makes
+    // a `Spacer` a flexible gap rather than nothing at all. Every child is measured before any is
+    // placed, because how much is left over is not known until the last one has answered.
     paint(&self, c: *Canvas, r: Rect)
-        var y = r.y
         val v = self.children.view()
+        val (heights, spare, weight) = share(c, v, r.h, self.spacing, true, r.w)
+        val hv = heights.view()
+
+        var y = r.y
 
         for i in 0..<v.len
-            val s = v[i].measure(c, Size(r.w, r.bottom() - y))
-            val at = Rect(r.x, y, r.w, s.h)
+            val h = hv[i] + stretch(v[i].flex(), spare, weight)
+            val at = Rect(r.x, y, r.w, h)
 
             if c.visible(at) then v[i].paint(c, at)
 
-            y += s.h + self.spacing
+            y += h + self.spacing
     end paint
 end Column
 
@@ -87,18 +94,59 @@ impl View for Row
     end measure
 
     paint(&self, c: *Canvas, r: Rect)
-        var x = r.x
         val v = self.children.view()
+        val (widths, spare, weight) = share(c, v, r.w, self.spacing, false, r.h)
+        val wv = widths.view()
+
+        var x = r.x
 
         for i in 0..<v.len
-            val s = v[i].measure(c, Size(r.right() - x, r.h))
-            val at = Rect(x, r.y, s.w, r.h)
+            val w = wv[i] + stretch(v[i].flex(), spare, weight)
+            val at = Rect(x, r.y, w, r.h)
 
             if c.visible(at) then v[i].paint(c, at)
 
-            x += s.w + self.spacing
+            x += w + self.spacing
     end paint
 end Row
+
+// Measure every child along the axis, and say how much room is left and how much of it is wanted.
+//
+// **One pass over the children before any of them is placed**, which is what a flexible gap costs: a
+// container cannot know how much is left over until the last child has answered, so it cannot place
+// the first until then. That is the same double measure `layout.sysl` has always done and hidden
+// nowhere -- the second pass is the paint itself.
+private share(c: *Canvas, v: []&View, along: int, spacing: int, vertical: bool,
+              across: int) -> (Buf[int], int, int)
+    var sizes: Buf[int] = buf()
+    var taken = 0
+    var weight = 0
+    var left = along
+
+    for i in 0..<v.len
+        val avail = if vertical then Size(across, left) else Size(left, across)
+        val s = v[i].measure(c, avail)
+        val n = if vertical then s.h else s.w
+
+        sizes.push(n)
+
+        taken += n
+        weight += v[i].flex()
+        left -= n + spacing
+
+    val gaps = if v.len > 0 then (int(v.len) - 1) * spacing else 0
+    val spare = along - taken - gaps
+
+    (sizes, if spare > 0 then spare else 0, weight)
+end share
+
+// One child's share of the leftover.
+//
+// **Integer division, so the last pixel or two of a leftover is simply not handed out.** Spreading a
+// remainder would put a one-pixel difference between two gaps that are meant to look the same, which
+// is more visible than a gap one pixel narrower than it could have been.
+private stretch(flex: int, spare: int, weight: int) -> int =
+    if flex > 0 && weight > 0 then spare * flex / weight else 0
 
 // The container constructors, and what a trailing block does to them.
 //

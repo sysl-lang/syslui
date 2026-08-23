@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-A hundred tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred and eighteen tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -184,6 +184,46 @@ an unknown surface.
 pixels on and that many off. A general dash array would be a slice a backend has to keep alive past
 the call, and what a dashed border is *for* is saying "provisional" at a glance.
 
+## The table
+
+A scrollable, sortable-width, striped, tappable table — and **it adds no drawing at all**. It is a
+`Column` of `Row`s inside a `Scroll` under a header that does not scroll, and every one of those
+already existed. If a table had needed a new `Canvas` operation it would have meant the surface was
+wrong, rather than that tables are special.
+
+```
+table([col("#", true), flex_col("name"), col("status"), col("value", true)],
+      rows, offset, 340, Some(i -> select(i)))
+```
+
+**What it adds is the one thing containers cannot do for themselves: columns that line up.** A `Row`
+gives each child the width that child measured to, so two rows of the same shape produce two
+different sets of column edges the moment one cell's text is longer. So the widths are decided once,
+by the table, from the header and every cell, and handed down as fixed frames. Three kinds:
+`col` fits its widest cell, `fixed_col` takes exactly what it is given, `flex_col` shares out what is
+left over.
+
+**Cells are strings, not views, and that is a deliberate limit.** A cell that could be any `&View`
+would mean measuring a tree per cell to decide a column width, twice a frame, for every row including
+the ones nobody can see. Strings go through the canvas's measurement cache, so a column's width costs
+one shaping pass per distinct string for the life of the canvas.
+
+That limit buys the thing culling could not: **a table builds only the rows that can be seen.**
+Culling stops an invisible row being *painted*, but the row still has to exist to be culled — and a
+table's body is built during paint, so 300 rows meant 12,605 boxes made and thrown away every frame.
+Every row being the same height turns "which rows are visible" into arithmetic, and the rows above
+and below become two framed spacers so the list keeps its full height for the scrollbar to be a
+fraction of.
+
+| | allocations a frame | frame |
+|---|---:|---:|
+| all rows built | 12,605 | 1.69 ms |
+| only the window | **933** | **1.21 ms** |
+| …at 3000 rows | **933** | **1.33 ms** |
+
+**The whole of its appearance comes off the theme** — header, stripes, rule, scrollbar — so a
+`.restyle(t -> light())` anywhere above it restyles all of it.
+
 ## Culling
 
 A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
@@ -253,7 +293,8 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/phases.sysl` — where an animation lives, in a framework with nowhere to put it
 - `sh/sysl/ui/signal.sysl` — `Signal[T]` and its weak dependent list
 - `sh/sysl/ui/layout.sysl` — `Column` and `Row`
-- `sh/sysl/ui/scroll.sysl` — where long-lived state lives
+- `sh/sysl/ui/table.sysl` — a scrollable table, built entirely out of the files above it
+- `sh/sysl/ui/scroll.sysl` — where long-lived state lives, and the scrollbar
 - `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against; a
   recorder that draws nothing and remembers everything, so the tree can be asserted with no window;
   and `Blind`, the smallest thing that satisfies the trait, which is there to say what a backend

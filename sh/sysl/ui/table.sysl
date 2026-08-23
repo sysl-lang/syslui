@@ -1,0 +1,262 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// A scrollable table, which is the first thing here made entirely out of other things.
+//
+// **There is no new drawing in this file and that is the claim it exists to make.** A table is a
+// `Column` of `Row`s inside a `Scroll` inside a `Panel`, with a header `Row` that does not scroll
+// and a striped ground per row -- every one of those already existed, and if a table had needed a
+// new `Canvas` operation it would have meant the surface was wrong rather than that tables are
+// special.
+//
+// **What it does add is the thing containers cannot do for themselves: columns that line up.** A
+// `Row` gives each child the width that child measured to, so two rows of the same shape produce two
+// different sets of column edges the moment one cell's text is longer. A table is exactly the
+// promise that they do not, so the widths are decided once, by the table, from the header and every
+// cell -- and handed down as fixed frames.
+
+// How wide a column is, and what decides it.
+//
+// **Three ways rather than one, because a real table needs all three**: a name column takes what it
+// needs, a quantity column is a fixed narrow thing, and one column has to soak up the room left over
+// or the table has a ragged right edge.
+enum Width
+    // As wide as the widest thing in it, header included.
+    Fit
+
+    // Exactly this many pixels.
+    Fixed(w: int)
+
+    // Whatever is left after the others, shared between every `Flex` column.
+    Flex
+end Width
+
+// One column: what it is called, how wide it is, and how its cells are aligned.
+//
+// Named `Col` rather than `Column`, which is the vertical container in `layout.sysl` -- a table's
+// column and a layout's column are different enough that sharing a name would be a trap.
+struct Col
+    title: string
+    width: Width
+
+    // **Right alignment is why this is here and not a property of the cell.** A number column reads
+    // as a number column because its digits line up on the right, and that is a fact about the
+    // column rather than about any one value in it -- so a cell that decided for itself would get it
+    // wrong for the one row whose value happened to be short.
+    right: bool
+end Col
+
+// A column as wide as its widest cell.
+col(title: string, right: bool = false) -> Col = Col(title, Width.Fit, right)
+
+// A column of a fixed width, for something whose length says nothing about how much room it wants.
+fixed_col(title: string, w: int, right: bool = false) -> Col = Col(title, Width.Fixed(w), right)
+
+// The column that takes what is left. More than one shares it equally.
+flex_col(title: string, right: bool = false) -> Col = Col(title, Width.Flex, right)
+
+// The table itself.
+//
+// **The rows are strings rather than views, and that is a deliberate limit rather than an
+// oversight.** A cell that could be any `&View` would be a table that has to measure a tree per cell
+// to decide a column width, twice a frame, for every row including the ones nobody can see -- which
+// is exactly the cost culling was added to remove. Strings are measured through the canvas's cache,
+// so a column's width costs one shaping pass per distinct string for the life of the canvas.
+//
+// A table whose cells genuinely need views is a `Column` of `Row`s, which is what this is made of
+// and is two lines to write by hand.
+struct Table
+    columns: []Col
+    rows: [][]string
+
+    // Where the list is scrolled to. The application's, like every other piece of state that has to
+    // outlive a rebuild.
+    offset: &Signal[int]
+
+    // How tall the scrolling part is. The header sits above it and does not move.
+    height: int
+
+    // Called with the index of a row that was tapped, if anything was.
+    on_row: Option[&Fn(usize) -> unit]
+
+    // Whether alternate rows take the theme's `alt` ground.
+    striped: bool
+end Table
+
+// How tall one row is: a line of text and the theme's padding above and below it.
+private row_height(c: *Canvas, t: Theme) -> int = c.text_size("Ag").h + 2 * t.pad
+
+// The width every column ends up with, in order.
+//
+// **Decided once, from the header and every cell**, which is the whole of what a table adds to a
+// column of rows: a `Row` gives each child what that child measured to, so rows of the same shape
+// produce different column edges the moment one cell's text is longer.
+//
+// **`Fit` reads every row, including the ones scrolled out of sight**, and that is the honest cost
+// of a table whose columns do not shift as you scroll. It is measurement rather than drawing, so it
+// goes through the canvas's cache, and a column of a thousand distinct strings is a thousand shaping
+// passes once rather than per frame. A table that cannot afford it wants `Fixed`.
+private widths(c: *Canvas, t: Theme, cols: []Col, rows: [][]string, avail: int) -> Buf[int]
+    var out: Buf[int] = buf()
+    var taken = 0
+    var flexes = 0
+    val gap = t.pad
+
+    for i in 0..<cols.len
+        cols[i].width match
+            Fixed(w) ->
+                out.push(w)
+                taken += w
+            Flex ->
+                out.push(0)
+                flexes += 1
+            Fit ->
+                var w = c.text_size(cols[i].title).w
+
+                for r in 0..<rows.len
+                    if i < rows[r].len
+                        val cw = c.text_size(rows[r][i]).w
+
+                        if cw > w then w = cw
+
+                out.push(w + 2 * gap)
+                taken += w + 2 * gap
+
+    if flexes > 0
+        val spare = avail - taken - gap * int(cols.len)
+        val each = if spare > 0 then spare / flexes else 0
+        val v = out.view()
+
+        for i in 0..<cols.len
+            if v[i] == 0 then out.set(i, each)
+
+    out
+end widths
+
+// One row of cells, laid out to the widths the table settled on.
+private cells(t: Theme, cols: []Col, values: []string, w: Buf[int]) -> &View
+    var out: Buf[&View] = buf()
+    val v = w.view()
+
+    for i in 0..<cols.len
+        val s = if i < values.len then values[i] else ""
+
+        // **A fixed frame is what makes the columns line up**, and it is the one thing the table
+        // does that a hand-written row could not: the cell is told its width rather than asked.
+        out.push(align(text(s), cols[i].right, v[i], t))
+
+    row(out.view(), 0)
+end cells
+
+// A cell inside its column's width, pushed to whichever end the column says.
+//
+// Right alignment is a `Row` of a spacer and the text, which works because a `Row` gives a child the
+// width it measured to and a `Spacer` measures to nothing -- so the text lands hard against the
+// right edge of the frame it is wrapped in.
+private align(v: &View, right: bool, w: int, t: Theme) -> &View =
+    if right then
+        row([spacer(), v.padding(t.pad)], 0).frame(w, 0)
+    else
+        row([v.padding(t.pad), spacer()], 0).frame(w, 0)
+
+impl View for Table
+    measure(&self, c: *Canvas, avail: Size) -> Size =
+        Size(avail.w, self.height + row_height(c, c.theme()))
+
+    paint(&self, c: *Canvas, r: Rect)
+        val t = c.theme()
+        val h = row_height(c, t)
+        val w = widths(c, t, self.columns, self.rows, r.w)
+
+        // The header, which does not scroll.
+        header(t, self.columns, w).paint(c, Rect(r.x, r.y, r.w, h))
+        c.fill(Rect(r.x, r.y + h - 1, r.w, 1), t.edge)
+
+        scroll(body(t, self, w, h), self.offset, self.height)
+            .paint(c, Rect(r.x, r.y + h, r.w, self.height))
+    end paint
+
+// The header row: the column titles on the theme's panel, over a rule.
+private header(t: Theme, cols: []Col, w: Buf[int]) -> &View
+    var titles: Buf[string] = buf()
+
+    for i in 0..<cols.len
+        titles.push(cols[i].title)
+
+    cells(t, cols, titles.view(), w).foreground(mix(t.ink, t.panel, 35)).background(t.panel)
+end header
+
+// The rows that can actually be seen, with a gap standing in for the ones above and below.
+//
+// **This is the one thing a table can do that a column of arbitrary views cannot: skip building what
+// nobody can see.** Culling already stops an invisible row being *painted*, but the row still has to
+// exist to be culled -- and a table's body is built during `paint`, so at three hundred rows that
+// was twelve thousand boxes made and thrown away every frame. Restricting a cell to a string is what
+// buys this back: every row is the same height, so which rows are in the window is arithmetic rather
+// than a measurement.
+//
+// **The gaps above and below are framed spacers**, so the column still measures to the full content
+// height -- which is what the scrollbar's thumb is a fraction of, and what stops the list changing
+// length as it is scrolled.
+private body(t: Theme, table: &Table, w: Buf[int], h: int) -> &View
+    var out: Buf[&View] = buf()
+    val n = int(table.rows.len)
+
+    // A row either side of the window, so a partly-scrolled row at either edge is there to draw.
+    val first = window_first(table.offset.read(), h, n)
+    val last = window_last(first, table.height, h, n)
+
+    if first > 0 then out.push(spacer().frame(0, first * h))
+
+    for i in first..<last
+        var v = cells(t, table.columns, table.rows[usize(i)], w).frame(0, h)
+
+        if table.striped && i % 2 == 1 then v = v.background(t.alt)
+
+        table.on_row match
+            Some(f) ->
+                // **The index is captured, not the row**, so a handler outlives whatever the table
+                // was built from and an application looks the row up in its own model -- which is
+                // where the row actually lives.
+                val at = usize(i)
+
+                out.push(v.on_tap(() -> f(at)))
+            None -> out.push(v)
+
+    if last < n then out.push(spacer().frame(0, (n - last) * h))
+
+    column(out.view(), 0)
+end body
+
+// The first row the window can reach, and the last.
+//
+// **Separate functions because they are the arithmetic that can be wrong**, and they are testable
+// without a canvas: an off-by-one here is a row that flickers in and out at the edge of a scroll,
+// which is the sort of thing a recording-based test sees and a person does not.
+window_first(offset: int, row_h: int, rows: int) -> int
+    if row_h <= 0 then return 0
+
+    val at = offset / row_h
+    val top = if at < 0 then 0 else at
+
+    if top > rows then rows else top
+end window_first
+
+window_last(first: int, height: int, row_h: int, rows: int) -> int
+    if row_h <= 0 then return rows
+
+    // One past the window, so a row scrolled half out at the bottom is still built.
+    val end = first + height / row_h + 2
+
+    if end > rows then rows else end
+end window_last
+
+// A scrollable table of strings.
+//
+// **`offset` is the application's**, like every other piece of state that has to outlive a rebuild:
+// a table that kept its own scroll position would lose it on the first signal write, which is the
+// finding `scroll.sysl` was written around.
+table(columns: []Col, rows: [][]string, offset: &Signal[int], height: int,
+      on_row: Option[&Fn(usize) -> unit] = None, striped: bool = true) -> &View =
+    Table(columns, rows, offset, height, on_row, striped)
