@@ -953,6 +953,127 @@ private a_tap_on_a_checkbox_label_checks_it()
     assert(on.read(), "and tapping the label checked it")
 end a_tap_on_a_checkbox_label_checks_it
 
+// An unchosen option is a ring and nothing else -- the same shape as an unchecked box with both
+// radii at half the side, and the missing third `fill` is the dot it does not have yet.
+@test
+private an_unchosen_radio_draws_no_dot()
+    val chosen = signal(1)
+
+    assert_paints(radio(chosen, 0, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  s"fill 0,0 18x18 #${dark().ground} r9\n" +
+                  s"stroke 0,0 18x18 #${dark().inert} w2 r9\n" +
+                  "text 26,1 40x16 'label'\n" +
+                  "hit 0,0 66x18\n")
+end an_unchosen_radio_draws_no_dot
+
+// And the chosen one is filled, ringed in the accent, and carries a dot that is round rather than
+// square -- `r4` on an eight-pixel mark, which is the one number that distinguishes this paint from
+// a checkbox's.
+@test
+private the_chosen_radio_is_filled_and_dotted()
+    val chosen = signal(0)
+
+    assert_paints(radio(chosen, 0, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  s"fill 0,0 18x18 #${dark().primary} r9\n" +
+                  s"stroke 0,0 18x18 #${dark().primary} w2 r9\n" +
+                  s"fill 5,5 8x8 #${dark().on_fill} r4\n" +
+                  "text 26,1 40x16 'label'\n" +
+                  "hit 0,0 66x18\n")
+end the_chosen_radio_is_filled_and_dotted
+
+// Pointing at the label lights the ring, for the reason the checkbox's does: the `Reactive` is the
+// whole row, so a dot two levels down draws from the row's state and nothing had to be told.
+@test
+private pointing_at_a_radio_label_lights_its_ring()
+    val chosen = signal(1)
+    val v = radio(chosen, 0, "label")
+
+    var away = recorder()
+    var over = recorder()
+
+    away.point(300, 300)
+    over.point(50, 9)
+
+    v.paint(&away, Rect(0, 0, 66, 18))
+    v.paint(&over, Rect(0, 0, 66, 18))
+
+    assert(away.dump() != over.dump(), "the pointer is on the label and the ring knows")
+    assert(over.dump() == s"fill 0,0 18x18 #${dark().ground} r9\n" +
+                          s"stroke 0,0 18x18 #${lighten(dark().inert, 20)} w2 r9\n" +
+                          "text 26,1 40x16 'label'\n" +
+                          "hit 0,0 66x18\n",
+           s"the lit ring:\n${over.dump()}")
+end pointing_at_a_radio_label_lights_its_ring
+
+// **Choosing an option unchooses the others by construction**, which is the claim the whole design
+// rests on: there is one `int`, so there is no state in which two options are on and no code
+// anywhere that has to clear the previous one.
+@test
+private choosing_one_option_unchooses_the_rest()
+    val chosen = signal(0)
+    var c = recorder()
+
+    radio_group(["a", "b", "c"], chosen).paint(&c, Rect(0, 0, 120, 66))
+
+    assert(c.taps.tap(50, 30), "the second option's row holds the point")
+    assert(chosen.read() == 1, s"the second option is chosen, not ${chosen.read()}")
+
+    assert(c.taps.tap(50, 54), "the third option's row holds the point")
+    assert(chosen.read() == 2, s"and choosing it left the second behind, not ${chosen.read()}")
+end choosing_one_option_unchooses_the_rest
+
+// **A radio sets and never clears**, which is what a second tap on the chosen option proves: a
+// checkbox in the same place would have gone back off.
+@test
+private tapping_the_chosen_option_leaves_it_chosen()
+    val chosen = signal(1)
+    var c = recorder()
+
+    radio_group(["a", "b", "c"], chosen).paint(&c, Rect(0, 0, 120, 66))
+
+    assert(c.taps.tap(50, 30), "the chosen option's own row")
+    assert(chosen.read() == 1, "and it is still chosen")
+end tapping_the_chosen_option_leaves_it_chosen
+
+// **And it writes nothing at all when it does, which is not a nicety.** A write moves the clock, an
+// application repaints on a moved clock, so an unguarded `set` would repaint the window for every
+// click on the option that was already on. The slider guards its drag for the same reason.
+@test
+private tapping_the_chosen_option_writes_nothing()
+    val chosen = signal(1)
+    var c = recorder()
+
+    radio_group(["a", "b", "c"], chosen).paint(&c, Rect(0, 0, 120, 66))
+
+    val before = writes()
+
+    assert(c.taps.tap(50, 30), "the chosen option's own row")
+    assert(writes() == before, "the clock did not move")
+
+    assert(c.taps.tap(50, 6), "and now a different option")
+    assert(writes() > before, "which did move it")
+end tapping_the_chosen_option_writes_nothing
+
+// A group is a column of its options and holds no invariant of its own -- so the same signal drives
+// options built anywhere, and `radio` on its own is a first-class thing to write.
+@test
+private a_group_is_a_column_and_nothing_more()
+    val chosen = signal(0)
+    val group = radio_group(["a", "b"], chosen)
+    val hand = column([radio(chosen, 0, "a"), radio(chosen, 1, "b")], 6)
+
+    var one = recorder()
+    var two = recorder()
+
+    group.paint(&one, Rect(0, 0, 120, 42))
+    hand.paint(&two, Rect(0, 0, 120, 42))
+
+    assert(one.dump() == two.dump(), s"a group is its options in a column:\n${one.dump()}")
+    assert(measured(group, Size(200, 200)) == Size(34, 42),
+           s"two 18px rows and the 6px between them: ${measured(group, Size(200, 200)).w}x" +
+           s"${measured(group, Size(200, 200)).h}")
+end a_group_is_a_column_and_nothing_more
+
 // **A slider reads the pointer's position, which no other control does**, and the value it computes
 // is the fraction of the way along the part of the track the knob can actually reach.
 @test

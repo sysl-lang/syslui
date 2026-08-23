@@ -1,5 +1,7 @@
 module sh.sysl.ui
 
+import sysl.seq.{Sequence, generate}
+
 // The controls, and what they are all made of.
 //
 // **Every widget here is the same four things**: a size it asks for, some filled rounded rectangles,
@@ -41,6 +43,7 @@ private const SWITCH_SLOT: int = 2
 private const CHECK_SLOT: int = 3
 private const KNOB_SLOT: int = 4
 private const FILL_SLOT: int = 5
+private const DOT_SLOT: int = 6
 
 // Which grabbable thing a slider is, in the canvas's single grab. Slots are a namespace of their
 // own here rather than shared with the animation slots above, because they are stored apart.
@@ -160,6 +163,76 @@ checkbox(on: &Signal[bool], label: string, role: Role = Role.Primary) -> &View
     val flip: &Fn() -> unit = () -> on.set(!on.read())
 
     reactive((i, t) -> row([Box(on, role, i), text(label)], 8)).on_tap(flip)
+
+// ## The radio button
+
+// The circle half of a radio button: a ring that fills with a dot when its option is the chosen one.
+//
+// **It is `Box` with two radii changed, and that is the argument for these being two views rather
+// than one with a shape field.** A checkbox and a radio differ in one thing a person can see --
+// square or round -- and in one they cannot: a checkbox owns its value, and a radio owns only
+// *which* value, so the state it draws from is a comparison rather than a flag. Folding them
+// together would mean a signal that was sometimes a `bool` and sometimes an `int`, which is two
+// controls wearing one name.
+//
+// **Which option is chosen is read while painting rather than captured at build**, exactly as a
+// checkbox's value is. `tabs.sysl` does the opposite deliberately, because a tab bar builds a panel
+// beside its headers and the two must agree on the same frame; a radio builds nothing but itself, so
+// a live read has nothing to get out of step with.
+struct Dot
+    chosen: &Signal[int]
+    at: int
+    role: Role
+    i: Interaction
+
+impl View for Dot
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(BOX_SIDE, BOX_SIDE)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val look = c.theme()
+        val color = look.color(self.role)
+        val b = inside(r, BOX_SIDE, BOX_SIDE)
+        val t = c.phase(b, DOT_SLOT, if self.chosen.read() == self.at then 1.0 else 0.0, FLIP_RATE)
+        val edge = mix(look.inert, color, int(t * 100.0))
+
+        c.fill(b, mix(look.ground, color, int(t * 100.0)), b.w / 2)
+        c.stroke(b, lighten(edge, int(self.i.hover * 20.0)), 2, b.w / 2)
+
+        // The dot, inset by however far in it has got, and rounded to its own half -- **a mark that
+        // grew as a square inside a ring would show its corners** on the way in, which is the one
+        // line of the checkbox's arithmetic that could not simply be reused.
+        val inset = int((1.0 - t) * real(b.w) / 2.0) + 5
+        val side = b.w - 2 * inset
+
+        if side > 0 then c.fill(Rect(b.x + inset, b.y + inset, side, side), look.on_fill, side / 2)
+    end paint
+
+// One option of a group: a dot and its label, tappable as one thing.
+//
+// **A radio sets and never clears, which is the whole of what makes it not a checkbox.** Tapping the
+// chosen option writes nothing at all, and that guard is the slider's guard for the slider's reason
+// rather than a nicety: a write notifies, a notify marks the frame dirty, and an unguarded set would
+// repaint the window every time somebody clicked the option that was already on.
+//
+// **A group is an `int` and its options are indices**, which is `tabs`'s choice made again and for
+// the same reason: an application has to name an option somewhere, and an index is the one name
+// every list of labels arrives with. A group over an enum is this call with `int(kind)`.
+radio(chosen: &Signal[int], at: int, label: string, role: Role = Role.Primary) -> &View
+    val pick: &Fn() -> unit = () -> if chosen.read() != at then chosen.set(at)
+
+    reactive((i, t) -> row([Dot(chosen, at, role, i), text(label)], 8)).on_tap(pick)
+end radio
+
+// A column of options over one signal, one of them chosen.
+//
+// **There is no `RadioGroup` view and nothing here is new**, which is `tabs.sysl`'s finding arriving
+// a second time. The mutual exclusion a radio group exists for lives entirely in the single `int`
+// its options share, so the group is a `column` of them and the invariant belongs to the signal
+// rather than to a container. A group that owned a view could not put one option in one half of a
+// form and the rest in the other; this one can, because `radio` is callable on its own.
+radio_group(labels: []string, chosen: &Signal[int], role: Role = Role.Primary,
+            spacing: int = 6) -> &View =
+    column(generate(labels.len, i -> radio(chosen, int(i), labels[i], role)), spacing)
 
 // ## The slider
 

@@ -111,9 +111,9 @@ settled on, so adding one moves nothing. Text colour is canvas state rather than
 
 ## The controls
 
-`switch`, `checkbox`, `slider`, `progress` and `divider`, in `widgets.sysl`. Every one of them is
-the same four things: a size it asks for, some filled rounded rectangles, a question put to the
-canvas about the pointer, and a phase easing toward the answer. There is nothing else, because
+`switch`, `checkbox`, `radio`, `slider`, `progress` and `divider`, in `widgets.sysl`. Every one of
+them is the same four things: a size it asks for, some filled rounded rectangles, a question put to
+the canvas about the pointer, and a phase easing toward the answer. There is nothing else, because
 `Canvas` offers nothing else — which is what lets a switch drawn as two rounded rectangles be a
 switch on a phone as well as on a desktop.
 
@@ -126,6 +126,10 @@ Two of them are worth singling out:
 - **A checkbox is a `Reactive` wrapping a `Row` wrapping a state-dependent leaf**, so pointing at
   the *label* lights the *box*. No widget had to be told about another; it is the styling layer
   composing somewhere other than a button.
+- **A radio group is a `column` of options over one `int`, and there is no `RadioGroup` view.** The
+  mutual exclusion it exists for lives entirely in the signal its options share, so there is no state
+  in which two are on and nothing anywhere has to clear the previous one — which is also why an
+  option is callable on its own and can sit in a different half of a form from its siblings.
 - **A slider is the one thing that reads the pointer's position**, because a hit region carries no
   coordinate and a control whose value *is* a coordinate cannot be served by one. So `Canvas` gained
   `pointer()`, the drag happens during `paint`, and the write is guarded on the value actually
@@ -457,7 +461,7 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/view.sysl` — the `View` trait, the leaves, and the modifiers
 - `sh/sysl/ui/theme.sysl` — `Theme`, `Role`, `Variant`, and the `Themed`/`Panel` views
 - `sh/sysl/ui/style.sysl` — `Interaction`, `Reactive`, and `button`'s four variants built on them
-- `sh/sysl/ui/widgets.sysl` — `switch`, `checkbox`, `slider`, `progress` and `divider`
+- `sh/sysl/ui/widgets.sysl` — `switch`, `checkbox`, `radio`, `slider`, `progress` and `divider`
 - `sh/sysl/ui/color.sysl` — `mix`, `lighten` and `darken`
 - `sh/sysl/ui/phases.sysl` — where an animation lives, in a framework with nowhere to put it
 - `sh/sysl/ui/signal.sysl` — `Signal[T]` and its weak dependent list
