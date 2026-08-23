@@ -2,6 +2,18 @@
 
 A declarative retained user interface for sysl, for a machine with a heap.
 
+```
+dependencies {
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.0" }
+}
+```
+
+**The presentation is not in here.** What the toolkit produces is a block of premultiplied ARGB32
+pixels, and putting those on a screen is somebody else's job — [`syslui-sdl`](https://github.com/sysl-lang/syslui-sdl)
+is that somebody for a window, on a desktop and on a phone. It is a separate package because a link
+directive is never pruned: SDL3 has no business on the link line of a program that draws into a
+panel, which is the same argument that makes SDL3 four packages in this org rather than one.
+
 It began as a probe — card `0203` asks six questions about whether the architecture decided in
 `0168` survives contact with the compiler — and all six are answered. What is here now is a styling
 layer built on top of those answers: chainable modifiers, a view whose appearance is decided while it
