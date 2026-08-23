@@ -20,6 +20,16 @@ import sysl.buf.{Buf, buf}
 // **Measurement is on this trait and not on the view**, which is the one thing the recorder version
 // of the probe got wrong: `Text` measured itself at eight pixels a byte, and a row of a list is
 // however tall the font says it is. A canvas knows its font; a view does not and should not.
+//
+// **EVERY OPERATION HERE IS DRAWABLE WITH FILLED RECTANGLES AND A GLYPH RUN, AND THAT IS THE
+// CONSTRAINT RATHER THAN AN ACCIDENT.** The toolkit has to run where there is no vector graphics
+// library at all -- a phone, where the backend is plain SDL3 and nothing else -- so a rounded corner
+// here is spans of pixels a backend fills row by row, not a path handed to a rasterizer. A backend
+// that *does* have one is free to use it, and gets the same picture; a backend that does not is
+// never asked for something it cannot draw.
+//
+// That is what keeps this surface small, and small is what makes a second backend cheap. Anything
+// that cannot be expressed as rectangles, a glyph run and a clip belongs in a layer above this one.
 trait Canvas
     // Fill a rectangle with a solid colour, 0xRRGGBB.
     fill(*self, r: Rect, color: u32)
@@ -27,10 +37,53 @@ trait Canvas
     // Draw a run of text with its top-left at `r`, clipped to `r`.
     text(*self, r: Rect, t: string)
 
+    // Fill a rectangle whose corners are rounded by `radius`.
+    //
+    // **A fill and a stroke rather than one styled box**, because the modifiers are separate and a
+    // backend should not be asked to draw what nobody wrote: `.background(c, radius: 8)` fills and
+    // `.border(c, 1, radius: 8)` strokes, and a view wearing both makes two calls in the order the
+    // chain put them. There is no colour meaning "none", and this is why one is not needed.
+    //
+    // `radius` of zero is square, so `round(r, c, 0)` is `fill(r, c)` and a backend may say so.
+    round(*self, r: Rect, color: u32, radius: int)
+
+    // Outline a rectangle, `width` pixels thick, drawn **inside** `r` and rounded by `radius`.
+    //
+    // Inside rather than centred on the edge, so a bordered view occupies exactly the rectangle
+    // layout gave it and never bleeds into a neighbour -- which is what lets a border be added to a
+    // view without moving anything around it.
+    stroke(*self, r: Rect, color: u32, width: int, radius: int)
+
     // Restrict drawing to `r` until the matching `unclip`.
     clip(*self, r: Rect)
 
     unclip(*self)
+
+    // The colour text is drawn in, until the matching `unink`.
+    //
+    // **Text colour is canvas state rather than a parameter on `text`, and that is what makes a
+    // hover effect possible at all.** A tree is built before anything knows where the pointer is,
+    // so a node cannot be given the colour it will need; what it can do is carry every appearance
+    // it might take and choose while painting. A styled view sets the ink around its child, so the
+    // label inside a button changes with the button and nothing had to hand it a colour.
+    //
+    // It nests like `clip`: a view restores what it found rather than assuming a default.
+    ink(*self, color: u32)
+
+    unink(*self)
+
+    // Is the pointer inside `r` right now, and is it held down there?
+    //
+    // **Asked during paint, which is the only moment a view knows its rectangle.** Layout is
+    // decided inside `paint` and gone by the time it returns, so a question about *this* view's
+    // geometry has to be asked while the geometry exists -- the same reasoning that put hit regions
+    // in the paint pass rather than in a walk of their own.
+    //
+    // A backend that has no pointer -- a recorder, a printer, an offscreen render -- answers
+    // `false` to both, and a tree drawn through one looks the way it looks at rest.
+    hovered(*self, r: Rect) -> bool
+
+    pressed(*self, r: Rect) -> bool
 
     // How much room `s` takes in this canvas's font. A view measures through this or it is guessing.
     //
@@ -76,6 +129,23 @@ struct Recorder
     char_w: int
     line_h: int
 
+    // Where the pointer is and whether it is held down, which is what `hovered` and `pressed`
+    // answer from.
+    //
+    // **It starts off the surface**, so a tree drawn through a fresh recorder looks the way it looks
+    // at rest -- a test that says nothing about the pointer gets the resting appearance rather than
+    // whatever state the origin happens to fall in.
+    px: int
+    py: int
+    down: bool
+
+    // Put the pointer somewhere, so a test can hover and press without a window.
+    point(*self, x: int, y: int, down: bool = false)
+        self.px = x
+        self.py = y
+        self.down = down
+    end point
+
     // What was drawn, oldest first, one operation per line.
     dump(self) -> string
         var out = ""
@@ -95,6 +165,12 @@ impl Canvas for Recorder
     fill(*self, r: Rect, color: u32)
         self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}")
 
+    round(*self, r: Rect, color: u32, radius: int)
+        self.ops.push(s"round ${r.x},${r.y} ${r.w}x${r.h} #${color} r${radius}")
+
+    stroke(*self, r: Rect, color: u32, width: int, radius: int)
+        self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width} r${radius}")
+
     text(*self, r: Rect, t: string)
         self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
 
@@ -103,6 +179,16 @@ impl Canvas for Recorder
 
     unclip(*self)
         self.ops.push("unclip")
+
+    ink(*self, color: u32)
+        self.ops.push(s"ink #${color}")
+
+    unink(*self)
+        self.ops.push("unink")
+
+    hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
+
+    pressed(*self, r: Rect) -> bool = self.down && r.holds(self.px, self.py)
 
     text_size(*self, s: string) -> Size = Size(int(s.len) * self.char_w, self.line_h)
 
@@ -113,4 +199,5 @@ end Recorder
 
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
-recorder(char_w: int = 8, line_h: int = 16) -> Recorder = Recorder(buf(), hits(), char_w, line_h)
+recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false)
