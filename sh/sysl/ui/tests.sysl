@@ -184,7 +184,12 @@ private a_scroll_offset_survives_the_tree_being_rebuilt()
     after.paint(&c, Rect(0, 0, 100, 40))
 
     assert(offset.read() == 32, "the offset is in the signal, so a rebuild cannot lose it")
-    assert(c.dump() == "clip 0,0 100x40\ntext 0,-32 100x16 'row 0'\ntext 0,-16 100x16 'row 1'\ntext 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\ntext 0,48 100x16 'row 5'\ntext 0,64 100x16 'row 6'\ntext 0,80 100x16 'row 7'\ntext 0,96 100x16 'row 8'\ntext 0,112 100x16 'row 9'\nunclip\n",
+
+    // **And only what is in the window is drawn.** Ten rows exist, three are reachable through the
+    // clip, and the other seven are measured -- the column needs their heights to place the ones
+    // after them -- and never painted. That is what makes a list of three hundred rows cost about
+    // what a list of ten costs.
+    assert(c.dump() == "clip 0,0 100x40\ntext 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\nunclip\n",
            s"got:\n${c.dump()}")
 end a_scroll_offset_survives_the_tree_being_rebuilt
 
@@ -363,6 +368,10 @@ end an_inset_wider_than_the_space_still_reports_its_own_width
 // A list scrolled past its end. Nothing in `Scroll` clamps, and that is deliberate: the offset is
 // the application's signal, so the clamp is the application's -- a framework that clamped would need
 // to know the content height at write time, which is exactly the layout it has not run yet.
+//
+// **The name of this test only became true when culling arrived.** It used to paint both rows ten
+// thousand pixels above the window and rely on the backend to throw the pixels away; now the column
+// asks whether each row is reachable and neither is, so nothing is drawn at all.
 @test
 private a_scroll_past_the_end_paints_nothing_and_does_not_fail()
     val offset = signal(10_000)
@@ -370,8 +379,7 @@ private a_scroll_past_the_end_paints_nothing_and_does_not_fail()
 
     scroll(column([text("a"), text("b")], 0), offset, 40).paint(&c, Rect(0, 0, 100, 40))
 
-    assert(c.dump() == "clip 0,0 100x40\ntext 0,-10000 100x16 'a'\ntext 0,-9984 100x16 'b'\nunclip\n",
-           s"got:\n${c.dump()}")
+    assert(c.dump() == "clip 0,0 100x40\nunclip\n", s"got:\n${c.dump()}")
 end a_scroll_past_the_end_paints_nothing_and_does_not_fail
 
 // Two dependents on one signal, one of which goes. The sweep must keep the survivor -- a `notify`
@@ -809,3 +817,410 @@ private a_line_height_reads_the_descent_whichever_way_it_is_signed()
     assert_eq(line_height(plutovg.Metrics(12.0, 4.0, 2.0)), 18)
     assert_eq(line_height(plutovg.Metrics(10.0, 0.0, 0.0)), 10)
 end a_line_height_reads_the_descent_whichever_way_it_is_signed
+
+// -- the controls ---------------------------------------------------------------------------------
+//
+// **Every one of these is asserted on the recording rather than on the widget**, which is the same
+// discipline the rest of the file keeps: what a control *is* is what it draws and what it does with
+// a tap, and a test that reached inside one to check a field would pass for a widget that painted
+// nothing. The colours are written as the arithmetic that produced them and the geometry as
+// literals, because the geometry is the half that can be wrong.
+
+// A switch is a pill with a circle in it, and at rest the circle is at the left-hand end.
+@test
+private a_switch_off_has_its_knob_at_the_left_end()
+    val on = signal(false)
+
+    assert_paints(switch(on), Size(200, 200), Rect(0, 0, 44, 24),
+                  s"fill 0,0 44x24 #${INERT} r12\n" +
+                  s"fill 3,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                  "hit 0,0 44x24\n")
+end a_switch_off_has_its_knob_at_the_left_end
+
+// And on, the knob is at the other end and the track has taken the colour.
+@test
+private a_switch_on_has_its_knob_at_the_right_end_and_a_coloured_track()
+    val on = signal(true)
+
+    assert_paints(switch(on), Size(200, 200), Rect(0, 0, 44, 24),
+                  s"fill 0,0 44x24 #${ACCENT} r12\n" +
+                  s"fill 23,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                  "hit 0,0 44x24\n")
+end a_switch_on_has_its_knob_at_the_right_end_and_a_coloured_track
+
+// **The knob's position and the track's colour are one number**, so a switch caught mid-slide cannot
+// be a coloured track with an unmoved knob. Both readings below come from the same phase: 42% of the
+// way across is 8 pixels of the 20 it travels, and 42% of the way from the inert grey to the accent.
+@test
+private a_sliding_switch_moves_its_knob_and_its_track_together()
+    val on = signal(false)
+    val v = switch(on)
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 44, 24))
+
+    on.set(true)
+    c.ops = buf()
+    c.tick(0.03)
+    v.paint(&c, Rect(0, 0, 44, 24))
+
+    assert(c.dump() == s"fill 0,0 44x24 #${mix(INERT, ACCENT, 42)} r12\n" +
+                       s"fill 11,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                       "hit 0,0 44x24\n",
+           s"a switch part way across:\n${c.dump()}")
+end a_sliding_switch_moves_its_knob_and_its_track_together
+
+// A tap flips the value, which is the whole of what a switch does.
+@test
+private a_switch_flips_the_signal_it_was_given()
+    val on = signal(false)
+    var c = recorder()
+
+    switch(on).paint(&c, Rect(0, 0, 44, 24))
+
+    assert(c.taps.tap(20, 12), "the region holds the point")
+    assert(on.read(), "and the tap turned it on")
+
+    assert(c.taps.tap(20, 12), "the same region, a second time")
+    assert(!on.read(), "and it went back off, because a switch toggles rather than sets")
+end a_switch_flips_the_signal_it_was_given
+
+// An unchecked box is an outline with nothing in it. The mark has no area at all at rest, which is
+// what the missing third `fill` below says.
+@test
+private an_unchecked_box_draws_no_mark()
+    val on = signal(false)
+
+    assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  s"fill 0,0 18x18 #${GROUND_TINT} r4\n" +
+                  s"stroke 0,0 18x18 #${INERT} w2 r4\n" +
+                  "text 26,0 40x18 'label'\n" +
+                  "hit 0,0 66x18\n")
+end an_unchecked_box_draws_no_mark
+
+// And a checked one is filled, outlined in the accent, and carries the mark.
+@test
+private a_checked_box_is_filled_and_marked()
+    val on = signal(true)
+
+    assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  s"fill 0,0 18x18 #${ACCENT} r4\n" +
+                  s"stroke 0,0 18x18 #${ACCENT} w2 r4\n" +
+                  s"fill 4,4 10x10 #${WHITE} r2\n" +
+                  "text 26,0 40x18 'label'\n" +
+                  "hit 0,0 66x18\n")
+end a_checked_box_is_filled_and_marked
+
+// **Pointing at the LABEL lights the BOX**, which is the composition the whole styling layer was
+// built for arriving somewhere other than a button: the `Reactive` is the whole row, so the state it
+// reports is the row's, and the box two levels down draws from it. Nothing had to be told.
+@test
+private pointing_at_a_checkbox_label_lights_its_box()
+    val on = signal(false)
+    val v = checkbox(on, "label")
+
+    var away = recorder()
+    var over = recorder()
+
+    away.point(300, 300)
+    over.point(50, 9)
+
+    v.paint(&away, Rect(0, 0, 66, 18))
+    v.paint(&over, Rect(0, 0, 66, 18))
+
+    assert(away.dump() != over.dump(), "the pointer is on the label and the box knows")
+    assert(over.dump() == s"fill 0,0 18x18 #${GROUND_TINT} r4\n" +
+                          s"stroke 0,0 18x18 #${lighten(INERT, 20)} w2 r4\n" +
+                          "text 26,0 40x18 'label'\n" +
+                          "hit 0,0 66x18\n",
+           s"the lit outline:\n${over.dump()}")
+end pointing_at_a_checkbox_label_lights_its_box
+
+// The label is part of the control rather than text beside one, so a tap on it counts.
+@test
+private a_tap_on_a_checkbox_label_checks_it()
+    val on = signal(false)
+    var c = recorder()
+
+    checkbox(on, "label").paint(&c, Rect(0, 0, 66, 18))
+
+    assert(c.taps.tap(50, 9), "the region covers the label as well as the box")
+    assert(on.read(), "and tapping the label checked it")
+end a_tap_on_a_checkbox_label_checks_it
+
+// **A slider reads the pointer's position, which no other control does**, and the value it computes
+// is the fraction of the way along the part of the track the knob can actually reach.
+@test
+private a_pressed_slider_takes_its_value_from_where_the_pointer_is()
+    val v = signal(0)
+    val s = slider(v, 0, 100, 220)
+    var c = recorder()
+
+    // The knob is sixteen wide, so the travel is 204 and the middle of it is the knob's own centre.
+    c.point(110, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 50)
+
+    c.point(8, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 0)
+
+    c.point(212, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 100)
+end a_pressed_slider_takes_its_value_from_where_the_pointer_is
+
+// **Both ends are reachable**, which is what the rounding in the arithmetic is for: a pointer past
+// either end of the travel is clamped to it rather than producing a value outside the range.
+@test
+private a_drag_past_either_end_of_a_slider_stops_at_the_end()
+    val v = signal(50)
+    val s = slider(v, 0, 100, 220)
+    var c = recorder()
+
+    c.point(0, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 0)
+
+    c.point(219, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 100)
+end a_drag_past_either_end_of_a_slider_stops_at_the_end
+
+// A pointer merely resting on a slider moves nothing.
+@test
+private a_slider_the_pointer_is_only_hovering_is_not_dragged()
+    val v = signal(30)
+    var c = recorder()
+
+    c.point(110, 8)
+    slider(v, 0, 100, 220).paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 30)
+end a_slider_the_pointer_is_only_hovering_is_not_dragged
+
+// **The write is guarded on the value actually changing, and the guard is load-bearing**: a signal
+// write notifies, an application's notify marks the frame dirty, and an unguarded write would mark
+// every frame dirty for as long as a pointer rested on a slider nobody was moving.
+@test
+private a_slider_writes_only_when_the_value_moves()
+    val v = signal(0)
+    val n = signal(0)
+    val bump: &Fn() -> unit = () -> n.set(n.read() + 1)
+
+    v.watch(bump)
+
+    val s = slider(v, 0, 100, 220)
+    var c = recorder()
+
+    c.point(110, 8, true)
+    s.paint(&c, Rect(0, 0, 220, 16))
+    s.paint(&c, Rect(0, 0, 220, 16))
+    s.paint(&c, Rect(0, 0, 220, 16))
+
+    assert_eq(v.read(), 50)
+    assert_eq(n.read(), 1)
+end a_slider_writes_only_when_the_value_moves
+
+// The track, the part of it that is filled, and the knob -- and the knob sits at the value.
+@test
+private a_slider_draws_its_track_its_fill_and_its_knob()
+    val v = signal(50)
+
+    assert_paints(slider(v, 0, 100, 220), Size(300, 300), Rect(0, 0, 220, 16),
+                  s"fill 0,5 220x6 #${INERT} r3\n" +
+                  s"fill 0,5 110x6 #${ACCENT} r3\n" +
+                  s"fill 102,0 16x16 #${lighten(ACCENT, 30)} r8\n" +
+                  "hit 0,0 220x16\n")
+end a_slider_draws_its_track_its_fill_and_its_knob
+
+// A progress bar clamps rather than drawing outside itself, and an empty one draws no fill at all.
+@test
+private a_progress_bar_clamps_at_both_ends()
+    assert_paints(progress(1.5, 200), Size(300, 300), Rect(0, 0, 200, 6),
+                  s"fill 0,0 200x6 #${INERT} r3\n" +
+                  s"fill 0,0 200x6 #${ACCENT} r3\n")
+
+    assert_paints(progress(-0.5, 200), Size(300, 300), Rect(0, 0, 200, 6),
+                  s"fill 0,0 200x6 #${INERT} r3\n")
+end a_progress_bar_clamps_at_both_ends
+
+// **It eases toward the fraction rather than jumping to it**, so a bar fed by a task that reports in
+// steps reads as motion. Four per second for a tenth of a second is four hundredths of the way.
+@test
+private a_progress_bar_eases_toward_a_new_fraction()
+    var c = recorder()
+
+    progress(0.0, 200).paint(&c, Rect(0, 0, 200, 6))
+
+    c.ops = buf()
+    c.tick(0.1)
+    progress(1.0, 200).paint(&c, Rect(0, 0, 200, 6))
+
+    assert(c.dump() == s"fill 0,0 200x6 #${INERT} r3\n" +
+                       s"fill 0,0 80x6 #${ACCENT} r3\n",
+           s"a bar part of the way along:\n${c.dump()}")
+end a_progress_bar_eases_toward_a_new_fraction
+
+// **A divider asks for no width and paints across all of it**, which is how it fills its container
+// without knowing what its container is.
+@test
+private a_divider_asks_for_no_width_and_paints_across_what_it_is_given()
+    assert(measured(divider(), Size(300, 300)) == Size(0, 1), "no width, one pixel tall")
+
+    assert_paints(divider(0xFF0000u32, 3), Size(300, 300), Rect(0, 40, 300, 3),
+                  "fill 0,40 300x3 #16711680\n")
+end a_divider_asks_for_no_width_and_paints_across_what_it_is_given
+
+// -- what a backend does NOT have to write --------------------------------------------------------
+
+// `Blind` -- in `canvas.sysl`, because an `impl` may not sit in a file that said `@tests` -- is the
+// smallest thing that satisfies the trait, and these two tests are why it is worth shipping.
+//
+// **They are the only way to check the two defaulted members are inherited rather than merely
+// declared.** `Recorder` and `PlutoCanvas` both override both, so without a third backend nothing in
+// the package would ever run the trait's own bodies.
+
+// A backend with no clock draws everything settled, so animation is something a backend opts into
+// rather than something every backend owes.
+@test
+private a_backend_with_no_clock_is_handed_the_target_outright()
+    var b = blind()
+
+    assert_eq(b.phase(Rect(0, 0, 10, 10), 0, 0.75, 1.0), 0.75)
+    assert_eq(b.phase(Rect(0, 0, 10, 10), 0, 0.0, 1.0), 0.0)
+end a_backend_with_no_clock_is_handed_the_target_outright
+
+// And one with no pointer answers a position no rectangle contains, which is what "nothing is
+// pointing at this" looks like when the answer has to be a coordinate rather than a flag.
+@test
+private a_backend_with_no_pointer_answers_off_the_surface()
+    var b = blind()
+    val (x, y) = b.pointer()
+
+    assert(x == -1 && y == -1, "off the surface")
+    assert(!Rect(0, 0, 1000, 1000).holds(x, y), "and no rectangle holds it")
+end a_backend_with_no_pointer_answers_off_the_surface
+
+// The recorder does have one, and it is the same one `hovered` and `pressed` answer from.
+@test
+private a_recorder_reports_the_pointer_it_was_given()
+    var c = recorder()
+    val (x0, y0) = c.pointer()
+
+    assert(x0 == -1 && y0 == -1, "a fresh recorder's pointer is off the surface")
+
+    c.point(37, 91, true)
+
+    val (x1, y1) = c.pointer()
+
+    assert(x1 == 37 && y1 == 91, "and it moves where it is put")
+end a_recorder_reports_the_pointer_it_was_given
+
+// -- culling --------------------------------------------------------------------------------------
+
+// **Nothing is culled where nothing is clipped**, which is the case that must not regress: a plain
+// column on a canvas that was never given a clip paints every child, and a `visible` that answered
+// too eagerly would silently empty half the interface.
+@test
+private a_column_with_no_clip_paints_all_of_its_children()
+    var c = recorder()
+
+    column([text("a"), text("b"), text("c")], 0).paint(&c, Rect(0, 0, 100, 8))
+
+    assert(c.dump() == "text 0,0 100x16 'a'\ntext 0,16 100x16 'b'\ntext 0,32 100x16 'c'\n",
+           s"even a child taller than the rectangle it was given:\n${c.dump()}")
+end a_column_with_no_clip_paints_all_of_its_children
+
+// A row culls on the other axis, which is the same code and a different rectangle.
+@test
+private a_row_skips_children_past_the_edge_of_a_clip()
+    var c = recorder()
+
+    c.clip(Rect(0, 0, 30, 20))
+    column([row([text("aa"), text("bb"), text("cc")], 0)], 0).paint(&c, Rect(0, 0, 100, 20))
+    c.unclip()
+
+    assert(c.dump() == "clip 0,0 30x20\ntext 0,0 16x16 'aa'\ntext 16,0 16x16 'bb'\nunclip\n",
+           s"the third run starts at 32, past the clip:\n${c.dump()}")
+end a_row_skips_children_past_the_edge_of_a_clip
+
+// **A culled child registers no hit region either**, which is a correctness claim rather than a
+// performance one: a row scrolled out of sight must not answer a click at the place it would have
+// been, and before culling it would have -- the region was recorded from a paint nobody could see.
+@test
+private a_culled_row_cannot_be_clicked()
+    val hit = signal(0)
+    val bump: &Fn() -> unit = () -> hit.set(hit.read() + 1)
+    val offset = signal(1000)
+    var c = recorder()
+
+    scroll(column([text("a").on_tap(bump)], 0), offset, 40).paint(&c, Rect(0, 0, 100, 40))
+
+    assert(c.taps.len() == 0usize, "a row a thousand pixels above the window offers nothing to click")
+    assert(!c.taps.tap(50, 20), "and a click in the window lands on nothing")
+    assert_eq(hit.read(), 0)
+end a_culled_row_cannot_be_clicked
+
+// **Nested clips intersect**, so an inner clip cannot widen an outer one. A container inside two
+// scrollers is judged against what both of them leave, which is what `meet` is for.
+@test
+private a_nested_clip_narrows_and_never_widens()
+    var c = recorder()
+
+    c.clip(Rect(0, 0, 100, 40))
+    c.clip(Rect(0, 0, 100, 16))
+
+    assert(c.visible(Rect(0, 0, 100, 10)), "inside both")
+    assert(!c.visible(Rect(0, 20, 100, 10)), "inside the outer one and outside the inner")
+
+    c.unclip()
+
+    assert(c.visible(Rect(0, 20, 100, 10)), "and the outer one is what is left when the inner ends")
+
+    c.unclip()
+
+    assert(c.visible(Rect(0, 4000, 100, 10)), "with no clip at all, everything is visible")
+end a_nested_clip_narrows_and_never_widens
+
+// Two clips that do not touch leave nothing, and `meet` has to say so rather than producing a
+// rectangle with a negative side that `overlaps` would then read as covering the plane.
+@test
+private two_clips_that_do_not_touch_leave_nothing_visible()
+    var c = recorder()
+
+    c.clip(Rect(0, 0, 20, 20))
+    c.clip(Rect(50, 50, 20, 20))
+
+    assert(!c.visible(Rect(0, 0, 20, 20)), "not in the second")
+    assert(!c.visible(Rect(50, 50, 20, 20)), "not in the first")
+    assert(!c.visible(Rect(0, 0, 1000, 1000)), "and nothing is, because they share no area")
+end two_clips_that_do_not_touch_leave_nothing_visible
+
+// A backend that tracks no clip answers `true`, so not implementing `visible` costs the saving and
+// never the picture. That is the right way round for a default: the failure mode is a correct frame.
+@test
+private a_backend_that_tracks_no_clip_draws_everything()
+    var b = blind()
+
+    assert(b.visible(Rect(-9000, -9000, 1, 1)), "everything is visible to a backend with no opinion")
+end a_backend_that_tracks_no_clip_draws_everything
+
+// Two rectangles overlap when they share area, and touching along an edge is not sharing area.
+@test
+private overlapping_is_shared_area_and_not_a_shared_edge()
+    val r = Rect(10, 10, 20, 20)
+
+    assert(r.overlaps(Rect(20, 20, 20, 20)), "a corner's worth is enough")
+    assert(r.overlaps(Rect(0, 0, 100, 100)), "and one inside the other counts from either side")
+    assert(!r.overlaps(Rect(30, 10, 20, 20)), "flush against the right edge shares no area")
+    assert(!r.overlaps(Rect(10, 30, 20, 20)), "nor flush below")
+    assert(!r.overlaps(Rect(10, 10, 0, 20)), "an empty rectangle overlaps nothing, not even itself")
+    assert(!Rect(0, 0, 1000, 1000).overlaps(Rect(50, 50, 0, 0)),
+           "and a wide one straddling an empty one's single coordinate still shares no area with it")
+end overlapping_is_shared_area_and_not_a_shared_edge

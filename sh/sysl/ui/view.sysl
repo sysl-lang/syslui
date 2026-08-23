@@ -37,6 +37,17 @@ struct Rect deriving Eq
     // Is `px`, `py` inside this rectangle? What a click is matched against.
     holds(self, px: int, py: int) -> bool =
         px >= self.x && px < self.right() && py >= self.y && py < self.bottom()
+
+    // Do these two share any area at all? What a container asks before it draws a child.
+    //
+    // **A rectangle with no area shares none, and saying so is what makes an empty clip mean empty.**
+    // Two clips that do not touch intersect to a rectangle of zero width sitting somewhere -- and
+    // without the first line below, anything spanning that point would be judged to overlap it,
+    // because a zero-width rectangle's left and right edges are the same coordinate and a wide
+    // neighbour straddles both.
+    overlaps(self, o: Rect) -> bool =
+        self.w > 0 && self.h > 0 && o.w > 0 && o.h > 0 &&
+            self.x < o.right() && self.right() > o.x && self.y < o.bottom() && self.bottom() > o.y
 end Rect
 
 // Where a view goes, once its parent has decided.

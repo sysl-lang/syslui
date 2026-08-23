@@ -44,14 +44,19 @@ impl View for Column
         Size(w, h)
     end measure
 
+    // **A child outside the clip is measured and not painted**, which is what makes a long list
+    // affordable: the height is still needed to know where the next child starts, and the drawing --
+    // which is nearly all of the cost -- is skipped. A backend that does not track its clip answers
+    // `true` and nothing changes but the bill.
     paint(&self, c: *Canvas, r: Rect)
         var y = r.y
         val v = self.children.view()
 
         for i in 0..<v.len
             val s = v[i].measure(c, Size(r.w, r.bottom() - y))
+            val at = Rect(r.x, y, r.w, s.h)
 
-            v[i].paint(c, Rect(r.x, y, r.w, s.h))
+            if c.visible(at) then v[i].paint(c, at)
 
             y += s.h + self.spacing
     end paint
@@ -87,8 +92,9 @@ impl View for Row
 
         for i in 0..<v.len
             val s = v[i].measure(c, Size(r.right() - x, r.h))
+            val at = Rect(x, r.y, s.w, r.h)
 
-            v[i].paint(c, Rect(x, r.y, s.w, r.h))
+            if c.visible(at) then v[i].paint(c, at)
 
             x += s.w + self.spacing
     end paint

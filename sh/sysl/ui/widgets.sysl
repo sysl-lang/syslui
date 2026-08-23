@@ -1,0 +1,252 @@
+module sh.sysl.ui
+
+// The controls, and what they are all made of.
+//
+// **Every widget here is the same four things**: a size it asks for, some filled rounded rectangles,
+// a question put to the canvas about the pointer, and -- where the answer should not arrive all at
+// once -- a phase easing toward it. There is nothing else, because `Canvas` offers nothing else, and
+// that is the constraint the whole toolkit was designed around rather than a shortage to apologise
+// for: a switch drawn as two rounded rectangles is a switch on a phone, on a desktop, and on
+// anything else that can fill a span of pixels.
+//
+// **A control owns no state and the application owns all of it**, which is `scroll.sysl`'s finding
+// applied everywhere: a `&Signal[bool]` is passed in, the widget reads it while painting and writes
+// it when tapped, and a rebuild between those two moments changes nothing because the widget was
+// never where the value lived. That is what makes a control safe to throw away and build again sixty
+// times a second.
+//
+// **The action closure is made once, at build, not once per frame.** A control that wrote
+// `c.hit(r, () -> on.set(!on.read()))` inside `paint` would allocate a box every frame per widget,
+// which is exactly the churn card 0203 was filed to measure; making it in the constructor and
+// storing it costs one field and turns a per-frame allocation into a per-rebuild one.
+
+// The sizes, which a theme would own.
+//
+// They are constants for the same reason `style.sysl`'s three lifts are: naming them is most of the
+// work of gaining a theme, and until there is one, a number with a name is worth more than the same
+// number written into four paint methods.
+const SWITCH_W: int = 44
+const SWITCH_H: int = 24
+const BOX_SIDE: int = 18
+const TRACK_H: int = 6
+const KNOB: int = 16
+
+// The ground a control sits on before it is worth anything -- an off switch, an empty track.
+//
+// **One colour rather than one per widget**, because these are all the same thing to a reader: the
+// part of a control that is not the part that is on.
+const INERT: u32 = 0x3A3F4B
+
+// Which animation on a control is which, in the canvas's store.
+//
+// **A slot is only ever compared against others on the same rectangle**, so these could have started
+// at zero and collided with `style.sysl`'s two harmlessly -- no `Reactive` and no control ever share
+// a rectangle. They start past them anyway, because a number that cannot collide is worth more to
+// somebody debugging than one that merely does not.
+private const SWITCH_SLOT: int = 2
+private const CHECK_SLOT: int = 3
+private const KNOB_SLOT: int = 4
+private const FILL_SLOT: int = 5
+
+// How fast each settles. A switch and a checkbox are direct responses to a tap, so they move at the
+// press rate; a progress bar is reporting on something else's pace and should not look hurried.
+private const FLIP_RATE: real = 14.0
+private const PROGRESS_RATE: real = 4.0
+
+// ## The switch
+
+// A two-state control that slides, drawn as a pill with a circle in it.
+//
+// **The circle is a rounded rectangle whose radius is half its side**, which is the whole reason
+// `fill` took a radius rather than a shape: a backend that can round a corner can draw every control
+// in this file, and one that could not would need a path API before it could draw the first.
+struct Switch
+    on: &Signal[bool]
+    color: u32
+
+    // Made once, at build. See the note at the top of the file.
+    flip: &Fn() -> unit
+
+impl View for Switch
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(SWITCH_W, SWITCH_H)
+
+    paint(&self, c: *Canvas, r: Rect)
+        // **The knob's position and the track's colour are one number**, so the two cannot disagree
+        // half way through: a switch caught mid-slide has its knob exactly as far across as its
+        // track is coloured, because both read the same phase.
+        val t = c.phase(r, SWITCH_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
+        val lit = c.phase(r, KNOB_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
+
+        val pad = 3
+        val d = r.h - 2 * pad
+        val travel = r.w - 2 * pad - d
+
+        c.fill(r, mix(INERT, self.color, int(t * 100.0)), r.h / 2)
+        c.fill(Rect(r.x + pad + int(t * real(travel)), r.y + pad, d, d),
+               darken(WHITE, int((1.0 - lit) * 8.0)), d / 2)
+        c.hit(r, self.flip)
+    end paint
+
+// A switch bound to a boolean the application owns.
+switch(on: &Signal[bool], color: u32 = ACCENT) -> &View =
+    Switch(on, color, () -> on.set(!on.read()))
+
+// ## The checkbox
+
+// The box half of a checkbox: an outline that fills in when the value is true.
+//
+// **The tick is a square that grows rather than a check mark**, and that is a limit of `Canvas`
+// stated rather than hidden: two strokes at an angle need a path, and the surface has rectangles. A
+// square that scales from nothing to nearly the whole box reads as "this one" at every size a
+// control is drawn at, which is what the mark is for.
+//
+// It takes the `Interaction` as a field because it is rebuilt by a `Reactive` on every paint -- the
+// hover it draws is the *row's*, so that pointing at the label lights the box.
+struct Box
+    on: &Signal[bool]
+    color: u32
+    i: Interaction
+
+impl View for Box
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(BOX_SIDE, BOX_SIDE)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val t = c.phase(r, CHECK_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
+        val edge = mix(INERT, self.color, int(t * 100.0))
+
+        c.fill(r, mix(GROUND_TINT, self.color, int(t * 100.0)), 4)
+        c.stroke(r, lighten(edge, int(self.i.hover * 20.0)), 2, 4)
+
+        // The mark, inset by however much of the way in it has got. At rest it has no area at all,
+        // which is what makes an unchecked box an outline and nothing else.
+        val inset = int((1.0 - t) * real(r.w) / 2.0) + 5
+        val side = r.w - 2 * inset
+
+        if side > 0 then c.fill(Rect(r.x + inset, r.y + inset, side, side), WHITE, 2)
+    end paint
+
+// What an unchecked box is filled with -- dark enough to read as a hole in whatever it sits on.
+const GROUND_TINT: u32 = 0x22262F
+
+// A checkbox and its label, tappable as one thing.
+//
+// **The whole row is the `Reactive`, so pointing anywhere on it lights the box** -- which is what
+// makes the label part of the control rather than text sitting beside one. That is the composition
+// `style.sysl` was written for, arriving somewhere other than a button: a state-dependent view
+// wrapping a container wrapping a state-dependent leaf, and no widget had to be told about another.
+checkbox(on: &Signal[bool], label: string, color: u32 = ACCENT) -> &View
+    val flip: &Fn() -> unit = () -> on.set(!on.read())
+
+    reactive(i -> row([Box(on, color, i), text(label)], 8)).on_tap(flip)
+
+// ## The slider
+
+// A value dragged out of a track, and the one control that reads the pointer's position.
+//
+// **The drag is done during `paint` and the value is written there**, which is worth being plain
+// about because it is the only place in the toolkit that writes application state outside a tap. The
+// reason is that there is nowhere else: a hit region carries no coordinate, so a control whose value
+// *is* a coordinate cannot be served by one, and the pointer's position is only meaningful against a
+// rectangle that exists only during paint.
+//
+// **The write is guarded on the value actually changing**, and that guard is load-bearing rather
+// than an optimization: a signal write notifies, an application's notify marks the frame dirty, and
+// an unguarded write would mark every frame dirty for as long as a pointer rested on a slider it was
+// not moving.
+//
+// **A drag that leaves the track stops tracking**, because `pressed` is inside-and-held. A real
+// slider captures the pointer at the press and follows it anywhere until the release; capture is a
+// window-level idea and `Canvas` has no window, so this is the honest limit of what the surface
+// supports.
+struct Slider
+    value: &Signal[int]
+    lo: int
+    hi: int
+    width: int
+    color: u32
+
+    // A press on a slider does not *do* anything -- it drags -- but it must not fall through to
+    // whatever is behind, so the region is claimed with an action that does nothing.
+    grab: &Fn() -> unit
+
+impl View for Slider
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.width, KNOB)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val span = self.hi - self.lo
+        val travel = r.w - KNOB
+
+        if c.pressed(r) && travel > 0 && span > 0
+            val (px, _) = c.pointer()
+            val at = px - r.x - KNOB / 2
+            val held = if at < 0 then 0 elif at > travel then travel else at
+
+            // Rounded rather than truncated, so the two ends of the track are reachable and the
+            // steps either side of a value are the same width.
+            val want = self.lo + (held * span + travel / 2) / travel
+
+            if want != self.value.read() then self.value.set(want)
+
+        val v = self.value.read()
+        val clamped = if v < self.lo then self.lo elif v > self.hi then self.hi else v
+        val x = if travel > 0 && span > 0 then (clamped - self.lo) * travel / span else 0
+
+        val lit = c.phase(r, KNOB_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
+        val track = Rect(r.x, r.y + (r.h - TRACK_H) / 2, r.w, TRACK_H)
+
+        c.fill(track, INERT, TRACK_H / 2)
+        c.fill(Rect(track.x, track.y, x + KNOB / 2, TRACK_H), self.color, TRACK_H / 2)
+        c.fill(Rect(r.x + x, r.y, KNOB, KNOB), lighten(self.color, 30 + int(lit * 25.0)), KNOB / 2)
+        c.hit(r, self.grab)
+    end paint
+
+// A slider over the whole inclusive range `lo` to `hi`.
+slider(value: &Signal[int], lo: int, hi: int, width: int, color: u32 = ACCENT) -> &View =
+    Slider(value, lo, hi, width, color, () -> ())
+
+// ## The two that take no input
+
+// A bar reporting how far along something else is, from zero to one.
+//
+// **It eases toward the fraction rather than jumping to it**, which is not decoration: a progress
+// bar fed by a real task moves in whatever steps the task reports, and a bar that eases turns a
+// stuttering series of jumps into something that reads as motion. A backend with no clock draws it
+// at the fraction outright, since that is what `phase` answers without one.
+struct Progress
+    fraction: real
+    width: int
+    color: u32
+
+impl View for Progress
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.width, TRACK_H)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val f = if self.fraction < 0.0 then 0.0 elif self.fraction > 1.0 then 1.0 else self.fraction
+        val t = c.phase(r, FILL_SLOT, f, PROGRESS_RATE)
+
+        c.fill(r, INERT, r.h / 2)
+
+        val w = int(t * real(r.w))
+
+        if w > 0 then c.fill(Rect(r.x, r.y, w, r.h), self.color, r.h / 2)
+    end paint
+
+progress(fraction: real, width: int, color: u32 = ACCENT) -> &View =
+    Progress(fraction, width, color)
+
+// A rule across whatever it is given.
+//
+// **It measures to no width at all and paints across the whole of what it is handed**, which is how
+// a divider gets to be as wide as its container without knowing what its container is: a `Column`
+// gives every child the column's width, so asking for nothing and drawing everything is the same
+// thing as asking to be filled.
+struct Rule
+    color: u32
+    thickness: int
+
+impl View for Rule
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(0, self.thickness)
+
+    paint(&self, c: *Canvas, r: Rect) = c.fill(Rect(r.x, r.y, r.w, self.thickness), self.color)
+
+divider(color: u32 = INERT, thickness: int = 1) -> &View = Rule(color, thickness)

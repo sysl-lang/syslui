@@ -1,6 +1,7 @@
 module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
+import sysl.container.{Map, map}
 import sh.sysl.plutovg
 
 // The real backend: a frame drawn into a plutovg surface.
@@ -47,6 +48,19 @@ struct PlutoCanvas
     // which is the same discipline `clip` has and the reason `Foreground` nests at all.
     tint: u32
     tints: Buf[u32]
+
+    // A run measured once and remembered.
+    //
+    // **This is not an optimization, it is the difference between measuring the tree and measuring
+    // the font.** Shaping a run is the most expensive thing this backend does per call, and layout
+    // asks for the same run at least twice a frame -- once as a container sizes itself and again as
+    // it places what it sized -- while a `Reactive` measures its resting body on top of that. A
+    // frame loop without this cache reports the shaper's cost as the toolkit's, which is exactly
+    // the mistake the SDL backend it replaces had a comment warning about.
+    //
+    // It is keyed on the string rather than on the string and the size, because a canvas draws at
+    // one size for its whole life: `size` is a field, not a parameter.
+    widths: Map[string, int]
 
     // Where the pointer is, which the frame loop sets once a frame before painting.
     point(*self, x: int, y: int, down: bool)
@@ -129,6 +143,19 @@ impl Canvas for PlutoCanvas
 
     pressed(*self, r: Rect) -> bool = self.down && r.holds(self.px, self.py)
 
+    override pointer(*self) -> (int, int) = (self.px, self.py)
+
+    // **PlutoVG is asked rather than a clip stack being kept beside it**, which is one fewer thing
+    // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a
+    // second copy maintained here would be a second thing to be wrong. The comparison is in the
+    // rasterizer's own floats so that nothing is lost rounding a clip to whole pixels.
+    override visible(*self, r: Rect) -> bool
+        val e = self.vg.clip_extents()
+
+        f32(r.x) < e.x + e.w && f32(r.x + r.w) > e.x &&
+            f32(r.y) < e.y + e.h && f32(r.y + r.h) > e.y
+    end visible
+
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
         self.anim.at(r, slot, target, rate)
 
@@ -136,9 +163,16 @@ impl Canvas for PlutoCanvas
     // takes a canvas: a view that measured itself would be guessing, and a list laid out against a
     // guess puts every row in the wrong place.
     text_size(*self, s: string) -> Size
-        self.vg.set_font(self.face, self.size)
+        self.widths.get(s) match
+            Some(w) -> Size(w, self.line_h)
+            None ->
+                self.vg.set_font(self.face, self.size)
 
-        Size(int(self.vg.text_extents(s).advance), self.line_h)
+                val w = int(self.vg.text_extents(s).advance)
+
+                self.widths.put(s, w)
+
+                Size(w, self.line_h)
     end text_size
 
     hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
@@ -154,7 +188,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32, ink: u32 = 0xF
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), phases(), ink, buf())
+                -1, -1, false, hits(), phases(), ink, buf(), map())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

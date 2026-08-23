@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-Forty-seven tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Seventy-three tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -31,20 +31,28 @@ Forty-seven tests, `sysl test .` green — and all six of card `0203`'s question
   by building a *different* tree that shares only the signal. This was the question most likely to
   move the architecture, and it did not.
 - **One layout pass works** — constraints down, sizes up, the parent places.
-- **A rebuild costs about 24 ns and one allocation a node**, which is nothing. Measured against a
-  real SDL3 frame loop with a counting allocator, at three tree sizes:
+- **A rebuild costs about 22 ns and one allocation a node**, which is nothing, and **the drawing
+  costs four orders of magnitude more**. Measured through `syslui-demo --bench`, a real frame at
+  900×660 with a counting allocator, at three list lengths:
 
-  | rows | boxed nodes | rebuild | + layout and paint | allocations a rebuild |
-  |---:|---:|---:|---:|---:|
-  | 30 | 74 | 2.7 µs | 13.3 µs | 93 |
-  | 300 | 614 | 15.5 µs | 118.0 µs | 641 |
-  | 3000 | 6014 | 141.8 µs | 1337.3 µs | 6047 |
+  | rows | boxed nodes | rebuild | + rasterize | upload | allocations a rebuild |
+  |---:|---:|---:|---:|---:|---:|
+  | 30 | 92 | 2.8 µs | 4.71 ms | 65 µs | 124 |
+  | 300 | 632 | 14.6 µs | 4.65 ms | 66 µs | 664 |
+  | 3000 | 6032 | 126.9 µs | 5.21 ms | 64 µs | 6064 |
 
-  Linear in the node count, one allocation a node and no more, and the largest of those is **0.85%
-  of a 60 Hz frame** to rebuild — 8% to rebuild, lay out and paint the lot. **So the per-frame arena
-  the mobile survey argued for is refused**: it would attack the one-eighth of the frame that is
-  allocation, and the seven-eighths that is layout and paint would not move. Note that nothing is
-  culled — every one of those 3000 rows is measured and painted, twenty of them visible.
+  Three things worth reading off that table. **The rebuild is linear in the node count and free** —
+  0.76% of a 60 Hz frame at three thousand rows. **The frame is nearly flat in the list length**,
+  because a row outside the clip is measured and not painted; before culling, three hundred rows
+  cost 7.74 ms against twenty rows' 4.98 ms, and now the two are the same to within noise. And
+  **the upload is not the problem anybody expects it to be**: 2.3 MiB across to the GPU every frame
+  is 0.4% of the budget.
+
+  What is left is the rasterizer, and it is almost all text — the same window with no list at all
+  draws in 0.51 ms. The demo holds a vsync-locked 120 fps.
+
+  **So the per-frame arena the mobile survey argued for is refused, and by a wider margin than
+  before**: allocation is now three parts in a thousand of a frame.
 
 ## What a program looks like
 
@@ -101,6 +109,46 @@ The modifiers are `padding`, `background(color, radius)`, `border(color, width, 
 settled on, so adding one moves nothing. Text colour is canvas state rather than a parameter on
 `text`, which is what lets a styled view set the ink around whatever it wraps.
 
+## The controls
+
+`switch`, `checkbox`, `slider`, `progress` and `divider`, in `widgets.sysl`. Every one of them is
+the same four things: a size it asks for, some filled rounded rectangles, a question put to the
+canvas about the pointer, and a phase easing toward the answer. There is nothing else, because
+`Canvas` offers nothing else — which is what lets a switch drawn as two rounded rectangles be a
+switch on a phone as well as on a desktop.
+
+**A control owns no state.** A `&Signal[bool]` is passed in, read while painting and written when
+tapped, so a rebuild between those two moments changes nothing. That is `scroll.sysl`'s finding
+applied everywhere, and it is what makes a control safe to throw away sixty times a second.
+
+Two of them are worth singling out:
+
+- **A checkbox is a `Reactive` wrapping a `Row` wrapping a state-dependent leaf**, so pointing at
+  the *label* lights the *box*. No widget had to be told about another; it is the styling layer
+  composing somewhere other than a button.
+- **A slider is the one thing that reads the pointer's position**, because a hit region carries no
+  coordinate and a control whose value *is* a coordinate cannot be served by one. So `Canvas` gained
+  `pointer()`, the drag happens during `paint`, and the write is guarded on the value actually
+  changing — an unguarded one would mark every frame dirty for as long as a pointer rested on a
+  slider nobody was moving.
+
+## Culling
+
+A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
+The measure still happens — a column needs each child's height to place the one after it — and the
+drawing, which is nearly all of the cost, does not.
+
+This is what makes a long list affordable: a scrolling list of three hundred rows shows about ten,
+and the other two hundred and ninety used to be painted, clipped away by the backend, and thrown
+out after all the work of producing them. That was 2.8 ms a frame at 900×660, seventeen per cent of
+a 60 Hz budget, spent entirely on discarded pixels.
+
+**A culled child registers no hit region either**, which is a correctness claim rather than a
+performance one: a row scrolled out of sight must not answer a click where it would have been.
+
+`visible` defaults to `true`, so a backend that tracks no clip is correct and merely slower — the
+right way round, since a backend that answered `false` by mistake would draw nothing at all.
+
 ## Animation
 
 `Interaction` carries two `real`s rather than two flags, so a style is told how far *in* a hover is
@@ -147,13 +195,16 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 
 - `sh/sysl/ui/view.sysl` — the `View` trait, the leaves, and the modifiers
 - `sh/sysl/ui/style.sysl` — `Interaction`, `Reactive`, and `button` built on them
+- `sh/sysl/ui/widgets.sysl` — `switch`, `checkbox`, `slider`, `progress` and `divider`
 - `sh/sysl/ui/color.sysl` — `mix`, `lighten` and `darken`
 - `sh/sysl/ui/phases.sysl` — where an animation lives, in a framework with nowhere to put it
 - `sh/sysl/ui/signal.sysl` — `Signal[T]` and its weak dependent list
 - `sh/sysl/ui/layout.sysl` — `Column` and `Row`
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives
-- `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against, and
-  a recorder that draws nothing and remembers everything, so the tree can be asserted with no window
+- `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against; a
+  recorder that draws nothing and remembers everything, so the tree can be asserted with no window;
+  and `Blind`, the smallest thing that satisfies the trait, which is there to say what a backend
+  actually has to write
 - `sh/sysl/ui/pluto.sysl` — the real backend: a frame drawn into a PlutoVG surface
 - `sh/sysl/ui/input.sysl` — where a tap goes: the regions the paint pass collected
 - `sh/sysl/ui/tests.sysl` — the findings, kept as tests rather than as prose

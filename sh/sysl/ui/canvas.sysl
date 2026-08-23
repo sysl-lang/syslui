@@ -60,6 +60,24 @@ trait Canvas
 
     unclip(*self)
 
+    // Is any part of `r` still reachable, given whatever clipping is in force?
+    //
+    // **This is what lets a container skip a child instead of drawing one nobody can see**, and it
+    // is the only thing standing between a list and paying for every row it holds. A scrolling list
+    // of three hundred rows shows about ten; the other two hundred and ninety are painted, clipped
+    // away by the backend, and thrown out after all the work of producing them. Measured at 900x660:
+    // that was 2.8 ms a frame, seventeen per cent of a 60 Hz budget, spent entirely on pixels that
+    // were discarded.
+    //
+    // **A container asks before it paints and not before it measures**, because it still has to know
+    // how tall each child is to know where the next one starts. What culling removes is the drawing,
+    // which is nearly all of the cost.
+    //
+    // **The default is `true`, so a backend that tracks no clip is correct and merely slower.** That
+    // is the right way round: a backend which answered `false` by mistake would draw nothing at all,
+    // and this way the failure mode of not implementing it is a frame that is right.
+    visible(*self, r: Rect) -> bool = true
+
     // The colour text is drawn in, until the matching `unink`.
     //
     // **Text colour is canvas state rather than a parameter on `text`, and that is what makes a
@@ -85,6 +103,19 @@ trait Canvas
     hovered(*self, r: Rect) -> bool
 
     pressed(*self, r: Rect) -> bool
+
+    // Where the pointer actually is, in the same coordinates a view is painted in.
+    //
+    // **`hovered` and `pressed` answer a yes-or-no question and a drag is not one.** A slider has to
+    // know *where along itself* the pointer is, and no amount of asking "are you inside this
+    // rectangle" produces a position -- so the one widget that reads a continuous value from the
+    // pointer needs the pointer, and it is the only thing in the toolkit that does.
+    //
+    // **The default is off the surface**, which is the same answer `hovered` gives from a backend
+    // with no pointer: a printer, an offscreen render, a recorder that was never told. A widget
+    // reading it gets a position no rectangle contains, which is what "nothing is pointing at this"
+    // has to look like when the answer is a coordinate rather than a flag.
+    pointer(*self) -> (int, int) = (-1, -1)
 
     // How far an animation on this rectangle has travelled toward `target`, moving at `rate` per
     // second. `slot` tells two animations on one view apart.
@@ -154,6 +185,12 @@ struct Recorder
     py: int
     down: bool
 
+    // The clip rectangles in force, innermost last, so that `visible` can answer and a test can
+    // watch a container skip what it cannot draw.
+    //
+    // Each entry is already intersected with the one below it, so the innermost is the whole answer.
+    clips: Buf[Rect]
+
     // The animations in flight, so that easing can be tested without a clock or a window.
     //
     // **A test drives time by hand**, which is the only way an animation is testable at all: a
@@ -204,10 +241,19 @@ impl Canvas for Recorder
         self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
 
     clip(*self, r: Rect)
+        val v = self.clips.view()
+
         self.ops.push(s"clip ${r.x},${r.y} ${r.w}x${r.h}")
+        self.clips.push(if v.len == 0 then r else meet(v[v.len - 1], r))
 
     unclip(*self)
         self.ops.push("unclip")
+        self.clips.pop()
+
+    override visible(*self, r: Rect) -> bool
+        val v = self.clips.view()
+
+        v.len == 0 || r.overlaps(v[v.len - 1])
 
     ink(*self, color: u32)
         self.ops.push(s"ink #${color}")
@@ -218,6 +264,8 @@ impl Canvas for Recorder
     hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
 
     pressed(*self, r: Rect) -> bool = self.down && r.holds(self.px, self.py)
+
+    override pointer(*self) -> (int, int) = (self.px, self.py)
 
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.
@@ -234,4 +282,63 @@ end Recorder
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, phases())
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, buf(), phases())
+
+// The rectangle two of them have in common, which is what nesting one clip inside another leaves.
+//
+// An empty result -- a width or a height of nothing -- is what "these do not touch" looks like, and
+// `overlaps` answers false against it, which is the whole reason this does not need a special case.
+private meet(a: Rect, b: Rect) -> Rect
+    val x = if a.x > b.x then a.x else b.x
+    val y = if a.y > b.y then a.y else b.y
+    val right = if a.right() < b.right() then a.right() else b.right()
+    val bottom = if a.bottom() < b.bottom() then a.bottom() else b.bottom()
+
+    Rect(x, y, if right > x then right - x else 0, if bottom > y then bottom - y else 0)
+end meet
+
+// The smallest thing that satisfies `Canvas`: a body for every member the trait leaves without one,
+// and no opinion about anything else.
+//
+// **It is here to say what a backend actually has to write.** Eleven one-line bodies is the whole
+// obligation, and a person about to bind this toolkit to a display they own can read that in one
+// screen rather than deriving it from a trait with prose between every member. `Recorder` and
+// `PlutoCanvas` are both far larger than the minimum, so neither answers the question.
+//
+// It is also the only thing in the package that runs the trait's own default bodies. Both other
+// backends override both defaults, so without this one nothing would ever check that a member with
+// a body is *inherited* rather than merely declared -- and a backend somebody else writes is
+// precisely this: what it had to implement, and silence about time and about pointers.
+//
+// **A tree painted through it is walked, measured and laid out, and draws nothing.** That is worth
+// having on its own: it is the cost of the tree with the cost of the drawing taken out, which is the
+// difference a benchmark is trying to see.
+struct Blind end Blind
+
+impl Canvas for Blind
+    fill(*self, r: Rect, color: u32, radius: int) = ()
+
+    stroke(*self, r: Rect, color: u32, width: int, radius: int) = ()
+
+    text(*self, r: Rect, t: string) = ()
+
+    clip(*self, r: Rect) = ()
+
+    unclip(*self) = ()
+
+    ink(*self, color: u32) = ()
+
+    unink(*self) = ()
+
+    hovered(*self, r: Rect) -> bool = false
+
+    pressed(*self, r: Rect) -> bool = false
+
+    // **Zero rather than a guess.** A canvas that cannot measure has no business inventing a font,
+    // and a layout laid out against nothing is visibly nothing rather than subtly wrong.
+    text_size(*self, s: string) -> Size = Size(0, 0)
+
+    hit(*self, r: Rect, f: &Fn() -> unit) = ()
+end Blind
+
+blind() -> Blind = Blind()
