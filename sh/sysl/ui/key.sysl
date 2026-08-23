@@ -1,0 +1,128 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// The keys a frame saw, and which view they belong to.
+//
+// **The pointer needed no routing and the keyboard does, which is the whole difference between this
+// file and `input.sysl`.** A click carries a position, so the frame can decide afterwards which
+// rectangle it landed in; a key carries nothing at all, and the only thing that can say where it
+// should go is a piece of state that outlived the frame before. That state is *focus*, and there is
+// exactly one of it.
+//
+// **So focus is a number the canvas keeps, and a view asks whether it is the one.** Everything else
+// the canvas remembers -- an animation's phase, a grab -- is keyed by the rectangle it is painting
+// into, because a rectangle is what a view has. A rectangle is the wrong key here: a form that
+// scrolls while somebody is typing moves the field they are typing in, and keying on geometry loses
+// the focus at exactly the moment it matters most. **An id is passed in instead**, which is the
+// choice `tabs` and `radio` already made for the same reason -- an application naming its fields is
+// a line it was going to write anyway, and it is the only name that survives a relayout.
+//
+// **A press anywhere blurs, and whatever the press was inside takes focus back while it paints.**
+// That is one line in each of two places rather than a rule anybody has to remember: no view has to
+// know that another view was clicked, no dismissal chain has to be maintained, and a click on a
+// button, on a scroll list, or on empty ground all put the keyboard away by doing nothing at all.
+//
+// **Nothing here is application state and none of it is a signal.** Which field somebody is typing
+// in, and where the caret is inside it, are facts about the window between two frames -- the same
+// kind of fact as where the pointer is. The *text* is the application's, and it is a signal, which
+// is the line this file is careful not to cross.
+
+// Nobody has the keyboard. Ids therefore start at one, which is worth saying because a field given
+// the default `int` would otherwise silently share focus with every other one.
+const NOBODY: int = 0
+
+// One key, as a view has to think about it.
+//
+// **`Typed` carries a string rather than a character**, because that is what a window system
+// reports: a composed key, a dead-key sequence and a paste all arrive as a run of text, and a
+// keyboard that could only say "one character" would make an editor that could not type é. A
+// backend hands over whatever the window gave it and the edit inserts it whole.
+enum Key deriving Eq
+    Typed(text: string)
+    Backspace
+    Delete
+    Left
+    Right
+    Up
+    Down
+    Home
+    End
+    Enter
+    Tab
+    Escape
+end Key
+
+// A key with the two modifiers that change what it means.
+//
+// **Shift extends a selection and control moves by words**, and those are the only two an editing
+// surface has to know about -- everything else a modifier does is a shortcut, which belongs to the
+// application because only the application knows what its shortcuts are. ⌘C is not in this file for
+// the same reason the clipboard is not: the toolkit says what is selected and the program decides
+// what that is worth.
+struct Press deriving Eq
+    key: Key
+    shift: bool
+    ctrl: bool
+end Press
+
+// A key with no modifiers, which is most of them.
+press(k: Key) -> Press = Press(k, false, false)
+
+// Text arriving from the window system.
+typed(t: string) -> Press = Press(Key.Typed(t), false, false)
+
+// No keys at all -- what a backend with no keyboard answers, so that a field on one still draws.
+no_keys() -> []Press = buf[Press]().view()
+
+// What the window has told the canvas about the keyboard, between one frame and the next.
+//
+// **It is a mechanism struct beside `Hits` and `Grab` rather than a member of either backend**, for
+// the reason those two are: there is one right answer to "who has the keyboard", it is fiddly in the
+// same way in every backend, and a second implementation of it is a second place for it to be
+// subtly different.
+struct Keyboard
+    // What arrived since the last frame, in the order it arrived.
+    presses: Buf[Press]
+
+    // Which view has the keyboard, or `NOBODY`.
+    focus: int
+
+    // Where the caret is in that view, and what it has selected. **A caret is a selection whose two
+    // ends are equal**, which is why there is no separate field for one: every rule about moving a
+    // caret is a rule about moving `head`, and shift is the question of whether `anchor` follows.
+    sel: Selection
+
+    // Whether the pointer was down on the previous frame, so that the press can be told from the
+    // hold. Blurring on the hold would mean a field could never keep focus while it was dragged in.
+    was_down: bool
+
+    // The window reported a key.
+    press(*self, p: Press) = self.presses.push(p)
+
+    // What this frame's keys are, for whoever has the focus.
+    keys(*self) -> []Press = self.presses.view()
+
+    // Forget the previous frame's keys. A backend calls this beside `Hits.reset`, before painting:
+    // a key that arrived while the last frame was being drawn is meant for the next one.
+    reset(*self)
+        self.presses = buf()
+
+    // Told once a frame, through the canvas's `point`. **The transition into down is the blur**, not
+    // the hold and not the release.
+    moved(*self, down: bool)
+        if down && !self.was_down then self.focus = NOBODY
+
+        self.was_down = down
+
+    // Give the keyboard to `id`, and start it with an empty caret if it did not have it before.
+    take(*self, id: int)
+        if self.focus != id
+            self.focus = id
+            self.sel = nothing_selected()
+
+    // Where the focused view's caret is now.
+    edit(*self, sel: Selection) = self.sel = sel
+end Keyboard
+
+keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false)

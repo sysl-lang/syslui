@@ -3311,3 +3311,530 @@ private a_named_struct_value_is_a_module_level_val()
     assert(!AT_REST.hovered(), "usable as an ordinary value")
     assert(!AT_REST.pressed())
 end a_named_struct_value_is_a_module_level_val
+
+// ## What a key does, which is a pure function and is tested as one
+//
+// **The hard half of a text field is not the caret bar, it is what backspace does to a selection
+// that was dragged right-to-left across a multi-byte character**, and none of that needs a canvas, a
+// font or a frame. `edit.sysl` is written so that the rules can be put through a hundred cases here
+// and the view below has only geometry left to get wrong.
+
+private caret(at: usize) -> Selection = Selection(at, at)
+
+@test
+private typing_inserts_at_the_caret()
+    val e = apply("ac", caret(1), typed("b"))
+
+    assert(e.text == "abc", s"'${e.text}'")
+    assert(e.sel == caret(2), "and the caret is after what was typed")
+end typing_inserts_at_the_caret
+
+@test
+private typing_replaces_what_is_selected()
+    val e = apply("hello", Selection(1, 4), typed("i"))
+
+    assert(e.text == "hio", s"'${e.text}'")
+    assert(e.sel == caret(2), "the caret is after the insertion, not after the old selection")
+end typing_replaces_what_is_selected
+
+// **Text arrives as a run rather than a character**, which is what a paste and a dead key both are.
+@test
+private a_whole_run_arrives_at_once()
+    val e = apply("", caret(0), typed("a paste"))
+
+    assert(e.text == "a paste" && e.sel == caret(7), s"'${e.text}' at ${e.sel.head}")
+end a_whole_run_arrives_at_once
+
+// **A multi-byte character is deleted whole**, which is the reason nothing here ever adds one to an
+// offset: `é` is two bytes, and a backspace that took one of them would leave a string that is not
+// text at all.
+@test
+private backspace_takes_a_whole_character()
+    val e = apply("hé", caret(3), press(Key.Backspace))
+
+    assert(e.text == "h", s"'${e.text}'")
+    assert(e.sel == caret(1), "and the caret came back two bytes, which is one character")
+end backspace_takes_a_whole_character
+
+@test
+private backspace_with_a_selection_takes_the_selection()
+    val e = apply("hello", Selection(4, 1), press(Key.Backspace))
+
+    assert(e.text == "ho", "a selection dragged right-to-left deletes the same as one dragged left")
+    assert(e.sel == caret(1))
+end backspace_with_a_selection_takes_the_selection
+
+@test
+private backspace_at_the_start_does_nothing()
+    val e = apply("hi", caret(0), press(Key.Backspace))
+
+    assert(e.text == "hi" && e.sel == caret(0), "there is nothing before the start")
+end backspace_at_the_start_does_nothing
+
+@test
+private delete_takes_the_character_after()
+    val e = apply("héllo", caret(1), press(Key.Delete))
+
+    assert(e.text == "hllo", s"'${e.text}'")
+    assert(e.sel == caret(1), "and the caret did not move, because what went was in front of it")
+end delete_takes_the_character_after
+
+@test
+private delete_at_the_end_does_nothing()
+    val e = apply("hi", caret(2), press(Key.Delete))
+
+    assert(e.text == "hi" && e.sel == caret(2))
+end delete_at_the_end_does_nothing
+
+// The arrows move by characters and stop at the ends rather than wrapping.
+@test
+private the_arrows_move_by_characters()
+    assert(apply("hé", caret(1), press(Key.Right)).sel == caret(3), "over a two-byte character")
+    assert(apply("hé", caret(3), press(Key.Left)).sel == caret(1), "and back over it")
+    assert(apply("hi", caret(2), press(Key.Right)).sel == caret(2), "the end is the end")
+    assert(apply("hi", caret(0), press(Key.Left)).sel == caret(0), "and the start is the start")
+end the_arrows_move_by_characters
+
+// **A left arrow over a selection puts the caret before it rather than moving as well**, which is
+// what every other editor does and what a person selecting a word and pressing left means.
+@test
+private an_arrow_over_a_selection_collapses_it()
+    assert(apply("hello", Selection(1, 4), press(Key.Left)).sel == caret(1), "to the left-hand end")
+    assert(apply("hello", Selection(4, 1), press(Key.Right)).sel == caret(4), "and to the other")
+end an_arrow_over_a_selection_collapses_it
+
+// Shift keeps the anchor, which is the whole of what makes a selection out of a motion.
+@test
+private shift_extends_rather_than_moves()
+    val e = apply("hello", caret(2), Press(Key.Right, true, false))
+
+    assert(e.sel == Selection(2, 3), s"anchor ${e.sel.anchor} head ${e.sel.head}")
+
+    val f = apply("hello", e.sel, Press(Key.Right, true, false))
+
+    assert(f.sel == Selection(2, 4), "and the anchor stayed where the selection began")
+end shift_extends_rather_than_moves
+
+// Control moves by words: back over any spaces, then over the word itself.
+@test
+private control_moves_by_words()
+    val s = "one two  three"
+
+    assert(apply(s, caret(14), Press(Key.Left, false, true)).sel == caret(9), "to 'three'")
+    assert(apply(s, caret(9), Press(Key.Left, false, true)).sel == caret(4), "over two spaces to 'two'")
+    assert(apply(s, caret(0), Press(Key.Right, false, true)).sel == caret(3), "to the end of 'one'")
+    assert(apply(s, caret(3), Press(Key.Right, false, true)).sel == caret(7), "and of 'two'")
+    assert(apply(s, caret(0), Press(Key.Left, false, true)).sel == caret(0), "the start still stops it")
+end control_moves_by_words
+
+// In one line, home and end are the whole run; in several, they are the line -- and control widens
+// them back out to the whole run again.
+@test
+private home_and_end_mean_the_line_or_the_run()
+    val s = "ab\ncdef"
+
+    assert(apply(s, caret(5), press(Key.Home)).sel == caret(0), "one line: the start of the run")
+    assert(apply(s, caret(5), press(Key.Home), true).sel == caret(3), "several: the start of the line")
+    assert(apply(s, caret(1), press(Key.End), true).sel == caret(2), "up to the newline, not past it")
+    assert(apply(s, caret(1), press(Key.End)).sel == caret(7), "and the end of the run in one line")
+    assert(apply(s, caret(5), Press(Key.Home, false, true), true).sel == caret(0), "control widens it")
+end home_and_end_mean_the_line_or_the_run
+
+// **`Enter` is the one key whose meaning is the difference between the two views**, which is why
+// `apply` takes `multiline` rather than there being two of it.
+@test
+private enter_is_a_newline_only_where_there_are_lines()
+    assert(apply("ab", caret(1), press(Key.Enter)).text == "ab", "a field swallows it")
+    assert(apply("ab", caret(1), press(Key.Enter), true).text == "a\nb", "an area breaks the line")
+end enter_is_a_newline_only_where_there_are_lines
+
+// Up and down keep the column, and a shorter line takes the caret to its end rather than past it.
+@test
+private up_and_down_keep_the_column()
+    val s = "abcd\nxy\nlonger"
+
+    assert(apply(s, caret(3), press(Key.Down), true).sel == caret(7), "column 3 on a two-long line")
+    assert(apply(s, caret(7), press(Key.Down), true).sel == caret(10), "and back out on a long one")
+    assert(apply(s, caret(10), press(Key.Up), true).sel == caret(7), "up onto the short one")
+    assert(apply(s, caret(2), press(Key.Up), true).sel == caret(0), "above the first line is the start")
+    assert(apply(s, caret(12), press(Key.Down), true).sel == caret(14), "below the last is the end")
+    assert(apply(s, caret(2), press(Key.Up)).sel == caret(2), "and neither moves in a field")
+end up_and_down_keep_the_column
+
+// **Tab and escape belong to the application**: a field that swallowed them is one nothing could
+// ever tab out of.
+@test
+private a_field_does_not_swallow_tab_or_escape()
+    assert(apply("ab", caret(1), press(Key.Tab)).text == "ab")
+    assert(apply("ab", caret(1), press(Key.Tab)).sel == caret(1), "and it did not move the caret")
+    assert(apply("ab", caret(1), press(Key.Escape)).sel == caret(1))
+end a_field_does_not_swallow_tab_or_escape
+
+// A whole frame's keys, in the order they arrived, which is how quick typing and a paste split
+// across two events both come out right.
+@test
+private a_frames_keys_are_applied_in_order()
+    var b: Buf[Press] = buf()
+
+    b.push(typed("a"))
+    b.push(typed("b"))
+    b.push(press(Key.Left))
+    b.push(typed("c"))
+
+    val e = apply_all("", nothing_selected(), b.view())
+
+    assert(e.text == "acb", s"'${e.text}'")
+    assert(e.sel == caret(2))
+end a_frames_keys_are_applied_in_order
+
+// **A selection outlives the text it was made in**, so every edit is bounded against the string
+// rather than trusting the offsets it was handed.
+@test
+private a_stale_selection_cannot_slice_past_the_end()
+    val e = apply("hi", Selection(40, 99), typed("!"))
+
+    assert(e.text == "hi!", s"'${e.text}'")
+    assert(e.sel == caret(3))
+end a_stale_selection_cannot_slice_past_the_end
+
+// ## The field itself, which is geometry and a routing rule
+//
+// **The keyboard is the one thing a rectangle cannot key**, so these tests are as much about focus
+// arriving in the right place as about what is drawn: a press anywhere blurs, whatever the press was
+// inside takes it back while it paints, and a field that is not the focused one draws no caret and
+// consumes no key however many are waiting.
+
+private val FIELD: Rect = Rect(0, 0, 200, 28)
+
+// The frame every field draws before anything else: a ground, and a border that says whether the
+// keyboard is here.
+private frame(focused: bool) -> string =
+    s"fill 0,0 200x28 #${dark().ground} r${dark().radius}\n" +
+    (if focused then s"stroke 0,0 200x28 #${dark().primary} w2 r${dark().radius}\n"
+     else s"stroke 0,0 200x28 #${dark().edge} w1 r${dark().radius}\n")
+
+// A field nobody is typing in is its border and its text, clipped to the inside so that a run longer
+// than the box is cut off rather than drawn through the border.
+@test
+private an_idle_field_draws_its_text_inside_its_border()
+    val t = signal("hi")
+
+    assert_paints(text_field(t, 1), Size(200, 200), FIELD,
+                  frame(false) +
+                  "clip 6,6 188x16\n" +
+                  "text 6,6 188x16 'hi'\n" +
+                  "unclip\n" +
+                  "hit 0,0 200x28\n")
+end an_idle_field_draws_its_text_inside_its_border
+
+// It measures to the width it was asked for and to as many lines as it holds, plus the padding.
+@test
+private a_field_is_one_line_tall_and_an_area_is_as_many_as_it_was_asked_for()
+    val t = signal("")
+
+    assert(measured(text_field(t, 1), Size(500, 500)) == Size(200, 28), "one 16px line and 6px a side")
+    assert(measured(text_field(t, 1, 320), Size(500, 500)) == Size(320, 28), "the width is the caller's")
+    assert(measured(text_area(t, 1, 320, 3), Size(500, 500)) == Size(320, 60), "three of them")
+end a_field_is_one_line_tall_and_an_area_is_as_many_as_it_was_asked_for
+
+// A press inside takes the keyboard, and the border says so.
+@test
+private a_press_inside_takes_the_keyboard()
+    val t = signal("hi")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    assert(c.focus() == NOBODY, "nobody has it to start with")
+
+    c.point(20, 14, true)
+    v.paint(&c, FIELD)
+
+    assert(c.focus() == 1, "and the field it was pressed in has it")
+
+    c.ops = buf()
+    c.point(20, 14, false)
+    v.paint(&c, FIELD)
+
+    // **The press placed the caret where it landed**, which is past the end of a two-character run
+    // at twenty pixels in -- a click puts the caret at the character it points at, and past the last
+    // one is the end.
+    assert(c.dump() == frame(true) +
+                       "clip 6,6 188x16\n" +
+                       "text 6,6 188x16 'hi'\n" +
+                       s"fill 22,6 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 200x28\n",
+           s"a focused field carries a caret:\n${c.dump()}")
+end a_press_inside_takes_the_keyboard
+
+// **And a press anywhere else gives it up, without any view knowing another view was clicked.**
+@test
+private a_press_anywhere_else_gives_the_keyboard_up()
+    val t = signal("hi")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, FIELD)
+    c.point(20, 14, false)
+
+    assert(c.focus() == 1, "it has the keyboard")
+
+    c.point(300, 300, true)
+
+    assert(c.focus() == NOBODY, "and the press outside took it away")
+
+    v.paint(&c, FIELD)
+
+    assert(c.focus() == NOBODY, "the paint that followed did not take it back")
+end a_press_anywhere_else_gives_the_keyboard_up
+
+// Typing reaches the signal, and it reaches it on the frame it was typed rather than the one after.
+@test
+private typing_into_a_focused_field_writes_the_signal()
+    val t = signal("")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, FIELD)
+    c.point(20, 14, false)
+
+    c.key(typed("ab"))
+    c.ops = buf()
+    v.paint(&c, FIELD)
+
+    assert(t.read() == "ab", s"'${t.read()}'")
+    assert(c.dump() == frame(true) +
+                       "clip 6,6 188x16\n" +
+                       "text 6,6 188x16 'ab'\n" +
+                       s"fill 22,6 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 200x28\n",
+           s"the frame that typed it shows it, with the caret after it:\n${c.dump()}")
+end typing_into_a_focused_field_writes_the_signal
+
+// **A field that is not the focused one consumes nothing**, however many keys are waiting -- which
+// is the whole point of routing them by an id rather than by geometry.
+@test
+private an_unfocused_field_takes_none_of_the_keys()
+    val mine = signal("")
+    val theirs = signal("")
+    var c = recorder()
+
+    c.point(20, 14, true)
+    text_field(mine, 1).paint(&c, FIELD)
+    c.point(20, 14, false)
+
+    c.key(typed("ab"))
+    text_field(mine, 1).paint(&c, FIELD)
+    text_field(theirs, 2).paint(&c, FIELD)
+
+    assert(mine.read() == "ab", "the focused field took them")
+    assert(theirs.read() == "", "and the other one did not, though it was painted the same frame")
+end an_unfocused_field_takes_none_of_the_keys
+
+// A selection is painted behind the text, on however many lines it covers.
+@test
+private a_selection_is_painted_behind_the_field_text()
+    val t = signal("hello")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, FIELD)
+    c.point(20, 14, false)
+    c.edit(Selection(1, 3))
+    c.ops = buf()
+    v.paint(&c, FIELD)
+
+    assert(c.dump() == frame(true) +
+                       "clip 6,6 188x16\n" +
+                       s"fill 14,6 16x16 #${dark().selection}\n" +
+                       "text 6,6 188x16 'hello'\n" +
+                       s"fill 30,6 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 200x28\n",
+           s"two characters of highlight and the caret at the far end:\n${c.dump()}")
+end a_selection_is_painted_behind_the_field_text
+
+// Dragging selects, from where the press began to where the pointer is now -- `select.sysl`'s
+// stateless rule, arriving in a view that can also be typed into.
+@test
+private dragging_in_a_field_selects()
+    val t = signal("hello")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(14, 14, true)
+    v.paint(&c, FIELD)
+
+    c.point(38, 14, true)
+    v.paint(&c, FIELD)
+
+    assert(c.editing() == Selection(1, 4), s"${c.editing().anchor} to ${c.editing().head}")
+    assert(t.read() == "hello", "and nothing was typed")
+end dragging_in_a_field_selects
+
+// The placeholder shows in an empty field nobody is typing in, and goes the moment one is.
+@test
+private a_hint_shows_in_an_empty_unfocused_field()
+    val t = signal("")
+
+    assert_paints(text_field(t, 1, 200, "your name"), Size(200, 200), FIELD,
+                  frame(false) +
+                  "clip 6,6 188x16\n" +
+                  s"ink #${mix(dark().ink, dark().ground, 55)}\n" +
+                  "text 6,6 188x16 'your name'\n" +
+                  "unink\n" +
+                  "unclip\n" +
+                  "hit 0,0 200x28\n")
+end a_hint_shows_in_an_empty_unfocused_field
+
+// **The run scrolls to keep the caret in view and remembers nothing about how far**: the offset is a
+// function of where the caret is, so text replaced from underneath cannot leave a field scrolled
+// past the end of what it now holds.
+@test
+private a_long_run_scrolls_to_keep_the_caret_in_view()
+    val t = signal("")
+    val v = text_field(t, 1, 100)
+    val box = Rect(0, 0, 100, 28)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, box)
+    c.point(20, 14, false)
+
+    // Eighty-eight pixels of room and eight pixels a character: the twelfth character is the first
+    // that does not fit.
+    c.key(typed("abcdefghijklmno"))
+    c.ops = buf()
+    v.paint(&c, box)
+
+    assert(t.read() == "abcdefghijklmno")
+    assert(c.dump() == s"fill 0,0 100x28 #${dark().ground} r6\n" +
+                       s"stroke 0,0 100x28 #${dark().primary} w2 r6\n" +
+                       "clip 6,6 88x16\n" +
+                       "text -28,6 122x16 'abcdefghijklmno'\n" +
+                       s"fill 92,6 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 100x28\n",
+           s"the run is pulled left and the caret sits at the right-hand edge:\n${c.dump()}")
+end a_long_run_scrolls_to_keep_the_caret_in_view
+
+// ## The area, which is the same view with lines
+
+private val AREA: Rect = Rect(0, 0, 320, 60)
+
+@test
+private an_area_draws_a_line_at_a_time()
+    val t = signal("one\ntwo\nthree")
+
+    assert_paints(text_area(t, 1, 320, 3), Size(400, 400), AREA,
+                  s"fill 0,0 320x60 #${dark().ground} r6\n" +
+                  s"stroke 0,0 320x60 #${dark().edge} w1 r6\n" +
+                  "clip 6,6 308x48\n" +
+                  "text 6,6 308x16 'one'\n" +
+                  "text 6,22 308x16 'two'\n" +
+                  "text 6,38 308x16 'three'\n" +
+                  "unclip\n" +
+                  "hit 0,0 320x60\n")
+end an_area_draws_a_line_at_a_time
+
+// **A selection spanning three lines paints on all three**, which is why the paint is an overlap
+// rather than a comparison.
+@test
+private a_selection_across_lines_paints_on_each_of_them()
+    val t = signal("one\ntwo\nthree")
+    val v = text_area(t, 1, 320, 3)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, AREA)
+    c.point(20, 14, false)
+    c.edit(Selection(1, 10))
+    c.ops = buf()
+    v.paint(&c, AREA)
+
+    assert(c.dump() == s"fill 0,0 320x60 #${dark().ground} r6\n" +
+                       s"stroke 0,0 320x60 #${dark().primary} w2 r6\n" +
+                       "clip 6,6 308x48\n" +
+                       s"fill 14,6 16x16 #${dark().selection}\n" +
+                       "text 6,6 308x16 'one'\n" +
+                       s"fill 6,22 24x16 #${dark().selection}\n" +
+                       "text 6,22 308x16 'two'\n" +
+                       s"fill 6,38 16x16 #${dark().selection}\n" +
+                       "text 6,38 308x16 'three'\n" +
+                       s"fill 22,38 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 320x60\n",
+           s"the middle line is covered end to end:\n${c.dump()}")
+end a_selection_across_lines_paints_on_each_of_them
+
+// Enter breaks the line in an area, and the caret lands on the new one.
+@test
+private enter_in_an_area_starts_a_line()
+    val t = signal("")
+    val v = text_area(t, 1, 320, 3)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, AREA)
+    c.point(20, 14, false)
+
+    c.key(typed("a"))
+    c.key(press(Key.Enter))
+    c.key(typed("b"))
+    c.ops = buf()
+    v.paint(&c, AREA)
+
+    assert(t.read() == "a\nb", s"'${t.read()}'")
+    assert(c.dump() == s"fill 0,0 320x60 #${dark().ground} r6\n" +
+                       s"stroke 0,0 320x60 #${dark().primary} w2 r6\n" +
+                       "clip 6,6 308x48\n" +
+                       "text 6,6 308x16 'a'\n" +
+                       "text 6,22 308x16 'b'\n" +
+                       s"fill 14,22 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 320x60\n",
+           s"two lines and the caret on the second:\n${c.dump()}")
+end enter_in_an_area_starts_a_line
+
+// A click lands on the character it points at, on the line it points at.
+@test
+private a_click_in_an_area_lands_on_the_line_it_points_at()
+    val t = signal("one\ntwo\nthree")
+    val v = text_area(t, 1, 320, 3)
+    var c = recorder()
+
+    c.point(6 + 12, 6 + 20, true)
+    v.paint(&c, AREA)
+
+    assert(c.editing() == Selection(6, 6), s"the second line, past the middle of 'w': ${c.editing().head}")
+end a_click_in_an_area_lands_on_the_line_it_points_at
+
+// And an area scrolls a line at a time to keep the caret's line in view.
+@test
+private an_area_scrolls_to_the_caret_line()
+    val t = signal("1\n2\n3\n4\n5")
+    val v = text_area(t, 1, 320, 3)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    v.paint(&c, AREA)
+    c.point(20, 14, false)
+    c.edit(Selection(8, 8))
+    c.ops = buf()
+    v.paint(&c, AREA)
+
+    assert(c.dump() == s"fill 0,0 320x60 #${dark().ground} r6\n" +
+                       s"stroke 0,0 320x60 #${dark().primary} w2 r6\n" +
+                       "clip 6,6 308x48\n" +
+                       "text 6,6 308x16 '3'\n" +
+                       "text 6,22 308x16 '4'\n" +
+                       "text 6,38 308x16 '5'\n" +
+                       s"fill 6,38 2x16 #${dark().ink}\n" +
+                       "unclip\n" +
+                       "hit 0,0 320x60\n",
+           s"the first two lines have scrolled off the top:\n${c.dump()}")
+end an_area_scrolls_to_the_caret_line

@@ -73,16 +73,27 @@ struct PlutoCanvas
     // one size for its whole life: `size` is a field, not a parameter.
     widths: Map[string, int]
 
+    // Who has the keyboard, what the window has sent it, and where its caret is.
+    board: Keyboard
+
     // Where the pointer is, which the frame loop sets once a frame before painting.
     point(*self, x: int, y: int, down: bool)
         self.px = x
         self.py = y
         self.down = down
         self.hold.moved(x, y, down)
+        self.board.moved(down)
+    end point
+
+    // A key the window reported. **The frame loop hands these over as they arrive and clears them
+    // in `tick`**, so a field sees exactly the keys of the frame it is painting.
+    key(*self, p: Press) = self.board.press(p)
 
     // Start a frame worth `dt` seconds, forgetting the animations nothing asked about during the
-    // last one.
-    tick(*self, dt: real) = self.anim.tick(dt)
+    // last one, and the keys the frame before it consumed.
+    tick(*self, dt: real)
+        self.anim.tick(dt)
+        self.board.reset()
 
     // Set the paint colour from a 0xRRGGBB, which is what every view speaks.
     private use(*self, color: u32)
@@ -176,6 +187,16 @@ impl Canvas for PlutoCanvas
 
     override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
 
+    override focus(*self) -> int = self.board.focus
+
+    override take_focus(*self, id: int) = self.board.take(id)
+
+    override keys(*self) -> []Press = self.board.keys()
+
+    override editing(*self) -> Selection = self.board.sel
+
+    override edit(*self, sel: Selection) = self.board.edit(sel)
+
     // **PlutoVG is asked rather than a clip stack being kept beside it**, which is one fewer thing
     // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a
     // second copy maintained here would be a second thing to be wrong. The comparison is in the
@@ -255,7 +276,8 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), grabbing(), buf(), phases(), buf(), dark(), buf(), map())
+                -1, -1, false, hits(), grabbing(), buf(), phases(), buf(), dark(), buf(), map(),
+                keyboard())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

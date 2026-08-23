@@ -1,0 +1,264 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// Text somebody can type into: one line of it, or several.
+//
+// **A field is the first view in the toolkit that both reads and writes the application's state**,
+// and everything awkward about it comes from that. A switch writes a `bool` when it is tapped; a
+// field writes a whole string on most frames somebody is typing, has a caret that must survive
+// between two frames, and has to decide what a key means before it can draw the result. The split
+// that makes it manageable is the one `edit.sysl` and `key.sysl` already drew: **what a key does is
+// a pure function, who the keys belong to is the canvas's, and the text is the application's.** What
+// is left here is geometry.
+//
+// **A field and an area are one view with `multiline` set**, for `apply`'s reason: they differ in
+// how many rows they measure to and in what four keys mean, and everything else -- the drag, the
+// selection paint, the caret, the scrolling, the focus ring -- is the same code. Two views would be
+// two copies of the half that is fiddly.
+//
+// **Both scroll to keep the caret in view and neither remembers how far**, which is the stateless
+// rule applied to one more thing: the offset is computed from where the caret is, every frame, so
+// there is nothing to get out of step with the text and nothing to reset when the text is replaced
+// from underneath. The cost is that a field cannot be scrolled away from its caret with the pointer
+// alone, which is a thing a person only wants in an area big enough to be an editor.
+
+// How much room there is between the border and the text.
+const FIELD_PAD: int = 6
+
+// How wide the caret is drawn.
+private const CARET_W: int = 2
+
+// Which grabbable thing a field's selection drag is, in the canvas's single grab.
+private const FIELD_SLOT: int = 7
+
+// An editable run of text.
+//
+// **`id` is what the keyboard is routed by** and it must be unique among the fields of a window and
+// not `NOBODY`. `key.sysl` argues why it is a caller's number rather than the rectangle everything
+// else is keyed by: a form that scrolls while somebody is typing moves the field they are typing in.
+struct Field
+    text: &Signal[string]
+    id: int
+    width: int
+    rows: int
+    multiline: bool
+
+    // What is drawn instead when the text is empty -- dimmed, and never selectable, because it is
+    // not in the string.
+    hint: string
+
+    // Claims the rectangle so that a press does not fall through to whatever is behind, exactly as
+    // a slider's does. Focus itself is taken while painting, because that is where the geometry is.
+    grab: &Fn() -> unit
+
+impl View for Field
+    measure(&self, c: *Canvas, avail: Size) -> Size =
+        Size(self.width, self.rows * c.text_size("").h + 2 * FIELD_PAD)
+
+    paint(&self, c: *Canvas, r: Rect)
+        // **A press inside takes the keyboard, and every press anywhere gave it up first** -- which
+        // is the whole of the focus protocol and the reason no view has to know that another view
+        // was clicked. `Keyboard.moved` is the other half.
+        if c.pressed(r) then c.take_focus(self.id)
+
+        val mine = c.focus() == self.id
+        val was = self.text.read()
+        val inner = Rect(r.x + FIELD_PAD, r.y + FIELD_PAD, r.w - 2 * FIELD_PAD, r.h - 2 * FIELD_PAD)
+
+        // **The keys are applied before anything is drawn, so a frame shows what was just typed.**
+        // Waiting for the rebuild the signal write causes would draw the previous text with the new
+        // caret in it, which is one frame of the caret being visibly ahead of the letters.
+        val e =
+            if mine then typing(c, was, inner, self.multiline)
+            else Edited(was, nothing_selected())
+
+        if mine && e.text != was then self.text.set(e.text)
+        if mine && e.sel != c.editing() then c.edit(e.sel)
+
+        val look = c.theme()
+
+        c.fill(r, look.ground, look.radius)
+        c.stroke(r, if mine then look.primary else look.edge, if mine then 2 else 1, look.radius)
+
+        // **Clipped to the inside**, because a run longer than the box is the ordinary case rather
+        // than the exception, and an unclipped one would be drawn straight through the border.
+        c.clip(inner)
+
+        if e.text.len == 0 && self.hint.len > 0 && !mine then hint(c, inner, self.hint)
+        else run(c, inner, e.text, e.sel, mine)
+
+        c.unclip()
+        c.hit(r, self.grab)
+    end paint
+
+// One line of text somebody can type into.
+//
+// **`id` is not optional and there is no default**, because the one thing that must not happen is
+// two fields sharing it: they would take each other's keys, and the failure looks like a field that
+// types into the wrong box rather than like a missing argument.
+text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "") -> &View =
+    Field(text, id, width, 1, false, hint, () -> ())
+
+// Several lines of it. **Lines are the ones in the text**: nothing wraps, so a long paragraph is one
+// line that scrolls sideways. Wrapping needs the canvas to measure candidate breaks, which is a
+// second measuring pass over the whole run on every frame, and it is worth having only once
+// something wants it.
+text_area(text: &Signal[string], id: int, width: int = 320, rows: int = 5,
+          hint: string = "") -> &View =
+    Field(text, id, width, rows, true, hint, () -> ())
+
+// ## The three things a paint has to work out
+
+// What this frame's pointer and keys did to the text.
+//
+// **A drag and a key are exclusive on purpose**: while the pointer is down the selection is a
+// function of where the press began and where the pointer is now, which is `select.sysl`'s stateless
+// rule, and a key arriving mid-drag would be moving a caret that is about to be recomputed anyway.
+private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> Edited
+    val sel = clamped(c.editing(), s)
+
+    // **The grab is claimed on the inside rather than on the whole field**, because the coordinates
+    // every offset below is worked out in are the inside's, and a grab is keyed by the rectangle
+    // that asked for it -- so the two have to be the same rectangle every frame.
+    if c.grab(inner, FIELD_SLOT)
+        val (ox, oy) = c.press_origin()
+        val (px, py) = c.pointer()
+
+        return Edited(s, Selection(offset_at(c, s, inner, ox, oy), offset_at(c, s, inner, px, py)))
+
+    apply_all(s, sel, c.keys(), multiline)
+end typing
+
+// Which byte offset a point lands on, which is a line and then a column in it.
+//
+// **Past the last line lands at the end of the text and above the first lands at nothing**, which is
+// what makes dragging out of the box in either direction select to the end rather than stopping.
+private offset_at(c: *Canvas, s: string, inner: Rect, x: int, y: int) -> usize
+    val h = c.text_size("").h
+    val ls = line_starts(s)
+    val v = ls.view()
+    val first = top_line(c, s, inner)
+    val down = (y - inner.y) / h + int(first)
+    val i = if down < 0 then 0usize elif usize(down) >= v.len then v.len - 1 else usize(down)
+
+    v[i] + c.text_at(line_text(s, v, i), x - inner.x + shift(c, s, inner))
+end offset_at
+
+// The text, its selection and its caret, drawn from whichever line is first.
+private run(c: *Canvas, inner: Rect, s: string, sel: Selection, mine: bool)
+    val look = c.theme()
+    val h = c.text_size("").h
+    val ls = line_starts(s)
+    val v = ls.view()
+    val first = top_line(c, s, inner)
+    val sx = shift(c, s, inner)
+    val rows = if inner.h / h < 1 then 1usize else usize(inner.h / h)
+    val last = if first + rows < v.len then first + rows else v.len
+
+    for i in first..<last
+        val line = line_text(s, v, i)
+        val y = inner.y + int(i - first) * h
+        val lo = v[i]
+        val hi = lo + line.len
+
+        // The part of the selection that falls on this line, if any. **A selection spanning three
+        // lines paints on all three**, which is why this is an overlap rather than a comparison.
+        if !sel.empty() && sel.hi() > lo && sel.lo() <= hi
+            val a = if sel.lo() < lo then lo else sel.lo()
+            val b = if sel.hi() > hi then hi else sel.hi()
+            val x0 = c.text_x(line, a - lo)
+            val x1 = c.text_x(line, b - lo)
+
+            c.fill(Rect(inner.x + x0 - sx, y, x1 - x0, h), look.selection)
+
+        c.text(Rect(inner.x - sx, y, inner.w + sx, h), line)
+
+    if mine
+        val at = line_of(v, sel.head)
+
+        if at >= first && at < last
+            val x = c.text_x(line_text(s, v, at), sel.head - v[at])
+
+            c.fill(Rect(inner.x + x - sx, inner.y + int(at - first) * h, CARET_W, h), look.ink)
+end run
+
+// The placeholder, in an ink between the text's and the ground it sits on.
+private hint(c: *Canvas, inner: Rect, s: string)
+    val look = c.theme()
+
+    c.ink(mix(look.ink, look.ground, HINT_DIM))
+    c.text(Rect(inner.x, inner.y, inner.w, c.text_size("").h), s)
+    c.unink()
+end hint
+
+// How far a placeholder is mixed toward the ground it sits on.
+private const HINT_DIM: int = 55
+
+// ## Where the run is, given where the caret is
+
+// How far the text is scrolled sideways: enough to keep the caret inside, and no further.
+//
+// **Computed rather than remembered**, which is the whole reason a field keeps no state. It is a
+// function of the caret alone, so replacing the text from underneath cannot leave a field scrolled
+// past the end of what it now holds.
+private shift(c: *Canvas, s: string, inner: Rect) -> int
+    val sel = clamped(c.editing(), s)
+    val v = line_starts(s).view()
+    val at = line_of(v, sel.head)
+    val x = c.text_x(line_text(s, v, at), sel.head - v[at])
+
+    if x > inner.w - CARET_W then x - inner.w + CARET_W else 0
+end shift
+
+// And which line is drawn at the top, by the same rule.
+private top_line(c: *Canvas, s: string, inner: Rect) -> usize
+    val h = c.text_size("").h
+    val rows = if inner.h / h < 1 then 1usize else usize(inner.h / h)
+    val v = line_starts(s).view()
+    val at = line_of(v, clamped(c.editing(), s).head)
+
+    if at >= rows then at - rows + 1 else 0usize
+end top_line
+
+// ## Lines, which a field has one of and an area has several
+
+// Where each line starts. There is always at least one, and a trailing newline starts an empty one.
+private line_starts(s: string) -> Buf[usize]
+    var ls: Buf[usize] = buf()
+    val b = s.bytes
+
+    ls.push(0)
+
+    for i in 0..<b.len
+        if b[i] == u8('\n') then ls.push(i + 1)
+
+    ls
+end line_starts
+
+// Which line an offset is on.
+private line_of(ls: []usize, at: usize) -> usize
+    var i = 0usize
+
+    while i + 1 < ls.len && ls[i + 1] <= at
+        i += 1
+
+    i
+end line_of
+
+// Line `i` without its newline.
+private line_text(s: string, ls: []usize, i: usize) -> string
+    val lo = ls[i]
+    val hi = if i + 1 < ls.len then ls[i + 1] - 1 else s.len
+
+    if lo >= hi then "" else s[lo..<hi]
+end line_text
+
+// A selection bounded against the text it is in, since one outlives the run it was made in.
+private clamped(sel: Selection, s: string) -> Selection
+    val n = s.len
+    val a = if sel.anchor > n then n else sel.anchor
+    val h = if sel.head > n then n else sel.head
+
+    Selection(a, h)
+end clamped

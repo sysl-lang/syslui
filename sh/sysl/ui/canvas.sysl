@@ -194,6 +194,32 @@ trait Canvas
     // capturing the pointer meant recording where the press began.
     press_origin(*self) -> (int, int) = (-1, -1)
 
+    // ## The keyboard, which is the one thing a rectangle cannot key
+    //
+    // **A click carries a position and a key carries nothing**, so where a key goes is decided by
+    // state that outlived the previous frame rather than by geometry. That state is focus, there is
+    // one of it, and `key.sysl` argues at length why the key for it is an id the caller picks rather
+    // than the rectangle everything else here is keyed by.
+    //
+    // **All five default to a canvas with no keyboard**, which draws an editable field as an
+    // ordinary run of text that cannot be typed into -- a plainer picture rather than a wrong one,
+    // which is the rule every other defaulted member on this trait follows.
+
+    // Which view has the keyboard, or `NOBODY`.
+    focus(*self) -> int = NOBODY
+
+    // Take it. A view calls this while painting, on the frame a press lands inside it.
+    take_focus(*self, id: int) = ()
+
+    // What arrived since the last frame, for whichever view has the focus.
+    keys(*self) -> []Press = no_keys()
+
+    // Where the focused view's caret is, and what it has selected.
+    editing(*self) -> Selection = nothing_selected()
+
+    // Put it somewhere else, which is what a key or a click in the focused view does.
+    edit(*self, sel: Selection) = ()
+
     // The byte offset in `s` of the character boundary nearest `x` pixels from the run's left edge.
     //
     // **The default body is written in terms of `text_size`, so no backend has to implement it** --
@@ -337,13 +363,27 @@ struct Recorder
     // what a hover looks like a tenth of a second in should not depend on how busy the machine was.
     anim: Phases
 
+    // Who has the keyboard, what it has been sent, and where its caret is.
+    board: Keyboard
+
     // Put the pointer somewhere, so a test can hover and press without a window.
     point(*self, x: int, y: int, down: bool = false)
         self.px = x
         self.py = y
         self.down = down
         self.hold.moved(x, y, down)
+        self.board.moved(down)
     end point
+
+    // Send a key, so a test can type without a window.
+    //
+    // **Nothing clears these between paints unless a test asks**, which is the opposite of what a
+    // frame loop does and right for a test: a recording is usually one paint long, and a key that
+    // vanished before the field was drawn would be a test that silently asserted nothing.
+    key(*self, p: Press) = self.board.press(p)
+
+    // Forget the frame's keys, which is what a frame loop does before painting.
+    next_frame(*self) = self.board.reset()
 
     // Advance the clock by `dt` seconds. Until this is called nothing moves, so a recording made
     // without it shows the settled appearance.
@@ -431,6 +471,16 @@ impl Canvas for Recorder
 
     override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
 
+    override focus(*self) -> int = self.board.focus
+
+    override take_focus(*self, id: int) = self.board.take(id)
+
+    override keys(*self) -> []Press = self.board.keys()
+
+    override editing(*self) -> Selection = self.board.sel
+
+    override edit(*self, sel: Selection) = self.board.edit(sel)
+
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
@@ -461,7 +511,7 @@ end Recorder
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
     Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(),
-             buf(), buf(), phases())
+             buf(), buf(), phases(), keyboard())
 
 // The override in force, if anything has pushed one.
 //

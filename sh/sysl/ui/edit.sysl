@@ -1,0 +1,257 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// What a key does to a string and a caret, as a function of nothing else.
+//
+// **Every editing rule in the toolkit is here, and none of it can draw, measure or ask the window
+// anything.** That is deliberate and it is what makes an editable field testable: the hard half of a
+// text field is not the caret bar or the highlight, it is what backspace does to a selection that
+// was dragged right-to-left across a multi-byte character, and a rule shaped as a pure function is
+// one a test can put a hundred cases through without a canvas, a font or a frame.
+//
+// **A caret is a `Selection` whose ends are equal**, so there is one notion here rather than two.
+// Moving without shift collapses it, moving with shift leaves `anchor` where it was, and typing
+// replaces whatever lies between them. Every rule below is one of those three sentences.
+//
+// **Offsets are byte offsets and always land on character boundaries.** `select.sysl` made that
+// choice for the same reason -- a string is indexed by bytes and sliced at them -- and everything
+// here works through the boundary table below rather than by adding one to an offset, which is
+// exactly the operation that would cut a character in half.
+
+// A string and where the caret is in it, which is what a key produces.
+struct Edited deriving Eq
+    text: string
+    sel: Selection
+end Edited
+
+// The result of a key that changed nothing, so that every arm of `apply` has something to answer.
+private unchanged(s: string, sel: Selection) -> Edited = Edited(s, sel)
+
+// What one key does.
+//
+// **`multiline` is a parameter rather than two functions**, because the difference between a field
+// and an area is four arms out of a dozen: `Enter` inserts a newline or does nothing, `Home` and
+// `End` mean the line or the whole run, and `Up`/`Down` move a line or nowhere. Splitting them would
+// duplicate the other eight, which is where the interesting mistakes live.
+apply(s: string, sel: Selection, p: Press, multiline: bool = false) -> Edited
+    val bs = boundaries(s)
+    val v = bs.view()
+
+    p.key match
+        Key.Typed(t) -> replace(s, sel, t)
+
+        Key.Enter -> if multiline then replace(s, sel, "\n") else unchanged(s, sel)
+
+        // **Backspace with something selected deletes the selection and nothing more**, which is the
+        // rule people expect and also the one that keeps a delete from ever needing to look at a
+        // character boundary: the ends of a selection are already on them.
+        Key.Backspace ->
+            if !sel.empty() then replace(s, sel, "")
+            else replace(s, Selection(step_left(s, v, sel.head), sel.head), "")
+
+        Key.Delete ->
+            if !sel.empty() then replace(s, sel, "")
+            else replace(s, Selection(sel.head, step_right(s, v, sel.head)), "")
+
+        // **A left arrow over a selection collapses to its left-hand end rather than moving**, which
+        // is why this is not simply `step_left`: a person who has selected a word and presses left
+        // means "put me before it", and moving as well would leave the caret one character short of
+        // where every other editor puts it.
+        Key.Left ->
+            if p.ctrl then moved(s, sel, word_left(s, v, sel.head), p.shift)
+            elif !sel.empty() && !p.shift then moved(s, sel, sel.lo(), false)
+            else moved(s, sel, step_left(s, v, sel.head), p.shift)
+
+        Key.Right ->
+            if p.ctrl then moved(s, sel, word_right(s, v, sel.head), p.shift)
+            elif !sel.empty() && !p.shift then moved(s, sel, sel.hi(), false)
+            else moved(s, sel, step_right(s, v, sel.head), p.shift)
+
+        Key.Home ->
+            moved(s, sel, if multiline && !p.ctrl then line_start(s, sel.head) else 0usize, p.shift)
+
+        Key.End ->
+            moved(s, sel, if multiline && !p.ctrl then line_end(s, sel.head) else s.len, p.shift)
+
+        Key.Up ->
+            if multiline then moved(s, sel, up(s, v, sel.head), p.shift) else unchanged(s, sel)
+
+        Key.Down ->
+            if multiline then moved(s, sel, down(s, v, sel.head), p.shift) else unchanged(s, sel)
+
+        // **Tab and escape are the application's**, not an editing surface's: what they mean is which
+        // field comes next and whether this dialog is being abandoned, and neither is a question
+        // about text. A field that swallowed them would be a field nothing could ever tab out of.
+        _ -> unchanged(s, sel)
+end apply
+
+// Every key of a frame, in order, which is how a paste that arrives as several events and a person
+// typing quickly both come out as one edit.
+apply_all(s: string, sel: Selection, ps: []Press, multiline: bool = false) -> Edited
+    var out = Edited(s, sel)
+
+    for p in ps
+        out = apply(out.text, out.sel, p, multiline)
+
+    out
+end apply_all
+
+// ## What the rules are written in terms of
+
+// The selection replaced by `ins`, with the caret left after what was inserted.
+//
+// **Bounded against the string rather than trusted**, for `selected_text`'s reason: a selection
+// outlives the run it was made in, and a rebuild can shorten the text under one that nothing has
+// cleared. An edit that sliced past the end would be a crash arriving one frame after the change
+// that caused it.
+private replace(s: string, sel: Selection, ins: string) -> Edited
+    val n = s.len
+    val lo = if sel.lo() > n then n else sel.lo()
+    val hi = if sel.hi() > n then n else sel.hi()
+    val at = lo + ins.len
+
+    Edited(s[0..<lo] + ins + s[hi..<n], Selection(at, at))
+end replace
+
+// The caret moved to `to`, taking the anchor with it unless shift is held.
+private moved(s: string, sel: Selection, to: usize, shift: bool) -> Edited =
+    Edited(s, if shift then Selection(sel.anchor, to) else Selection(to, to))
+
+// Where each character starts, and the end of the string after them.
+//
+// **A continuation byte is one whose top two bits are `10`**, so a boundary is every byte that is
+// not one. That is the whole of UTF-8 that this file needs to know, it is a single pass, and it
+// answers every question below with an index rather than with arithmetic on offsets.
+private boundaries(s: string) -> Buf[usize]
+    var bs: Buf[usize] = buf()
+    val b = s.bytes
+
+    for i in 0..<b.len
+        if (b[i] & 0xC0) != 0x80 then bs.push(i)
+
+    bs.push(s.len)
+    bs
+end boundaries
+
+// Which boundary `at` is, or the one before it if a stale offset has landed inside a character.
+private slot(bs: []usize, at: usize) -> usize
+    var i = 0usize
+
+    while i + 1 < bs.len && bs[i + 1] <= at
+        i += 1
+
+    i
+end slot
+
+// The boundary before `at`, and the one after it. Both stop at the ends rather than wrapping.
+private step_left(s: string, bs: []usize, at: usize) -> usize
+    val i = slot(bs, at)
+
+    if i == 0 then 0usize else bs[i - 1]
+end step_left
+
+private step_right(s: string, bs: []usize, at: usize) -> usize
+    val i = slot(bs, at)
+
+    if i + 1 >= bs.len then s.len else bs[i + 1]
+end step_right
+
+// Whether the character starting at boundary `k` is a space, a tab or a newline.
+//
+// **Only ASCII whitespace counts**, which is a limit worth stating rather than hiding: a non-breaking
+// space is a character a word motion will run straight over. Widening it means a table, and a table
+// belongs in `sysl.text` where the width tables already are.
+private blank(s: string, bs: []usize, k: usize) -> bool
+    if k + 1 >= bs.len then return false
+
+    val b = s.bytes[bs[k]]
+
+    b == u8(' ') || b == u8('\t') || b == u8('\n') || b == u8('\r')
+end blank
+
+// The start of the word to the left: back over any spaces, then back over the word itself.
+private word_left(s: string, bs: []usize, at: usize) -> usize
+    var i = slot(bs, at)
+
+    while i > 0 && blank(s, bs, i - 1)
+        i -= 1
+
+    while i > 0 && !blank(s, bs, i - 1)
+        i -= 1
+
+    bs[i]
+end word_left
+
+// And the end of the word to the right, which is the same walk the other way.
+private word_right(s: string, bs: []usize, at: usize) -> usize
+    val last = bs.len - 1
+    var i = slot(bs, at)
+
+    while i < last && blank(s, bs, i)
+        i += 1
+
+    while i < last && !blank(s, bs, i)
+        i += 1
+
+    bs[i]
+end word_right
+
+// ## Lines, which only an area has
+
+// The offset just after the newline before `at`, or zero.
+private line_start(s: string, at: usize) -> usize
+    val b = s.bytes
+    val n = if at > s.len then s.len else at
+    var i = n
+
+    while i > 0 && b[i - 1] != u8('\n')
+        i -= 1
+
+    i
+end line_start
+
+// The offset of the newline at or after `at`, or the end of the string.
+private line_end(s: string, at: usize) -> usize
+    val b = s.bytes
+    var i = if at > s.len then s.len else at
+
+    while i < s.len && b[i] != u8('\n')
+        i += 1
+
+    i
+end line_end
+
+// How many characters into its line `at` is, and where that column lands on another line.
+//
+// **A column is counted in characters rather than in pixels**, which is the honest limit of a
+// vertical move that knows only the text: in a proportional font the caret will not come out under
+// where it started. Doing better means asking the canvas to measure both lines, which is a question
+// for the view rather than for a pure rule, and the view can override it the day it matters.
+private col_at(s: string, bs: []usize, at: usize) -> usize
+    slot(bs, at) - slot(bs, line_start(s, at))
+
+private at_column(s: string, bs: []usize, start: usize, col: usize) -> usize
+    val stop = slot(bs, line_end(s, start))
+    val want = slot(bs, start) + col
+
+    bs[if want > stop then stop else want]
+end at_column
+
+// The same column on the line above, or the start of the run when there is no line above.
+private up(s: string, bs: []usize, at: usize) -> usize
+    val start = line_start(s, at)
+
+    if start == 0 then return 0usize
+
+    at_column(s, bs, line_start(s, start - 1), col_at(s, bs, at))
+end up
+
+// And on the line below, or the end of the run.
+private down(s: string, bs: []usize, at: usize) -> usize
+    val stop = line_end(s, at)
+
+    if stop >= s.len then return s.len
+
+    at_column(s, bs, stop + 1, col_at(s, bs, at))
+end down

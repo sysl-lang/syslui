@@ -397,6 +397,53 @@ first, because capturing the pointer for the slider meant recording it — so th
 of a drag to notice and no half-set state to leave behind. `press_origin()` is what made that
 possible.
 
+## Typing into it
+
+**A click carries a position and a key carries nothing**, which is the whole difference between the
+pointer and the keyboard. A tap can be matched against the frame's hit regions after the fact; a key
+has to be routed by something that outlived the previous frame, and that something is *focus*.
+
+```
+text_field(name, id = 1, hint = "your name")     // one line
+text_area(notes, id = 2, width = 320, rows = 5)  // several, no wrapping
+```
+
+**Focus is an id the caller picks, not the rectangle everything else is keyed by.** A form that
+scrolls while somebody is typing moves the field they are typing in, so geometry loses the focus at
+exactly the moment it matters most. An id is what `tabs` and `radio` already ask for, and it is the
+only name that survives a relayout — it must be unique in a window and never `NOBODY`.
+
+**A press anywhere blurs and whatever the press was inside takes focus back while it paints.** That
+is one line in each of two places rather than a rule anybody has to remember: no view knows that
+another view was clicked, and a click on a button, on a list or on empty ground all put the keyboard
+away by doing nothing at all.
+
+The work splits three ways, and only the last of the three is in `field.sysl`:
+
+- **What a key does is a pure function.** `apply(text, sel, press, multiline)` is in `edit.sysl` and
+  can neither draw nor measure nor ask the window anything. The hard half of a text field is not the
+  caret bar, it is what backspace does to a selection dragged right-to-left across a multi-byte
+  character — and a rule shaped like this is one a test can put a hundred cases through without a
+  canvas, a font or a frame. Twenty of the package's tests are exactly that.
+- **Who the keys belong to is the canvas's**, in `key.sysl`, beside `Hits` and `Grab` for their
+  reason: there is one right answer to "who has the keyboard" and a second implementation of it is a
+  second place for it to be subtly different. Five defaulted `Canvas` members reach it, so a backend
+  with no keyboard draws a field as an ordinary run of text that cannot be typed into.
+- **The text is the application's.** A `&Signal[string]`, like every other piece of state that
+  outlives a rebuild.
+
+**A caret is a `Selection` whose ends are equal**, so there is one notion of position rather than
+two: moving without shift collapses it, moving with shift leaves the anchor, and typing replaces
+whatever lies between. That is also what lets the selection painting and `selected_text` be the same
+code a `selectable` run uses.
+
+**A field and an area are one view.** They differ in how many rows they measure to and in what four
+keys mean — `Enter`, `Home`, `End` and the vertical arrows — and everything else is shared. **Both
+scroll to keep the caret in view and neither remembers how far**: the offset is computed from where
+the caret is, every frame, so text replaced from underneath cannot leave a field scrolled past the
+end of what it now holds. Nothing wraps: a long paragraph in an area is one line that scrolls
+sideways, because wrapping means measuring candidate breaks over the whole run on every frame.
+
 ## Culling
 
 A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
@@ -472,6 +519,9 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 - `sh/sysl/ui/overlay.sysl` — `render`, popovers and modals: the second paint pass
 - `sh/sysl/ui/atom.sysl` — application state a module declares, and values derived from it
 - `sh/sysl/ui/select.sysl` — selecting a run of text with the pointer
+- `sh/sysl/ui/key.sysl` — `Key`, `Press`, and the focus the canvas keeps
+- `sh/sysl/ui/edit.sysl` — what a key does to a string and a caret, as a pure function
+- `sh/sysl/ui/field.sysl` — `text_field` and `text_area`: the geometry left over
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives, and the scrollbar
 - `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against; a
   recorder that draws nothing and remembers everything, so the tree can be asserted with no window;
