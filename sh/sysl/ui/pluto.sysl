@@ -90,10 +90,12 @@ struct PlutoCanvas
     key(*self, p: Press) = self.board.press(p)
 
     // Start a frame worth `dt` seconds, forgetting the animations nothing asked about during the
-    // last one, and the keys the frame before it consumed.
-    tick(*self, dt: real)
-        self.anim.tick(dt)
-        self.board.reset()
+    // last one.
+    //
+    // **The keys are not cleared here**, though it looks like the place: a frame loop polls its
+    // events before it ticks its clock, so clearing them here would throw away the keys of the frame
+    // about to be painted. `render` does it, at the end, which is the only moment that is certain.
+    tick(*self, dt: real) = self.anim.tick(dt)
 
     // Set the paint colour from a 0xRRGGBB, which is what every view speaks.
     private use(*self, color: u32)
@@ -196,6 +198,8 @@ impl Canvas for PlutoCanvas
     override editing(*self) -> Selection = self.board.sel
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
+
+    override keys_done(*self) = self.board.reset()
 
     // **PlutoVG is asked rather than a clip stack being kept beside it**, which is one fewer thing
     // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a

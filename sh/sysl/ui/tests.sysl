@@ -3839,6 +3839,29 @@ private an_area_scrolls_to_the_caret_line()
            s"the first two lines have scrolled off the top:\n${c.dump()}")
 end an_area_scrolls_to_the_caret_line
 
+// **A key belongs to exactly one frame**, and `render` is what says where a frame ends -- which is
+// the regression this pins: clearing them in `tick` threw away the keys of the frame about to be
+// painted, because a frame loop polls its events before it ticks its clock.
+@test
+private a_frame_forgets_its_keys_when_it_ends()
+    val t = signal("")
+    val v = text_field(t, 1)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    render(v, &c, FIELD)
+    c.point(20, 14, false)
+
+    c.key(typed("a"))
+    render(v, &c, FIELD)
+
+    assert(t.read() == "a", "the frame the key arrived in typed it")
+
+    render(v, &c, FIELD)
+
+    assert(t.read() == "a", s"and the frame after did not type it again: '${t.read()}'")
+end a_frame_forgets_its_keys_when_it_ends
+
 // ## Pictures
 //
 // **A picture is the fourth thing a canvas can draw**, and the three fits are where the interesting

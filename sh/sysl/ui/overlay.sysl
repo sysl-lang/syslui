@@ -93,6 +93,16 @@ render(v: &View, c: *Canvas, at: Rect)
                 None -> p[i].view.paint(c, p[i].at)
 
             c.pop_theme()
+
+    // **The frame's keys are forgotten at the end of the frame, and this is the only place that
+    // knows where a frame ends.** A key arrives between two frames and is meant for exactly one of
+    // them: cleared any earlier and a field would never see the keys of the frame it is painting,
+    // cleared later by the application and the one that forgets repeats every keystroke forever.
+    // `render` is what every program already calls once a frame, so there is nothing to forget.
+    //
+    // A test that paints by hand is deliberately outside this: it drives the keys itself, and a
+    // recording is usually one paint long.
+    c.keys_done()
 end render
 
 // How many times an overlay may raise another before this gives up on it.

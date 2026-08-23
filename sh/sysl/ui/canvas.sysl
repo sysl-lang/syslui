@@ -226,6 +226,10 @@ trait Canvas
     // Put it somewhere else, which is what a key or a click in the focused view does.
     edit(*self, sel: Selection) = ()
 
+    // Forget the keys this frame delivered. **`render` calls it, and nothing else should**: a key
+    // belongs to exactly one frame, and where a frame ends is the one thing a canvas cannot see.
+    keys_done(*self) = ()
+
     // The byte offset in `s` of the character boundary nearest `x` pixels from the run's left edge.
     //
     // **The default body is written in terms of `text_size`, so no backend has to implement it** --
@@ -392,12 +396,10 @@ struct Recorder
     // Send a key, so a test can type without a window.
     //
     // **Nothing clears these between paints unless a test asks**, which is the opposite of what a
-    // frame loop does and right for a test: a recording is usually one paint long, and a key that
-    // vanished before the field was drawn would be a test that silently asserted nothing.
+    // whole frame does and right for a test: a recording is usually one paint long, and a key that
+    // vanished before the field was drawn would be a test that silently asserted nothing. A test
+    // wanting the frame-loop behaviour paints through `render`, which ends the frame's keys itself.
     key(*self, p: Press) = self.board.press(p)
-
-    // Forget the frame's keys, which is what a frame loop does before painting.
-    next_frame(*self) = self.board.reset()
 
     // Advance the clock by `dt` seconds. Until this is called nothing moves, so a recording made
     // without it shows the settled appearance.
@@ -494,6 +496,8 @@ impl Canvas for Recorder
     override editing(*self) -> Selection = self.board.sel
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
+
+    override keys_done(*self) = self.board.reset()
 
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.

@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-Two hundred and forty-four tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Two hundred and forty-five tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -431,6 +431,11 @@ The work splits three ways, and only the last of the three is in `field.sysl`:
   with no keyboard draws a field as an ordinary run of text that cannot be typed into.
 - **The text is the application's.** A `&Signal[string]`, like every other piece of state that
   outlives a rebuild.
+
+**A key belongs to exactly one frame, and `render` is what ends it.** A frame loop polls its events
+before it ticks its clock, so clearing the keys in `tick` throws away the keys of the frame about to
+be painted; leaving it to the application means the one that forgets repeats every keystroke forever.
+`render` is what every program already calls once a frame, so there is nothing to forget.
 
 **A caret is a `Selection` whose ends are equal**, so there is one notion of position rather than
 two: moving without shift collapses it, moving with shift leaves the anchor, and typing replaces
