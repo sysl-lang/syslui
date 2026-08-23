@@ -40,6 +40,13 @@ struct PlutoCanvas
 
     taps: Hits
 
+    // The clip rectangles in force, in the coordinates views are painted in.
+    //
+    // **The backend kept none and asked PlutoVG instead, and that was a bug a phone found.**
+    // `clip_extents` answers in *device* space, so a canvas drawn through a transform compared a
+    // view's coordinates against pixels nearly three times larger and culled almost everything.
+    clips: Clips
+
     // Who owns the pointer while it is held, so a drag survives leaving what it is dragging.
     hold: Grab
 
@@ -170,8 +177,11 @@ impl Canvas for PlutoCanvas
         self.vg.save()
         self.path(r, 0)
         self.vg.clip()
+        self.clips.push(r)
 
-    unclip(*self) = self.vg.restore()
+    unclip(*self)
+        self.vg.restore()
+        self.clips.pop()
 
     ink(*self, color: u32) = self.tints.push(color)
 
@@ -209,12 +219,10 @@ impl Canvas for PlutoCanvas
     // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a
     // second copy maintained here would be a second thing to be wrong. The comparison is in the
     // rasterizer's own floats so that nothing is lost rounding a clip to whole pixels.
-    override visible(*self, r: Rect) -> bool
-        val e = self.vg.clip_extents()
-
-        f32(r.x) < e.x + e.w && f32(r.x + r.w) > e.x &&
-            f32(r.y) < e.y + e.h && f32(r.y + r.h) > e.y
-    end visible
+    // **Answered from the stack above rather than from PlutoVG.** Its `clip_extents` are in device
+    // space, so this compared a view's coordinates against pixels -- correct only while the canvas
+    // is drawn at one to one, which a phone's density is not.
+    override visible(*self, r: Rect) -> bool = self.clips.shows(r)
 
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
         self.anim.at(r, slot, target, rate)
@@ -315,8 +323,8 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), grabbing(), buf(), phases(), buf(), dark(), buf(), map(),
-                keyboard())
+                -1, -1, false, hits(), clips(), grabbing(), buf(), phases(), buf(), dark(), buf(),
+                map(), keyboard())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

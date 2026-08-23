@@ -3947,6 +3947,64 @@ private a_frame_forgets_its_keys_when_it_ends()
     assert(t.read() == "a", s"and the frame after did not type it again: '${t.read()}'")
 end a_frame_forgets_its_keys_when_it_ends
 
+// ## The clip stack, which is the thing a transform got wrong
+//
+// **A backend answered `visible` by asking PlutoVG for its clip extents, which are in device space.**
+// Scaled by a phone's density, a table compared its rows against pixels nearly three times larger
+// and drew one row in eight. Neither backend asks anybody now: the stack below is kept in the
+// coordinates views are painted in, so there is no transform for it to disagree with.
+
+@test
+private nothing_clipped_shows_everything()
+    var k = clips()
+
+    assert(k.shows(Rect(0, 0, 10, 10)), "with nothing pushed, everything is reachable")
+    assert(k.depth() == 0)
+end nothing_clipped_shows_everything
+
+@test
+private a_clip_hides_what_falls_outside_it()
+    var k = clips()
+
+    k.push(Rect(0, 100, 200, 100))
+
+    assert(k.shows(Rect(0, 150, 20, 20)), "inside")
+    assert(k.shows(Rect(0, 90, 20, 20)), "straddling the top edge")
+    assert(!k.shows(Rect(0, 0, 20, 20)), "well above it")
+    assert(!k.shows(Rect(0, 200, 20, 20)), "and touching the bottom edge is not overlapping it")
+end a_clip_hides_what_falls_outside_it
+
+// **A nested clip is intersected with the one below it as it is pushed**, so the innermost entry is
+// the whole answer and nothing has to walk the stack.
+@test
+private a_nested_clip_is_the_intersection()
+    var k = clips()
+
+    k.push(Rect(0, 0, 200, 200))
+    k.push(Rect(100, 0, 200, 200))
+
+    assert(!k.shows(Rect(0, 0, 50, 50)), "the left half is outside the inner clip")
+    assert(k.shows(Rect(120, 0, 50, 50)), "and the part both of them hold is not")
+
+    k.pop()
+
+    assert(k.shows(Rect(0, 0, 50, 50)), "and popping the inner one brings it back")
+    assert(k.depth() == 1)
+end a_nested_clip_is_the_intersection
+
+// Two clips that do not touch leave nothing, which needs no special case: an empty rectangle
+// overlaps nothing at all.
+@test
+private clips_that_do_not_touch_show_nothing()
+    var k = clips()
+
+    k.push(Rect(0, 0, 50, 50))
+    k.push(Rect(100, 100, 50, 50))
+
+    assert(!k.shows(Rect(0, 0, 50, 50)))
+    assert(!k.shows(Rect(100, 100, 50, 50)), "not even what the inner one names")
+end clips_that_do_not_touch_show_nothing
+
 // ## Pictures
 //
 // **A picture is the fourth thing a canvas can draw**, and the three fits are where the interesting

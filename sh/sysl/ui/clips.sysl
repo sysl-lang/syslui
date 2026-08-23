@@ -1,0 +1,56 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// The clip rectangles in force, and the culling question they answer.
+//
+// **This is a mechanism struct beside `Hits`, `Grab` and `Keyboard`, and it is one because a backend
+// got it wrong.** `PlutoCanvas` answered `visible` by asking PlutoVG for its clip extents, which are
+// in **device** space -- and a canvas drawn through a transform, which is how a phone's density is
+// handled, then compared a view's coordinates against pixels two and three quarter times larger.
+// Rows of a table vanished, all of them but the last, and nothing in the recorder-based tests could
+// see it because the recorder keeps its own rectangles and has no transform at all.
+//
+// **So neither backend asks anybody for the clip any more.** The stack is kept here, in the
+// coordinates views are painted in, and it cannot disagree with a transform because it never sees
+// one. What the backend still does with its own clip is *drawing*; what culling reads is this.
+//
+// **Each entry is already intersected with the one below it**, so the innermost is the whole answer
+// and a nested clip needs no walk.
+struct Clips
+    stack: Buf[Rect]
+
+    push(*self, r: Rect)
+        val v = self.stack.view()
+
+        self.stack.push(if v.len == 0 then r else meet(v[v.len - 1], r))
+
+    pop(*self)
+        self.stack.pop()
+        ()
+
+    // Is any part of `r` still reachable? **True when nothing has clipped at all**, which is what
+    // makes a backend that tracks no clip correct and merely slower.
+    shows(*self, r: Rect) -> bool
+        val v = self.stack.view()
+
+        v.len == 0 || r.overlaps(v[v.len - 1])
+
+    // How deep the stack is, which is what a test asserts to know a `pop` happened.
+    depth(*self) -> usize = self.stack.view().len
+end Clips
+
+clips() -> Clips = Clips(buf())
+
+// The rectangle two of them have in common, which is what nesting one clip inside another leaves.
+//
+// An empty result -- a width or a height of nothing -- is what "these do not touch" looks like, and
+// `overlaps` answers false against it, which is the whole reason this does not need a special case.
+meet(a: Rect, b: Rect) -> Rect
+    val x = if a.x > b.x then a.x else b.x
+    val y = if a.y > b.y then a.y else b.y
+    val right = if a.right() < b.right() then a.right() else b.right()
+    val bottom = if a.bottom() < b.bottom() then a.bottom() else b.bottom()
+
+    Rect(x, y, if right > x then right - x else 0, if bottom > y then bottom - y else 0)
+end meet

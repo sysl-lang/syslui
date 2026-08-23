@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-Two hundred and forty-eight tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Two hundred and fifty-two tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -590,4 +590,5 @@ catches it is a `sysl build-c` of something that uses the toolkit, which is what
   actually has to write
 - `sh/sysl/ui/pluto.sysl` — the real backend: a frame drawn into a PlutoVG surface
 - `sh/sysl/ui/input.sysl` — where a tap goes: the regions the paint pass collected
+- `sh/sysl/ui/clips.sysl` — the clip stack both backends cull against, in view coordinates
 - `sh/sysl/ui/tests.sysl` — the findings, kept as tests rather than as prose

@@ -369,11 +369,9 @@ struct Recorder
     look: Theme
     looks: Buf[Theme]
 
-    // The clip rectangles in force, innermost last, so that `visible` can answer and a test can
-    // watch a container skip what it cannot draw.
-    //
-    // Each entry is already intersected with the one below it, so the innermost is the whole answer.
-    clips: Buf[Rect]
+    // The clip rectangles in force, so that `visible` can answer and a test can watch a container
+    // skip what it cannot draw. `clips.sysl` is why this is a struct shared with the real backend.
+    clips: Clips
 
     // Who owns the pointer while it is held, so a drag can be tested leaving the thing it drags.
     hold: Grab
@@ -449,19 +447,14 @@ impl Canvas for Recorder
         self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
 
     clip(*self, r: Rect)
-        val v = self.clips.view()
-
         self.ops.push(s"clip ${r.x},${r.y} ${r.w}x${r.h}")
-        self.clips.push(if v.len == 0 then r else meet(v[v.len - 1], r))
+        self.clips.push(r)
 
     unclip(*self)
         self.ops.push("unclip")
         self.clips.pop()
 
-    override visible(*self, r: Rect) -> bool
-        val v = self.clips.view()
-
-        v.len == 0 || r.overlaps(v[v.len - 1])
+    override visible(*self, r: Rect) -> bool = self.clips.shows(r)
 
     override text_ink(*self) -> u32
         val v = self.tints.view()
@@ -550,7 +543,7 @@ end Recorder
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), grabbing(),
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), clips(), grabbing(),
              buf(), buf(), phases(), keyboard())
 
 // The override in force, if anything has pushed one.
@@ -562,19 +555,6 @@ private override_ink(tints: Buf[u32]) -> Option[u32]
 
     if v.len == 0 then None else Some(v[v.len - 1])
 end override_ink
-
-// The rectangle two of them have in common, which is what nesting one clip inside another leaves.
-//
-// An empty result -- a width or a height of nothing -- is what "these do not touch" looks like, and
-// `overlaps` answers false against it, which is the whole reason this does not need a special case.
-private meet(a: Rect, b: Rect) -> Rect
-    val x = if a.x > b.x then a.x else b.x
-    val y = if a.y > b.y then a.y else b.y
-    val right = if a.right() < b.right() then a.right() else b.right()
-    val bottom = if a.bottom() < b.bottom() then a.bottom() else b.bottom()
-
-    Rect(x, y, if right > x then right - x else 0, if bottom > y then bottom - y else 0)
-end meet
 
 // The smallest thing that satisfies `Canvas`: a body for every member the trait leaves without one,
 // and no opinion about anything else.
