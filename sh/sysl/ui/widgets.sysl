@@ -53,6 +53,21 @@ private const FILL_SLOT: int = 5
 private const FLIP_RATE: real = 14.0
 private const PROGRESS_RATE: real = 4.0
 
+// Where a control of this size sits in the rectangle it was actually handed.
+//
+// **A view may be given more than it measured for, and every control here has to say what it does
+// about that.** A `Row` gives each child the height of the tallest one and a `Column` gives each
+// child the column's full width, so a slider sixteen pixels tall sitting beside a label twenty-six
+// tall is handed twenty-six -- and a knob drawn at `r.y` then sits three pixels above the track it
+// is supposed to run along, which is exactly the sort of thing no recording-based test notices and
+// a person spots immediately.
+//
+// Centred vertically and leading horizontally: a control is a thing on a line of other things, so
+// the axis it shares with its neighbours is the one it lines up on, and the other is where it
+// starts. It never draws larger than it was given, whatever it asked for.
+private inside(r: Rect, w: int, h: int) -> Rect =
+    Rect(r.x, r.y + (r.h - h) / 2, if r.w < w then r.w else w, if r.h < h then r.h else h)
+
 // ## The switch
 
 // A two-state control that slides, drawn as a pill with a circle in it.
@@ -77,13 +92,17 @@ impl View for Switch
         val t = c.phase(r, SWITCH_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
         val lit = c.phase(r, KNOB_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
 
+        val b = inside(r, SWITCH_W, SWITCH_H)
         val pad = 3
-        val d = r.h - 2 * pad
-        val travel = r.w - 2 * pad - d
+        val d = b.h - 2 * pad
+        val travel = b.w - 2 * pad - d
 
-        c.fill(r, mix(INERT, self.color, int(t * 100.0)), r.h / 2)
-        c.fill(Rect(r.x + pad + int(t * real(travel)), r.y + pad, d, d),
+        c.fill(b, mix(INERT, self.color, int(t * 100.0)), b.h / 2)
+        c.fill(Rect(b.x + pad + int(t * real(travel)), b.y + pad, d, d),
                darken(WHITE, int((1.0 - lit) * 8.0)), d / 2)
+
+        // **The whole of what it was given answers to a tap, not just the pill.** A control given
+        // more room than it draws in is still the thing at that place on the line.
         c.hit(r, self.flip)
     end paint
 
@@ -111,18 +130,19 @@ impl View for Box
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(BOX_SIDE, BOX_SIDE)
 
     paint(&self, c: *Canvas, r: Rect)
-        val t = c.phase(r, CHECK_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
+        val b = inside(r, BOX_SIDE, BOX_SIDE)
+        val t = c.phase(b, CHECK_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
         val edge = mix(INERT, self.color, int(t * 100.0))
 
-        c.fill(r, mix(GROUND_TINT, self.color, int(t * 100.0)), 4)
-        c.stroke(r, lighten(edge, int(self.i.hover * 20.0)), 2, 4)
+        c.fill(b, mix(GROUND_TINT, self.color, int(t * 100.0)), 4)
+        c.stroke(b, lighten(edge, int(self.i.hover * 20.0)), 2, 4)
 
         // The mark, inset by however much of the way in it has got. At rest it has no area at all,
         // which is what makes an unchecked box an outline and nothing else.
-        val inset = int((1.0 - t) * real(r.w) / 2.0) + 5
-        val side = r.w - 2 * inset
+        val inset = int((1.0 - t) * real(b.w) / 2.0) + 5
+        val side = b.w - 2 * inset
 
-        if side > 0 then c.fill(Rect(r.x + inset, r.y + inset, side, side), WHITE, 2)
+        if side > 0 then c.fill(Rect(b.x + inset, b.y + inset, side, side), WHITE, 2)
     end paint
 
 // What an unchecked box is filled with -- dark enough to read as a hole in whatever it sits on.
@@ -192,11 +212,16 @@ impl View for Slider
         val x = if travel > 0 && span > 0 then (clamped - self.lo) * travel / span else 0
 
         val lit = c.phase(r, KNOB_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
-        val track = Rect(r.x, r.y + (r.h - TRACK_H) / 2, r.w, TRACK_H)
+
+        // **The knob and the track are centred in the same rectangle**, which is the whole reason
+        // this control does not draw straight into `r`: they are two shapes that have to share a
+        // centre line, and taking that line from anything but one rectangle is how they come apart.
+        val b = inside(r, r.w, KNOB)
+        val track = Rect(b.x, b.y + (b.h - TRACK_H) / 2, b.w, TRACK_H)
 
         c.fill(track, INERT, TRACK_H / 2)
         c.fill(Rect(track.x, track.y, x + KNOB / 2, TRACK_H), self.color, TRACK_H / 2)
-        c.fill(Rect(r.x + x, r.y, KNOB, KNOB), lighten(self.color, 30 + int(lit * 25.0)), KNOB / 2)
+        c.fill(Rect(b.x + x, b.y, KNOB, KNOB), lighten(self.color, 30 + int(lit * 25.0)), KNOB / 2)
         c.hit(r, self.grab)
     end paint
 
@@ -223,12 +248,13 @@ impl View for Progress
     paint(&self, c: *Canvas, r: Rect)
         val f = if self.fraction < 0.0 then 0.0 elif self.fraction > 1.0 then 1.0 else self.fraction
         val t = c.phase(r, FILL_SLOT, f, PROGRESS_RATE)
+        val b = inside(r, r.w, TRACK_H)
 
-        c.fill(r, INERT, r.h / 2)
+        c.fill(b, INERT, b.h / 2)
 
-        val w = int(t * real(r.w))
+        val w = int(t * real(b.w))
 
-        if w > 0 then c.fill(Rect(r.x, r.y, w, r.h), self.color, r.h / 2)
+        if w > 0 then c.fill(Rect(b.x, b.y, w, b.h), self.color, b.h / 2)
     end paint
 
 progress(fraction: real, width: int, color: u32 = ACCENT) -> &View =

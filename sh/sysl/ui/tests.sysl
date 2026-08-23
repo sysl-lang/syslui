@@ -906,7 +906,7 @@ private a_checked_box_is_filled_and_marked()
     assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
                   s"fill 0,0 18x18 #${ACCENT} r4\n" +
                   s"stroke 0,0 18x18 #${ACCENT} w2 r4\n" +
-                  s"fill 4,4 10x10 #${WHITE} r2\n" +
+                  s"fill 5,5 8x8 #${WHITE} r2\n" +
                   "text 26,0 40x18 'label'\n" +
                   "hit 0,0 66x18\n")
 end a_checked_box_is_filled_and_marked
@@ -1224,3 +1224,62 @@ private overlapping_is_shared_area_and_not_a_shared_edge()
     assert(!Rect(0, 0, 1000, 1000).overlaps(Rect(50, 50, 0, 0)),
            "and a wide one straddling an empty one's single coordinate still shares no area with it")
 end overlapping_is_shared_area_and_not_a_shared_edge
+
+// -- a control given more room than it asked for --------------------------------------------------
+//
+// **A `Row` gives every child the height of the tallest one and a `Column` gives every child the
+// column's whole width**, so a control is routinely handed a rectangle larger than it measured to.
+// What it does about that is invisible to a test that paints it at exactly its own size, which is
+// how a slider shipped with its knob three pixels above its own track.
+
+// The knob and the track share a centre line whatever height the row turns out to be.
+@test
+private a_slider_in_a_taller_row_centres_its_knob_on_its_track()
+    val v = signal(50)
+    var c = recorder()
+
+    // Sixteen tall by nature, handed twenty-six -- what sitting beside a padded label does to it.
+    slider(v, 0, 100, 220).paint(&c, Rect(0, 0, 220, 26))
+
+    assert(c.dump() == s"fill 0,10 220x6 #${INERT} r3\n" +
+                       s"fill 0,10 110x6 #${ACCENT} r3\n" +
+                       s"fill 102,5 16x16 #${lighten(ACCENT, 30)} r8\n" +
+                       "hit 0,0 220x26\n",
+           s"the track's centre is 13 and so is the knob's:\n${c.dump()}")
+end a_slider_in_a_taller_row_centres_its_knob_on_its_track
+
+// A switch keeps its own shape rather than stretching into whatever it was handed -- a pill drawn
+// across a column's full width is not a switch.
+@test
+private a_switch_keeps_its_own_size_in_a_bigger_rectangle()
+    val on = signal(false)
+    var c = recorder()
+
+    switch(on).paint(&c, Rect(0, 0, 300, 40))
+
+    assert(c.dump() == s"fill 0,8 44x24 #${INERT} r12\n" +
+                       s"fill 3,11 18x18 #${darken(WHITE, 8)} r9\n" +
+                       "hit 0,0 300x40\n",
+           s"forty-four by twenty-four, eight down:\n${c.dump()}")
+end a_switch_keeps_its_own_size_in_a_bigger_rectangle
+
+// And the whole of what it was given still answers to a tap: a control handed more room than it
+// draws in is still the thing at that place on the line.
+@test
+private a_control_is_tappable_across_all_it_was_given()
+    val on = signal(false)
+    var c = recorder()
+
+    switch(on).paint(&c, Rect(0, 0, 300, 40))
+
+    assert(c.taps.tap(280, 36), "the far corner of the rectangle, well outside the pill")
+    assert(on.read(), "and it flipped")
+end a_control_is_tappable_across_all_it_was_given
+
+// A progress bar is six tall wherever it is put, rather than a rounded rectangle as tall as its row.
+@test
+private a_progress_bar_keeps_its_thickness()
+    assert_paints(progress(0.5, 200), Size(300, 300), Rect(0, 0, 200, 30),
+                  s"fill 0,12 200x6 #${INERT} r3\n" +
+                  s"fill 0,12 100x6 #${ACCENT} r3\n")
+end a_progress_bar_keeps_its_thickness
