@@ -1,8 +1,9 @@
 // syslUI — a declarative retained user interface for a machine with a heap.
 //
-// **This is a probe, not yet a framework.** Card 0203 asks six questions about whether the
-// architecture decided in 0168 survives contact with the compiler, and the code here exists to
-// answer them. Nothing in it should be read as a settled API.
+// It began as the probe card 0203 asks for, and the six questions it asks about the architecture
+// decided in 0168 are answered. What is here now is a styling layer built on those answers:
+// chainable modifiers, a view whose appearance is decided while it is drawn, and animation. The API
+// is still moving.
 //
 // `imui` is the sibling for a panel on a microcontroller and is not replaced by this: it refuses a
 // retained tree on purpose, and the split between the two is by application size rather than by
@@ -14,16 +15,32 @@ package {
 
   // **The oldest compiler this builds with, and it is ahead of the newest release.** A tree here is
   // written as an indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler
-  // to write their own `Eq`; both of those shipped in 0.0.66. What moves the floor past it is
-  // `sysl.seq`, which is how a list of children is produced now that a container takes one whole
-  // rather than one built into a `Buf` beside the call.
+  // to write their own `Eq`; both of those shipped in 0.0.66. `sysl.seq` moved the floor past it,
+  // and what moves it again is the **leading-dot call chain**: `style.sysl` breaks a four-link
+  // modifier chain before the dot, which no released compiler can read.
   sysl = "0.0.71"
 }
 
-// **The probe asks for a heap and nothing else, which is itself one of the findings.** An erased
-// tree is boxes, so `heap` is not negotiable — that is the bargain 0168 struck against `imui`'s.
-// What is *not* here is `os` or `posix`: the recorder in `canvas.sysl` stands in for a backend, so
-// the questions about the tree can be answered with no window, no font and no display server.
+// The drawing backend, and the one dependency.
+//
+// **PlutoVG is here because of corners.** SDL3 has no shape or path API, and the triangle fan that
+// would draw a rounded rectangle is not antialiased — while a rounded *border* is an annulus, which
+// is not convex and cannot be drawn that way at all. PlutoVG vendors FreeType's `ftgrays`
+// rasterizer, carries its own C, and needs nothing installed, which is why the same backend serves
+// a desktop and a phone.
+dependencies {
+  plutovg { git = "github.com/sysl-lang/plutovg", version = "0.2.0" }
+}
+
+// **An erased tree is boxes, so `heap` is not negotiable** — that is the bargain 0168 struck against
+// `imui`'s, and it was the whole of what this package asked for while the only backend was a
+// recorder that drew nothing.
+//
+// **`posix` arrived with PlutoVG and is narrower than it looks**: in that package it is `write_png`
+// and loading a face from a *file*, and nothing else — a program that renders into a buffer it owns
+// and loads its font from bytes linked into the binary touches no operating system. It is declared
+// because a capability is a property of the module rather than of the call.
 requires {
-  heap = true
+  heap  = true
+  posix = true
 }

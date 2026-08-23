@@ -1,0 +1,202 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+import sh.sysl.plutovg
+
+// The real backend: a frame drawn into a plutovg surface.
+//
+// **PlutoVG rather than the presenter's own drawing calls, and the reason is corners.** SDL3's 2D
+// renderer has points, lines, filled axis-aligned rectangles, textures and `SDL_RenderGeometry`, and
+// no shape or path API at all -- SDL2_gfx's `roundedBoxRGBA` has no successor. A rounded rectangle
+// *is* convex, so it could be drawn as a fan of triangles, and the org's own SDL3 binding already
+// carries `fill_convex_polygon` for exactly that class of gap. What stops it is antialiasing:
+// `SDL_RenderGeometry` does not, so every corner comes out stair-stepped, and a rounded *border* is
+// an annulus, which is not convex at all.
+//
+// PlutoVG does all of it, antialiased, because it vendors FreeType's `ftgrays` rasterizer. It is C99
+// with no external libraries and its source travels inside the package, so there is nothing for a
+// consumer to install -- **which is why the same backend works on a phone, where cairo does not.**
+//
+// **This canvas draws; it does not present.** What it produces is a surface of premultiplied ARGB32
+// pixels, and getting those onto a screen belongs to the application: a streaming texture on the
+// desktop, the same on Android, since SDL3 is the presenter on both. That split is what keeps one
+// backend serving two platforms.
+struct PlutoCanvas
+    vg: &plutovg.Canvas
+
+    face: &plutovg.Font
+    size: f32
+
+    // Where a glyph run's baseline sits below the top of its line, and how tall a line is. Both are
+    // computed once from the face's metrics rather than asked for per run.
+    ascent: int
+    line_h: int
+
+    // Where the pointer is and whether it is held, fed in by the frame loop before it paints.
+    px: int
+    py: int
+    down: bool
+
+    taps: Hits
+    anim: Phases
+
+    // The colour text is drawn in, and the colours to go back to.
+    //
+    // **A stack rather than a field, because `unink` restores what it found.** A coloured label
+    // inside a coloured panel has to leave the panel's colour standing for the siblings after it,
+    // which is the same discipline `clip` has and the reason `Foreground` nests at all.
+    tint: u32
+    tints: Buf[u32]
+
+    // Where the pointer is, which the frame loop sets once a frame before painting.
+    point(*self, x: int, y: int, down: bool)
+        self.px = x
+        self.py = y
+        self.down = down
+
+    // Start a frame worth `dt` seconds, forgetting the animations nothing asked about during the
+    // last one.
+    tick(*self, dt: real) = self.anim.tick(dt)
+
+    // Set the paint colour from a 0xRRGGBB, which is what every view speaks.
+    private use(*self, color: u32)
+        self.vg.rgb(fraction(color, 16), fraction(color, 8), fraction(color, 0))
+
+    // The current path, as a rectangle with corners rounded by `radius`.
+    //
+    // A radius of zero is a plain rectangle rather than a round one with no rounding, because that
+    // is one fewer curve for the rasterizer per fill and there are a great many fills.
+    private path(*self, r: Rect, radius: int)
+        self.vg.begin()
+
+        if radius <= 0 then
+            self.vg.rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h))
+        else
+            self.vg.round_rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h), f32(radius), f32(radius))
+end PlutoCanvas
+
+impl Canvas for PlutoCanvas
+    fill(*self, r: Rect, color: u32, radius: int)
+        self.use(color)
+        self.path(r, radius)
+        self.vg.fill()
+
+    // **The stroke is drawn INSIDE `r`, which takes an inset the caller does not write.** PlutoVG
+    // centres a stroke on its path, so a border of width `w` asked for on the rectangle itself would
+    // put half of it outside and bleed into whatever is next to the view. Insetting the path by half
+    // the width puts the whole of the ink inside the rectangle layout settled on, which is what lets
+    // a border be added to a view without moving anything around it.
+    //
+    // The radius comes in with it: a corner inset by `w/2` has a radius smaller by the same amount,
+    // or the outer edge of the stroke would not follow the fill it sits on.
+    stroke(*self, r: Rect, color: u32, width: int, radius: int)
+        self.use(color)
+        self.vg.line_width(f32(width))
+        self.path(stroke_box(r, width), stroke_radius(radius, width))
+        self.vg.stroke()
+
+    // A run of text with its top-left at `r`, clipped to `r`.
+    //
+    // **The baseline is the ascent below the top**, which is the one conversion between what layout
+    // speaks and what a rasterizer does: a view is placed by its top-left corner and a glyph is
+    // drawn from its baseline.
+    text(*self, r: Rect, t: string)
+        self.vg.save()
+        self.path(r, 0)
+        self.vg.clip()
+        self.use(self.tint)
+        self.vg.set_font(self.face, self.size)
+        self.vg.fill_text(t, f32(r.x), f32(r.y + self.ascent))
+        self.vg.restore()
+
+    clip(*self, r: Rect)
+        self.vg.save()
+        self.path(r, 0)
+        self.vg.clip()
+
+    unclip(*self) = self.vg.restore()
+
+    ink(*self, color: u32)
+        self.tints.push(self.tint)
+        self.tint = color
+
+    unink(*self)
+        self.tints.pop() match
+            Some(c) -> self.tint = c
+            None -> ()
+
+    hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
+
+    pressed(*self, r: Rect) -> bool = self.down && r.holds(self.px, self.py)
+
+    override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
+        self.anim.at(r, slot, target, rate)
+
+    // **Measured through the same face the text is drawn with**, which is the whole reason `measure`
+    // takes a canvas: a view that measured itself would be guessing, and a list laid out against a
+    // guess puts every row in the wrong place.
+    text_size(*self, s: string) -> Size
+        self.vg.set_font(self.face, self.size)
+
+        Size(int(self.vg.text_extents(s).advance), self.line_h)
+    end text_size
+
+    hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
+end PlutoCanvas
+
+// A canvas over a plutovg canvas and a face, at a size in pixels.
+//
+// **The vertical metrics are read once here rather than per run.** `descent` is signed by whichever
+// convention the face carries, so the line height is computed from its magnitude — a face whose
+// descent is negative and one whose descent is positive describe the same font, and a line height
+// that believed the sign would be wrong for one of them.
+pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32, ink: u32 = 0xFFFFFF) -> PlutoCanvas
+    val m = face.metrics(size)
+
+    PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
+                -1, -1, false, hits(), phases(), ink, buf())
+end pluto_canvas
+
+// ## The arithmetic, lifted out so it can be tested without a font
+//
+// **Everything above this line is delegation to PlutoVG; everything below it is the part that can be
+// wrong.** A backend built entirely of `self.vg.something()` needs a real face and a real surface
+// before a single claim about it can be checked, and a font is not something a package's own tests
+// should have to find on the machine running them. So the three pieces that are decisions rather
+// than forwarding are ordinary functions over ordinary values.
+
+// One channel of a 0xRRGGBB colour, as PlutoVG wants it: zero to one rather than zero to 255.
+//
+// Named `fraction` rather than `unit`, which is a type conversion.
+fraction(color: u32, shift: u32) -> f32 = f32(int((color >> shift) & 0xFF)) / 255.0
+
+// Where a border of `width` is actually drawn, given the rectangle it was asked for.
+//
+// **PlutoVG centres a stroke on its path**, so a border asked for on the rectangle itself would put
+// half of its ink outside and bleed into whatever sits next to the view. Insetting by half the width
+// puts the whole of it inside the rectangle layout settled on, which is what lets a border be added
+// to a view without moving anything around it.
+stroke_box(r: Rect, width: int) -> Rect
+    val half = width / 2
+
+    Rect(r.x + half, r.y + half, r.w - 2 * half, r.h - 2 * half)
+
+// And the radius that inset corner needs.
+//
+// A corner moved in by `half` has a radius smaller by the same amount, or the *outer* edge of the
+// stroke would not follow the fill it is sitting on -- which is the visible failure: a border that
+// is round where its background is square, or the other way about.
+stroke_radius(radius: int, width: int) -> int
+    val half = width / 2
+
+    if radius > half then radius - half else 0
+
+// How tall a line of this face is.
+//
+// **`descent` is signed by whichever convention the face carries**, so this reads its magnitude: a
+// face whose descent is negative and one whose descent is positive describe the same font, and a
+// line height that believed the sign would be wrong for one of them.
+line_height(m: plutovg.Metrics) -> int
+    val drop = if m.descent < 0.0 then -m.descent else m.descent
+
+    int(m.ascent + drop + m.line_gap)

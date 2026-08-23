@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-Forty-three tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Forty-seven tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -125,6 +125,24 @@ element card `0168` spent its length refusing.
 A backend with no clock answers the target outright, so a tree drawn through one is drawn settled.
 That is what makes animation something a backend opts into rather than something every backend owes.
 
+## The backend
+
+`PlutoCanvas` draws a frame into a **PlutoVG** surface, and PlutoVG is here because of corners: SDL3
+has no shape or path API at all, the triangle fan that would draw a rounded rectangle is not
+antialiased, and a rounded *border* is an annulus, which is not convex and cannot be drawn that way
+regardless. PlutoVG vendors FreeType's `ftgrays` rasterizer, carries its own C99, and needs nothing
+installed — which is why the same backend serves a desktop and a phone, where cairo does not.
+
+**It draws; it does not present.** What comes out is a surface of premultiplied ARGB32 pixels, and
+getting those onto a screen is the application's: a streaming texture on the desktop and the same on
+Android, since SDL3 is the presenter on both. That split is what keeps one backend serving two
+platforms, and it is why this package asks for no window system of its own.
+
+The arithmetic that can be *wrong* — the half-width inset a centred stroke needs to land inside the
+rectangle layout settled on, the smaller radius that inset corner takes, the channel conversion, and
+a line height read from a `descent` whose sign is a matter of convention — is lifted out of the
+delegation and tested as ordinary functions, so none of it needs a font to be checked.
+
 ## Layout
 
 - `sh/sysl/ui/view.sysl` — the `View` trait, the leaves, and the modifiers
@@ -136,5 +154,6 @@ That is what makes animation something a backend opts into rather than something
 - `sh/sysl/ui/scroll.sysl` — where long-lived state lives
 - `sh/sysl/ui/canvas.sysl` — the `Canvas` trait a frame is drawn through and measured against, and
   a recorder that draws nothing and remembers everything, so the tree can be asserted with no window
+- `sh/sysl/ui/pluto.sysl` — the real backend: a frame drawn into a PlutoVG surface
 - `sh/sysl/ui/input.sysl` — where a tap goes: the regions the paint pass collected
 - `sh/sysl/ui/tests.sysl` — the findings, kept as tests rather than as prose

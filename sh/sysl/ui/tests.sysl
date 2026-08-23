@@ -3,6 +3,7 @@ module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
 import sysl.seq.{Sequence, generate}
+import sh.sysl.plutovg
 
 // The probe's findings, kept as tests rather than as prose.
 //
@@ -756,3 +757,55 @@ private a_button_eases_into_its_hover_rather_than_snapping()
 
     assert(c.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"settled:\n${c.dump()}")
 end a_button_eases_into_its_hover_rather_than_snapping
+
+// -- the plutovg backend's arithmetic -------------------------------------------------------------
+//
+// **Everything else in `pluto.sysl` is delegation, and delegation needs a real face and a real
+// surface before a single claim about it can be checked.** A font is not something a package's own
+// tests should have to find on the machine running them, so the three pieces that are decisions
+// rather than forwarding are ordinary functions over ordinary values, and these are them.
+
+// A colour channel arrives as zero-to-255 and PlutoVG wants zero-to-one.
+@test
+private a_colour_channel_becomes_a_fraction()
+    assert_eq(fraction(0xFFFFFFu32, 16), 1.0)
+    assert_eq(fraction(0x000000u32, 16), 0.0)
+    assert_eq(fraction(0xFF0000u32, 16), 1.0)
+    assert_eq(fraction(0xFF0000u32, 8), 0.0)
+    assert_eq(fraction(0x0000FFu32, 0), 1.0)
+
+    // The middle of the range, which is where a shift off by eight bits would still look plausible.
+    assert_eq(fraction(0x008000u32, 8), 128.0 / 255.0)
+end a_colour_channel_becomes_a_fraction
+
+// **A border is drawn inside the rectangle layout settled on**, because PlutoVG centres a stroke on
+// its path — so the path is inset by half the width, and the whole of the ink lands inside.
+@test
+private a_border_is_inset_by_half_its_width()
+    assert(stroke_box(Rect(0, 0, 100, 40), 1) == Rect(0, 0, 100, 40),
+           "a hairline sits on the edge, since half of one is none")
+    assert(stroke_box(Rect(0, 0, 100, 40), 2) == Rect(1, 1, 98, 38), "half of two, off every side")
+    assert(stroke_box(Rect(10, 20, 100, 40), 6) == Rect(13, 23, 94, 34), "and it moves the origin too")
+end a_border_is_inset_by_half_its_width
+
+// And the inset corner's radius comes in with it, or the stroke's outer edge would not follow the
+// fill it is sitting on — a border round where its background is square, or the other way about.
+@test
+private an_inset_corner_takes_a_smaller_radius()
+    assert_eq(stroke_radius(8, 2), 7)
+    assert_eq(stroke_radius(8, 6), 5)
+
+    // Never negative: a radius smaller than the inset is a square corner, not a curve turned inside
+    // out.
+    assert_eq(stroke_radius(1, 6), 0)
+    assert_eq(stroke_radius(0, 2), 0)
+end an_inset_corner_takes_a_smaller_radius
+
+// **A face's `descent` is signed by whichever convention it carries**, and the two describe the same
+// font — so a line height that believed the sign would be wrong for one of them.
+@test
+private a_line_height_reads_the_descent_whichever_way_it_is_signed()
+    assert_eq(line_height(plutovg.Metrics(12.0, -4.0, 2.0)), 18)
+    assert_eq(line_height(plutovg.Metrics(12.0, 4.0, 2.0)), 18)
+    assert_eq(line_height(plutovg.Metrics(10.0, 0.0, 0.0)), 10)
+end a_line_height_reads_the_descent_whichever_way_it_is_signed
