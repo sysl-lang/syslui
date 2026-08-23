@@ -15,7 +15,7 @@ device.
 
 ## What the probe has established
 
-Seventy-three tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+A hundred tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -132,6 +132,58 @@ Two of them are worth singling out:
   changing — an unguarded one would mark every frame dirty for as long as a pointer rested on a
   slider nobody was moving.
 
+## Theming
+
+A `Theme` is nineteen numbers: six role colours, a text colour for labels on filled controls, ink,
+inert, ground, panel, edge, alt, a corner radius, a padding, three lifts and a soft mix. Every
+control reads all of its appearance off it and computes none of it, which is the whole test of
+whether a theme is finished.
+
+**It lives on the canvas, for the same reason the pointer and the phases do: the tree has nowhere to
+keep it.** A node is built before anything knows what it will be drawn into, so a colour cannot be
+handed to it at construction. And it is a *stack* rather than a field, so a subtree can be restyled
+— the discipline `ink`/`unink` and `clip`/`unclip` already keep.
+
+```
+switch(on)                                  // the theme's primary
+switch(on, .Success)                         // a role: green here, green in every theme
+button("Delete", drop, .Error)
+panel.restyle(t -> light())                  // this subtree, and everything under it
+button("Brand", f).tinted(0xE2007A)          // a colour the palette has no name for
+```
+
+`Themed` holds a **function** `Theme -> Theme` rather than a theme, which is what makes restyles
+nest: a wrapper storing a whole theme could only replace one, and could not have known what the
+theme above it did anyway. `measure` pushes as well as `paint`, and that is load-bearing — `pad` and
+`radius` are in the theme, so a restyled button is a different *size*.
+
+**A caller names a role and never a colour, because a caller cannot see the theme.** A hex literal
+at a call site is a colour that will still be there when the light theme is not. Six roles is what
+every design system converges on and they are not interchangeable: `Error` and `Warning` differ in
+whether the action can be undone.
+
+### Button variants
+
+Four shapes × six roles = twenty-four appearances out of ten numbers, and every one of them moves
+when the theme does.
+
+| variant | what it is |
+|---|---|
+| `Filled` | the colour is the ground, label in `on_fill`. The loud one; one to a screen |
+| `Outline` | an outline and a label in the colour, and **no ground at all** |
+| `Dashed` | an outline that is dashed — says "not yet" where a solid one says "no" |
+| `Soft` | a muted ground mixed from `ground` toward the colour. The one that scales |
+
+**`Outline` fills nothing, ever, and that is a constraint rather than a taste.** `Canvas` has no
+alpha, so a "transparent" ground would have to be painted in whatever is behind it — and a view does
+not know what is behind it. Its hover is carried by the outline and the label brightening and the
+outline thickening, which needs no such knowledge and is why it is the one variant that can sit on
+an unknown surface.
+
+`Canvas.stroke` gained a `dash` for the dashed one: **one number, not a pattern**, meaning that many
+pixels on and that many off. A general dash array would be a slice a backend has to keep alive past
+the call, and what a dashed border is *for* is saying "provisional" at a glance.
+
 ## Culling
 
 A container asks `c.visible(child_rect)` before it paints a child and skips it if the answer is no.
@@ -194,7 +246,8 @@ delegation and tested as ordinary functions, so none of it needs a font to be ch
 ## Layout
 
 - `sh/sysl/ui/view.sysl` — the `View` trait, the leaves, and the modifiers
-- `sh/sysl/ui/style.sysl` — `Interaction`, `Reactive`, and `button` built on them
+- `sh/sysl/ui/theme.sysl` — `Theme`, `Role`, `Variant`, and the `Themed`/`Panel` views
+- `sh/sysl/ui/style.sysl` — `Interaction`, `Reactive`, and `button`'s four variants built on them
 - `sh/sysl/ui/widgets.sysl` — `switch`, `checkbox`, `slider`, `progress` and `divider`
 - `sh/sysl/ui/color.sysl` — `mix`, `lighten` and `darken`
 - `sh/sysl/ui/phases.sysl` — where an animation lives, in a framework with nowhere to put it

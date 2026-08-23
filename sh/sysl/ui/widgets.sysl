@@ -31,12 +31,6 @@ const BOX_SIDE: int = 18
 const TRACK_H: int = 6
 const KNOB: int = 16
 
-// The ground a control sits on before it is worth anything -- an off switch, an empty track.
-//
-// **One colour rather than one per widget**, because these are all the same thing to a reader: the
-// part of a control that is not the part that is on.
-const INERT: u32 = 0x3A3F4B
-
 // Which animation on a control is which, in the canvas's store.
 //
 // **A slot is only ever compared against others on the same rectangle**, so these could have started
@@ -77,7 +71,11 @@ private inside(r: Rect, w: int, h: int) -> Rect =
 // in this file, and one that could not would need a path API before it could draw the first.
 struct Switch
     on: &Signal[bool]
-    color: u32
+
+    // **A role rather than a colour, because a caller cannot see the theme.** Every control here
+    // takes one, so a form of green switches is `switch(a, .Success)` a line rather than a colour
+    // repeated and then stranded when the theme changes.
+    role: Role
 
     // Made once, at build. See the note at the top of the file.
     flip: &Fn() -> unit
@@ -89,6 +87,7 @@ impl View for Switch
         // **The knob's position and the track's colour are one number**, so the two cannot disagree
         // half way through: a switch caught mid-slide has its knob exactly as far across as its
         // track is coloured, because both read the same phase.
+        val look = c.theme()
         val t = c.phase(r, SWITCH_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
         val lit = c.phase(r, KNOB_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
 
@@ -97,7 +96,7 @@ impl View for Switch
         val d = b.h - 2 * pad
         val travel = b.w - 2 * pad - d
 
-        c.fill(b, mix(INERT, self.color, int(t * 100.0)), b.h / 2)
+        c.fill(b, mix(look.inert, look.color(self.role), int(t * 100.0)), b.h / 2)
         c.fill(Rect(b.x + pad + int(t * real(travel)), b.y + pad, d, d),
                darken(WHITE, int((1.0 - lit) * 8.0)), d / 2)
 
@@ -107,8 +106,8 @@ impl View for Switch
     end paint
 
 // A switch bound to a boolean the application owns.
-switch(on: &Signal[bool], color: u32 = ACCENT) -> &View =
-    Switch(on, color, () -> on.set(!on.read()))
+switch(on: &Signal[bool], role: Role = Role.Primary) -> &View =
+    Switch(on, role, () -> on.set(!on.read()))
 
 // ## The checkbox
 
@@ -123,18 +122,20 @@ switch(on: &Signal[bool], color: u32 = ACCENT) -> &View =
 // hover it draws is the *row's*, so that pointing at the label lights the box.
 struct Box
     on: &Signal[bool]
-    color: u32
+    role: Role
     i: Interaction
 
 impl View for Box
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(BOX_SIDE, BOX_SIDE)
 
     paint(&self, c: *Canvas, r: Rect)
+        val look = c.theme()
+        val color = look.color(self.role)
         val b = inside(r, BOX_SIDE, BOX_SIDE)
         val t = c.phase(b, CHECK_SLOT, if self.on.read() then 1.0 else 0.0, FLIP_RATE)
-        val edge = mix(INERT, self.color, int(t * 100.0))
+        val edge = mix(look.inert, color, int(t * 100.0))
 
-        c.fill(b, mix(GROUND_TINT, self.color, int(t * 100.0)), 4)
+        c.fill(b, mix(look.ground, color, int(t * 100.0)), 4)
         c.stroke(b, lighten(edge, int(self.i.hover * 20.0)), 2, 4)
 
         // The mark, inset by however much of the way in it has got. At rest it has no area at all,
@@ -142,11 +143,8 @@ impl View for Box
         val inset = int((1.0 - t) * real(b.w) / 2.0) + 5
         val side = b.w - 2 * inset
 
-        if side > 0 then c.fill(Rect(b.x + inset, b.y + inset, side, side), WHITE, 2)
+        if side > 0 then c.fill(Rect(b.x + inset, b.y + inset, side, side), look.on_fill, 2)
     end paint
-
-// What an unchecked box is filled with -- dark enough to read as a hole in whatever it sits on.
-const GROUND_TINT: u32 = 0x22262F
 
 // A checkbox and its label, tappable as one thing.
 //
@@ -154,10 +152,10 @@ const GROUND_TINT: u32 = 0x22262F
 // makes the label part of the control rather than text sitting beside one. That is the composition
 // `style.sysl` was written for, arriving somewhere other than a button: a state-dependent view
 // wrapping a container wrapping a state-dependent leaf, and no widget had to be told about another.
-checkbox(on: &Signal[bool], label: string, color: u32 = ACCENT) -> &View
+checkbox(on: &Signal[bool], label: string, role: Role = Role.Primary) -> &View
     val flip: &Fn() -> unit = () -> on.set(!on.read())
 
-    reactive(i -> row([Box(on, color, i), text(label)], 8)).on_tap(flip)
+    reactive((i, t) -> row([Box(on, role, i), text(label)], 8)).on_tap(flip)
 
 // ## The slider
 
@@ -183,7 +181,7 @@ struct Slider
     lo: int
     hi: int
     width: int
-    color: u32
+    role: Role
 
     // A press on a slider does not *do* anything -- it drags -- but it must not fall through to
     // whatever is behind, so the region is claimed with an action that does nothing.
@@ -211,6 +209,8 @@ impl View for Slider
         val clamped = if v < self.lo then self.lo elif v > self.hi then self.hi else v
         val x = if travel > 0 && span > 0 then (clamped - self.lo) * travel / span else 0
 
+        val look = c.theme()
+        val color = look.color(self.role)
         val lit = c.phase(r, KNOB_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
 
         // **The knob and the track are centred in the same rectangle**, which is the whole reason
@@ -219,15 +219,15 @@ impl View for Slider
         val b = inside(r, r.w, KNOB)
         val track = Rect(b.x, b.y + (b.h - TRACK_H) / 2, b.w, TRACK_H)
 
-        c.fill(track, INERT, TRACK_H / 2)
-        c.fill(Rect(track.x, track.y, x + KNOB / 2, TRACK_H), self.color, TRACK_H / 2)
-        c.fill(Rect(b.x + x, b.y, KNOB, KNOB), lighten(self.color, 30 + int(lit * 25.0)), KNOB / 2)
+        c.fill(track, look.inert, TRACK_H / 2)
+        c.fill(Rect(track.x, track.y, x + KNOB / 2, TRACK_H), color, TRACK_H / 2)
+        c.fill(Rect(b.x + x, b.y, KNOB, KNOB), lighten(color, 30 + int(lit * 25.0)), KNOB / 2)
         c.hit(r, self.grab)
     end paint
 
 // A slider over the whole inclusive range `lo` to `hi`.
-slider(value: &Signal[int], lo: int, hi: int, width: int, color: u32 = ACCENT) -> &View =
-    Slider(value, lo, hi, width, color, () -> ())
+slider(value: &Signal[int], lo: int, hi: int, width: int, role: Role = Role.Primary) -> &View =
+    Slider(value, lo, hi, width, role, () -> ())
 
 // ## The two that take no input
 
@@ -240,7 +240,7 @@ slider(value: &Signal[int], lo: int, hi: int, width: int, color: u32 = ACCENT) -
 struct Progress
     fraction: real
     width: int
-    color: u32
+    role: Role
 
 impl View for Progress
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.width, TRACK_H)
@@ -248,17 +248,18 @@ impl View for Progress
     paint(&self, c: *Canvas, r: Rect)
         val f = if self.fraction < 0.0 then 0.0 elif self.fraction > 1.0 then 1.0 else self.fraction
         val t = c.phase(r, FILL_SLOT, f, PROGRESS_RATE)
+        val look = c.theme()
         val b = inside(r, r.w, TRACK_H)
 
-        c.fill(b, INERT, b.h / 2)
+        c.fill(b, look.inert, b.h / 2)
 
         val w = int(t * real(b.w))
 
-        if w > 0 then c.fill(Rect(b.x, b.y, w, b.h), self.color, b.h / 2)
+        if w > 0 then c.fill(Rect(b.x, b.y, w, b.h), look.color(self.role), b.h / 2)
     end paint
 
-progress(fraction: real, width: int, color: u32 = ACCENT) -> &View =
-    Progress(fraction, width, color)
+progress(fraction: real, width: int, role: Role = Role.Primary) -> &View =
+    Progress(fraction, width, role)
 
 // A rule across whatever it is given.
 //
@@ -267,12 +268,15 @@ progress(fraction: real, width: int, color: u32 = ACCENT) -> &View =
 // gives every child the column's width, so asking for nothing and drawing everything is the same
 // thing as asking to be filled.
 struct Rule
-    color: u32
     thickness: int
 
 impl View for Rule
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(0, self.thickness)
 
-    paint(&self, c: *Canvas, r: Rect) = c.fill(Rect(r.x, r.y, r.w, self.thickness), self.color)
+    paint(&self, c: *Canvas, r: Rect) =
+        c.fill(Rect(r.x, r.y, r.w, self.thickness), c.theme().edge)
 
-divider(color: u32 = INERT, thickness: int = 1) -> &View = Rule(color, thickness)
+// A rule in whatever the theme calls an edge. A caller wanting another colour writes
+// `divider().restyle(t -> t with { edge = color })`, which is the same request said once for a
+// whole section rather than once a line.
+divider(thickness: int = 1) -> &View = Rule(thickness)

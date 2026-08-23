@@ -49,6 +49,10 @@ struct PlutoCanvas
     tint: u32
     tints: Buf[u32]
 
+    // The theme in force and the ones to go back to. See `Canvas.theme`.
+    look: Theme
+    looks: Buf[Theme]
+
     // A run measured once and remembered.
     //
     // **This is not an optimization, it is the difference between measuring the tree and measuring
@@ -75,6 +79,23 @@ struct PlutoCanvas
     // Set the paint colour from a 0xRRGGBB, which is what every view speaks.
     private use(*self, color: u32)
         self.vg.rgb(fraction(color, 16), fraction(color, 8), fraction(color, 0))
+
+    // Set or clear the dash pattern, which is canvas state and outlives the stroke that asked for
+    // it -- so a solid stroke has to say so rather than say nothing.
+    //
+    // An empty array is how PlutoVG is told there is no pattern: `plutovg_canvas_set_dash_array`
+    // clears its own array before appending, so appending none of it leaves none.
+    private dashes(*self, dash: int)
+        var pattern: [2]f32
+
+        if dash <= 0 then
+            self.vg.dash(pattern[0..<0])
+        else
+            pattern[0] = f32(dash)
+            pattern[1] = f32(dash)
+
+            self.vg.dash(pattern[..])
+    end dashes
 
     // The current path, as a rectangle with corners rounded by `radius`.
     //
@@ -103,9 +124,10 @@ impl Canvas for PlutoCanvas
     //
     // The radius comes in with it: a corner inset by `w/2` has a radius smaller by the same amount,
     // or the outer edge of the stroke would not follow the fill it sits on.
-    stroke(*self, r: Rect, color: u32, width: int, radius: int)
+    stroke(*self, r: Rect, color: u32, width: int, radius: int, dash: int)
         self.use(color)
         self.vg.line_width(f32(width))
+        self.dashes(dash)
         self.path(stroke_box(r, width), stroke_radius(radius, width))
         self.vg.stroke()
 
@@ -159,6 +181,17 @@ impl Canvas for PlutoCanvas
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
         self.anim.at(r, slot, target, rate)
 
+    override theme(*self) -> Theme = self.look
+
+    override push_theme(*self, t: Theme)
+        self.looks.push(self.look)
+        self.look = t
+
+    override pop_theme(*self)
+        self.looks.pop() match
+            Some(t) -> self.look = t
+            None -> ()
+
     // **Measured through the same face the text is drawn with**, which is the whole reason `measure`
     // takes a canvas: a view that measured itself would be guessing, and a list laid out against a
     // guess puts every row in the wrong place.
@@ -188,7 +221,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32, ink: u32 = 0xF
     val m = face.metrics(size)
 
     PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), phases(), ink, buf(), map())
+                -1, -1, false, hits(), phases(), ink, buf(), dark(), buf(), map())
 end pluto_canvas
 
 // ## The arithmetic, lifted out so it can be tested without a font

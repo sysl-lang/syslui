@@ -90,8 +90,8 @@ trait View
     // gains an outline keeps its size and its neighbours keep their places. SwiftUI's `.border` is
     // the same shape and for the same reason; a caller who wants the content pushed in writes the
     // `.padding` that says so.
-    border(&self, color: u32, width: int = 1, radius: int = 0) -> &View =
-        Border(self, color, width, radius)
+    border(&self, color: u32, width: int = 1, radius: int = 0, dash: int = 0) -> &View =
+        Border(self, color, width, radius, dash)
 
     // Draw the text inside this view in `color`.
     //
@@ -103,6 +103,27 @@ trait View
 
     // Ask for a fixed size regardless of what this view would have measured to.
     frame(&self, w: int, h: int) -> &View = Frame(self, w, h)
+
+    // Draw this subtree under a changed theme.
+    //
+    // **A function of the theme in force rather than a theme**, so that two restyles nest and each
+    // sees the other's work -- and so that a caller changing one field does not have to name, or
+    // even know, the other twelve.
+    restyle(&self, f: &Fn(Theme) -> Theme) -> &View = Themed(self, f)
+
+    // The commonest restyle by a wide margin: this subtree's controls in another colour.
+    //
+    // **It sets `primary`, which is the colour a control takes when nobody names a role.** Reach
+    // for a `Role` first -- `button("Delete", f, .Error)` survives a restyle and a hex literal does
+    // not -- and reach for this when the colour is genuinely one-off, a brand colour, or something
+    // the palette has no name for.
+    tinted(&self, color: u32) -> &View = Themed(self, t -> t with { primary = color })
+
+    // Put this on a surface, in whatever the theme says a surface looks like.
+    //
+    // The themed counterpart to `background(color, radius)`, which names a colour and therefore
+    // cannot be restyled. Both are worth having and they are not the same request.
+    panel(&self) -> &View = Panel(self)
 
     // Call `f` when this view is tapped.
     //
@@ -187,13 +208,14 @@ struct Border
     color: u32
     width: int
     radius: int
+    dash: int
 
 impl View for Border
     measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
 
     paint(&self, c: *Canvas, r: Rect)
         self.child.paint(c, r)
-        c.stroke(r, self.color, self.width, self.radius)
+        c.stroke(r, self.color, self.width, self.radius, self.dash)
 
 // The text colour for a subtree, set around the child and put back afterwards.
 //

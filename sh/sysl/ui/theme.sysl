@@ -1,0 +1,218 @@
+module sh.sysl.ui
+
+// What a control looks like when nobody has said, and where that answer lives.
+//
+// **The question a theme has to answer first is not "what colours" but "how does a node reach
+// them".** A tree is built before anything knows what it will be drawn into, and it is thrown away
+// and built again on every state change, so a colour cannot be handed to a node at construction --
+// that is the same ordering problem `style.sysl` solves for the pointer, and it has the same answer.
+// The canvas is the one thing that lives across frames and is present at both `measure` and `paint`,
+// so the theme travels on the canvas.
+//
+// **And it is a stack rather than a field, so that a subtree can be restyled.** `Foreground` already
+// works this way for text colour and `clip` for the drawing region; a theme is the same discipline
+// applied to everything else, which is what makes `.accent(red)` on one button possible without
+// giving every control a colour parameter nobody wants to pass.
+//
+// **`measure` pushes as well as `paint`, and that is load-bearing.** `pad` and `radius` are in here,
+// so a restyled button is a different *size*, and a layout pass that did not see the restyle would
+// place its neighbours as though it were not one.
+//
+// What is deliberately NOT here: the animation rates. Those are in `style.sysl` and `widgets.sysl`
+// as constants, because how fast a hover eases is a matter of feel rather than of style, and a
+// theme that could change it would be a theme that could make an interface sluggish.
+
+// What a control is *for*, which decides what colour it is.
+//
+// **A caller names a role and never a colour, because a caller cannot see the theme.** A tree is
+// built before anything knows what it will be drawn into, so `button("Delete", f, .Error)` is the
+// only way to say "the destructive one" that survives a restyle -- a hex literal at the call site
+// is a colour that will still be there when the light theme is not.
+//
+// Six is the palette every design system converges on, and they are not interchangeable: `Error`
+// and `Warning` differ in whether the action can be undone, `Primary` and `Secondary` in whether
+// there is one obvious thing to do on this screen.
+enum Role
+    Primary
+    Secondary
+    Accent
+    Success
+    Warning
+    Error
+end Role
+
+// How a control wears its colour.
+//
+// **The variant is the shape and the role is the colour, and they are independent on purpose.** Six
+// roles times four variants is twenty-four appearances out of ten numbers, where a widget with a
+// `color` parameter gives you one appearance per call site and no way to restyle any of them.
+enum Variant
+    // The colour is the ground and the label sits on it. The loud one; one to a screen.
+    Filled
+
+    // An outline and a label in the colour, and no ground at all.
+    //
+    // **It fills nothing, ever, and that is a constraint rather than a taste.** `Canvas` has no
+    // alpha -- a colour is 0xRRGGBB and nothing composites -- so a "transparent" ground would have
+    // to be painted in whatever is behind, and a view does not know what is behind it. So the
+    // hover and the press are carried by the outline and the label brightening and the outline
+    // thickening, which needs no knowledge of the background and works on any of them.
+    Outline
+
+    // An outline that is dashed. Says "not yet" or "optional" where a solid one says "no".
+    Dashed
+
+    // A muted ground mixed a little way toward the colour, with the label in the colour.
+    //
+    // The one that scales: a screen can carry a dozen of these, where a dozen filled buttons is a
+    // screen with no hierarchy at all.
+    Soft
+end Variant
+
+// A whole appearance, as nineteen numbers.
+//
+// **Every one of these is something a control reads and nothing computes for itself.** A control
+// that reached past this for a colour would be one a theme could not restyle, which is the whole
+// test of whether this is finished.
+struct Theme deriving Eq
+    // The palette, one to a `Role`.
+    primary: u32
+    secondary: u32
+    accent: u32
+    success: u32
+    warning: u32
+    error: u32
+
+    // What a label sitting **on** a filled control is drawn in. It is here rather than assumed
+    // white because a light theme's yellow is not something white text can be read against, and a
+    // button whose label vanished on one theme would be the first thing anybody found.
+    on_fill: u32
+
+    // Ordinary text, on the ordinary background.
+    ink: u32
+
+    // The part of a control that is *not* the part that is on: an off switch's track, an empty
+    // slider, the unfilled part of a progress bar.
+    inert: u32
+
+    // What a control's own hole is filled with -- an unchecked box, a scrollbar's groove, and the
+    // base a `Soft` ground is mixed up from. Dark enough on a dark theme, light enough on a light
+    // one, to read as an absence.
+    ground: u32
+
+    // A surface content sits on, one step away from the window's own background.
+    panel: u32
+
+    // Dividers, and a border drawn round something that is not a control.
+    edge: u32
+
+    // The ground an alternate row takes, where something stripes its rows.
+    alt: u32
+
+    // The corner every control rounds by, and the inset a button puts round its label. Both are
+    // here rather than in `widgets.sysl` because they are the two metrics somebody restyling an
+    // interface actually reaches for -- a sharp-cornered theme is one number.
+    radius: int
+    pad: int
+
+    // How far a state moves a ground, as percentages toward white and toward black. These are what
+    // turn one colour into the appearances a button wears, so a theme that wanted a flatter
+    // interface turns them down rather than naming more colours.
+    hover_lift: int
+    press_sink: int
+    edge_lift: int
+
+    // How far a `Soft` ground is mixed from `ground` toward the role's colour, as a percentage.
+    soft: int
+
+    // The colour of a role, which is the whole of what a role is.
+    //
+    // **A method on the theme rather than a table anywhere else**, so that a theme with a different
+    // palette is one construction and nothing has to be told about it.
+    color(self, role: Role) -> u32 =
+        role match
+            Primary -> self.primary
+            Secondary -> self.secondary
+            Accent -> self.accent
+            Success -> self.success
+            Warning -> self.warning
+            Error -> self.error
+end Theme
+
+// The theme everything is drawn in until something says otherwise.
+//
+// **`primary` is exactly the accent the controls carried before there was a theme**, which is not an
+// accident: making the default appearance identical is what let the change be made without a
+// recorded frame in the test suite moving, so the tests were checking the restyling rather than
+// re-recording the defaults.
+dark() -> Theme =
+    Theme(primary = 0x3A6EA5, secondary = 0xC2437E, accent = 0x2AA79B,
+          success = 0x3E9B5F, warning = 0xC9922E, error = 0xC0453F,
+          on_fill = 0xFFFFFF, ink = 0xE6E8EF, inert = 0x3A3F4B,
+          ground = 0x22262F, panel = 0x1C2030, edge = 0x2A2F3A, alt = 0x181B26,
+          radius = 6, pad = 8,
+          hover_lift = 14, press_sink = 22, edge_lift = 26, soft = 22)
+
+// The same interface on paper rather than on glass.
+//
+// **The lifts are the interesting part of writing a second theme.** On a dark ground a hover moves
+// toward white and reads as "coming forward"; on a light one the same move washes the control out,
+// so a light theme leans on the press rather than the hover and keeps both smaller. That is the
+// argument for the three being numbers in here rather than constants in the widget file.
+//
+// **`soft` is larger here for the opposite reason**: mixing a light ground toward a colour has less
+// distance to travel before it is visible than mixing a dark one.
+light() -> Theme =
+    Theme(primary = 0x2C6FB5, secondary = 0xA8306A, accent = 0x1B8C82,
+          success = 0x2F7D4C, warning = 0x9A6F16, error = 0xA83833,
+          on_fill = 0xFFFFFF, ink = 0x1A1D24, inert = 0xC3C8D2,
+          ground = 0xFFFFFF, panel = 0xF2F4F8, edge = 0xD8DDE6, alt = 0xE9ECF2,
+          radius = 6, pad = 8,
+          hover_lift = 8, press_sink = 16, edge_lift = 12, soft = 14)
+
+// A view drawn under a changed theme, and everything below it with it.
+//
+// **It holds a function rather than a theme, which is what makes the modifiers compose.** A wrapper
+// storing a whole `Theme` could only replace one, so `.accent(red)` would have to name every other
+// field -- and it could not name them anyway, since what the surrounding theme is is not known until
+// the frame is drawn. A `Theme -> Theme` is handed whatever is in force and returns what it wants,
+// so two restyles nest and each sees the other's work.
+struct Themed
+    child: &View
+
+    // Named `change` rather than `restyle`: the trait member that builds one of these is called
+    // `restyle`, and a type may not carry a field and a member of one name.
+    change: &Fn(Theme) -> Theme
+
+impl View for Themed
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        c.push_theme((self.change)(c.theme()))
+
+        val s = self.child.measure(c, avail)
+
+        c.pop_theme()
+        s
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.push_theme((self.change)(c.theme()))
+        self.child.paint(c, r)
+        c.pop_theme()
+    end paint
+
+// A surface for content to sit on, in whatever the theme says a surface is.
+//
+// **The themed counterpart to `.background(color, radius)`**, and the reason both exist: an
+// application naming a colour is naming one, and a view asking for "a panel" is asking for whatever
+// this interface's panels look like. The second is the one a restyle can move.
+struct Panel
+    child: &View
+
+impl View for Panel
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val t = c.theme()
+
+        c.fill(r, t.panel, t.radius)
+        self.child.paint(c, r)

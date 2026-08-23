@@ -79,11 +79,17 @@ const PRESS_RATE: real = 16.0
 // What it buys is that nothing is stored. A `Reactive` holds one closure and no appearance, so the
 // hover state cannot go stale, cannot be left set by a pointer that has since moved, and cannot
 // disagree with what was drawn.
+// **The body is handed the theme as well as the state**, and for exactly the same reason it is
+// handed the state: both are facts about the frame rather than about the application, both are known
+// only while drawing, and the canvas is where both live. A style asked to choose an appearance
+// without being told what appearance the interface has would have to reach for a constant, which is
+// the one thing a theme exists to stop.
 struct Reactive
-    body: &Fn(Interaction) -> &View
+    body: &Fn(Interaction, Theme) -> &View
 
 impl View for Reactive
-    measure(&self, c: *Canvas, avail: Size) -> Size = (self.body)(at_rest()).measure(c, avail)
+    measure(&self, c: *Canvas, avail: Size) -> Size =
+        (self.body)(at_rest(), c.theme()).measure(c, avail)
 
     // **The canvas is asked twice and answers three things**: where the pointer is, and where each
     // of this view's two animations has got to on the way to matching it. A backend with no clock
@@ -93,7 +99,7 @@ impl View for Reactive
         val hover = c.phase(r, HOVER_SLOT, if c.hovered(r) then 1.0 else 0.0, HOVER_RATE)
         val press = c.phase(r, PRESS_SLOT, if c.pressed(r) then 1.0 else 0.0, PRESS_RATE)
 
-        (self.body)(Interaction(hover, press)).paint(c, r)
+        (self.body)(Interaction(hover, press), c.theme()).paint(c, r)
 
 // Which of a `Reactive`'s two animations is which, in the canvas's store.
 //
@@ -104,48 +110,86 @@ private const PRESS_SLOT: int = 1
 
 // **The rectangle is the one this view was given**, which is why the question is asked here and not
 // anywhere else: `hovered` and `pressed` need geometry, and geometry exists only inside `paint`.
-reactive(body: &Fn(Interaction) -> &View) -> &View = Reactive(body)
+reactive(body: &Fn(Interaction, Theme) -> &View) -> &View = Reactive(body)
 
 // ## The button, which is what all of the above was for
 
-// The accent a button wears when nothing has been said about it.
-const ACCENT: u32 = 0x3A6EA5
-
-// How far the ground moves for each state, as percentages toward white and toward black.
+// A tappable label that answers to the pointer, in one of six roles and one of four shapes.
 //
-// **These are the numbers a theme would own** and they are constants here because syslUI has no
-// theme yet. Naming them is most of the work of gaining one: a `Theme` struct would hold these four
-// and `button` would read them off it instead of off the module.
-const HOVER_LIFT: int = 14
-const PRESS_SINK: int = 22
-const EDGE_LIFT: int = 26
-
-// A tappable label on a filled ground that answers to the pointer.
+// **A role and a variant rather than a colour and a chain**, and the reason is that a caller cannot
+// see the theme: a tree is built before anything knows what it will be drawn into, so
+// `button("Delete", f, .Error)` is the only spelling of "the destructive one" that survives a
+// restyle. A hex literal at a call site is a colour that will still be there when the light theme
+// is not.
 //
-// **It is one `Reactive` wrapping a chain, rather than a widget**, so everything `on_tap`'s being a
-// modifier bought is still true: the chain below is the ordinary one anybody could write, and what
-// the button adds is the three grounds and the rule for choosing between them.
+// The two axes are independent, so six roles and four variants are twenty-four appearances out of
+// the ten numbers in a `Theme` -- and every one of them moves when the theme does.
 //
-// **The label's colour is set here rather than left to the canvas**, because the ground is chosen
-// here: a button that picked a dark accent and let the text default to whatever the surrounding
-// panel had set would be the one combination nobody can read.
-button(label: string, on_tap: &Fn() -> unit, color: u32 = ACCENT, radius: int = 6) -> &View =
-    reactive(i -> button_face(label, color, radius, i)).on_tap(on_tap)
+//     button("Save", save)                        // filled, primary
+//     button("Delete", drop, .Error)              // filled, red
+//     button("Later", defer, .Secondary, .Soft)   // muted ground, coloured label
+//     button("Draft", edit, .Accent, .Dashed)     // a dashed outline: provisional
+button(label: string, on_tap: &Fn() -> unit, role: Role = Role.Primary,
+       variant: Variant = Variant.Filled) -> &View =
+    reactive((i, t) -> button_face(t, label, i, t.color(role), variant)).on_tap(on_tap)
 
-// **A named function rather than a block inside the lambda**, so that the three states are readable
-// as three lines side by side. It is also the shape a `ButtonStyle` would have if styles became a
-// trait -- one function from a label and a state to a view -- which is the next thing this grows
-// into and the reason it is not written inline.
-private button_face(label: string, color: u32, radius: int, i: Interaction) -> &View
-    // **Layered rather than chosen**, which is what turns three appearances into a continuum: the
-    // hover lifts the accent toward white and the press sinks the result toward black, each by as
-    // much of its travel as it has actually made. At rest both are zero and the ground is the accent
-    // itself, so the resting look is unchanged from the version that had no animation in it.
-    val lifted = lighten(color, int(i.hover * real(HOVER_LIFT)))
-    val ground = darken(lifted, int(i.press * real(PRESS_SINK)))
+// **One function from a theme, a label and a state to a view**, which is the shape a `ButtonStyle`
+// would have if styles became a trait -- and the reason this is not written inline in the lambda.
+private button_face(t: Theme, label: string, i: Interaction, color: u32, variant: Variant) -> &View =
+    variant match
+        Filled -> filled(t, label, i, color)
+        Soft -> soft(t, label, i, color)
+        Outline -> outlined(t, label, i, color, 0)
+        Dashed -> outlined(t, label, i, color, DASH)
+
+// The dash a `Dashed` border is drawn with: four on, four off.
+private const DASH: int = 4
+
+// **Layered rather than chosen**, which is what turns three appearances into a continuum: the hover
+// lifts the colour toward white and the press sinks the result toward black, each by as much of its
+// travel as it has actually made. At rest both are zero and the ground is the role's colour itself.
+private filled(t: Theme, label: string, i: Interaction, color: u32) -> &View
+    val lifted = lighten(color, int(i.hover * real(t.hover_lift)))
+    val ground = darken(lifted, int(i.press * real(t.press_sink)))
+
+    // `on_fill` rather than white, because a light theme's yellow is not something white text can
+    // be read against -- and a button whose label vanished on one theme would be the first thing
+    // anybody found.
+    text(label)
+        .foreground(t.on_fill)
+        .padding(t.pad)
+        .background(ground, t.radius)
+        .border(lighten(ground, t.edge_lift), 1, t.radius)
+end filled
+
+// A muted ground mixed a little way from `ground` toward the colour, with the label in the colour.
+//
+// **The one that scales.** A screen can carry a dozen of these where a dozen filled buttons is a
+// screen with no hierarchy at all, so this is the variant a table's row actions want.
+private soft(t: Theme, label: string, i: Interaction, color: u32) -> &View
+    val at = t.soft + int(i.hover * real(t.hover_lift)) + int(i.press * real(t.press_sink))
 
     text(label)
-        .foreground(WHITE)
-        .padding(8)
-        .background(ground, radius)
-        .border(lighten(ground, EDGE_LIFT), 1, radius)
+        .foreground(lighten(color, 20))
+        .padding(t.pad)
+        .background(mix(t.ground, color, at), t.radius)
+end soft
+
+// An outline and a label in the colour, and no ground at all.
+//
+// **It fills nothing, ever, and the hover is carried entirely by the outline and the label.** That
+// is a constraint rather than a taste: `Canvas` has no alpha, so a "transparent" ground would have
+// to be painted in whatever is behind it, and a view does not know what is behind it. Brightening
+// two things it *does* own needs no such knowledge and works on any background -- which is the whole
+// argument for this variant existing, since it is the only one that can sit on an unknown surface.
+//
+// The press thickens the border rather than darkening it, because there is no ground to sink.
+private outlined(t: Theme, label: string, i: Interaction, color: u32, dash: int) -> &View
+    val lit = lighten(color, int(i.hover * real(t.hover_lift)) + int(i.press * real(t.edge_lift)))
+    val width = if i.press > 0.5 then 2 else 1
+
+    text(label)
+        .foreground(lit)
+        .padding(t.pad)
+        .border(lit, width, t.radius, dash)
+end outlined

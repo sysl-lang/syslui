@@ -63,14 +63,15 @@ struct Scroll
         val off = self.offset.read()
         val clamped = if off < 0 then 0 elif off > span then span else off
         val y = if travel > 0 then clamped * travel / span else 0
+        val look = c.theme()
         val lit = c.phase(track, BAR_SLOT, if c.hovered(track) then 1.0 else 0.0, HOVER_RATE)
 
         // **The track stays quiet and the thumb does not.** A groove barely distinguishable from
         // the panel is what a scrollbar should be when nobody is looking at it; a thumb that quiet
         // is one nobody can find, and it is the half carrying the information.
-        c.fill(track, GROUND_TINT, BAR_W / 2)
+        c.fill(track, look.ground, BAR_W / 2)
         c.fill(Rect(track.x, track.y + y, BAR_W, thumb),
-               lighten(INERT, 25 + int(lit * 30.0)), BAR_W / 2)
+               lighten(look.inert, 25 + int(lit * 30.0)), BAR_W / 2)
     end bar
 end Scroll
 

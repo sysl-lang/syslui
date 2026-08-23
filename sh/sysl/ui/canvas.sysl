@@ -53,7 +53,11 @@ trait Canvas
     // Inside rather than centred on the edge, so a bordered view occupies exactly the rectangle
     // layout gave it and never bleeds into a neighbour -- which is what lets a border be added to a
     // view without moving anything around it.
-    stroke(*self, r: Rect, color: u32, width: int = 1, radius: int = 0)
+    // **`dash` is one number rather than a pattern**, and the pattern it means is that many pixels
+    // on and that many off. A general dash array would be a slice a backend has to keep alive past
+    // the call and a shape nothing in the toolkit asks for; what a dashed border is *for* is saying
+    // "provisional" at a glance, and an even dash says it.
+    stroke(*self, r: Rect, color: u32, width: int = 1, radius: int = 0, dash: int = 0)
 
     // Restrict drawing to `r` until the matching `unclip`.
     clip(*self, r: Rect)
@@ -77,6 +81,24 @@ trait Canvas
     // is the right way round: a backend which answered `false` by mistake would draw nothing at all,
     // and this way the failure mode of not implementing it is a frame that is right.
     visible(*self, r: Rect) -> bool = true
+
+    // What a control looks like when nobody has said, and the two that change it for a subtree.
+    //
+    // **On the canvas for the same reason the pointer and the phases are: the tree has nowhere to
+    // keep anything.** A theme has to be reachable at `measure` and at `paint`, from a node that
+    // was built before anything knew what it would be drawn into, and the canvas is the only thing
+    // present at both moments that outlives the tree.
+    //
+    // **All three have bodies, so a backend owes nothing.** One that implements none of them draws
+    // every frame in `dark()` and a `.restyle(...)` in the tree quietly has no effect -- which is
+    // the same bargain `visible` strikes and the same way round: not implementing it costs the
+    // feature and never the frame. A backend that wants theming keeps a `Theme` and a `Buf[Theme]`,
+    // which is what `Recorder` and `PlutoCanvas` both do in four lines.
+    theme(*self) -> Theme = dark()
+
+    push_theme(*self, t: Theme) = ()
+
+    pop_theme(*self) = ()
 
     // The colour text is drawn in, until the matching `unink`.
     //
@@ -185,6 +207,11 @@ struct Recorder
     py: int
     down: bool
 
+    // The theme in force and the ones to go back to, which is `tints`' discipline applied to
+    // everything a theme carries.
+    look: Theme
+    looks: Buf[Theme]
+
     // The clip rectangles in force, innermost last, so that `visible` can answer and a test can
     // watch a container skip what it cannot draw.
     //
@@ -234,8 +261,9 @@ impl Canvas for Recorder
     fill(*self, r: Rect, color: u32, radius: int)
         self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}" + radii(radius))
 
-    stroke(*self, r: Rect, color: u32, width: int, radius: int)
-        self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width}" + radii(radius))
+    stroke(*self, r: Rect, color: u32, width: int, radius: int, dash: int)
+        self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width}" + radii(radius) +
+                      (if dash == 0 then "" else s" d${dash}"))
 
     text(*self, r: Rect, t: string)
         self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
@@ -254,6 +282,17 @@ impl Canvas for Recorder
         val v = self.clips.view()
 
         v.len == 0 || r.overlaps(v[v.len - 1])
+
+    override theme(*self) -> Theme = self.look
+
+    override push_theme(*self, t: Theme)
+        self.looks.push(self.look)
+        self.look = t
+
+    override pop_theme(*self)
+        self.looks.pop() match
+            Some(t) -> self.look = t
+            None -> ()
 
     ink(*self, color: u32)
         self.ops.push(s"ink #${color}")
@@ -282,7 +321,7 @@ end Recorder
 // The default font is eight by sixteen, which is what every measurement in the package's own tests
 // is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, buf(), phases())
+    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), buf(), phases())
 
 // The rectangle two of them have in common, which is what nesting one clip inside another leaves.
 //
@@ -318,7 +357,7 @@ struct Blind end Blind
 impl Canvas for Blind
     fill(*self, r: Rect, color: u32, radius: int) = ()
 
-    stroke(*self, r: Rect, color: u32, width: int, radius: int) = ()
+    stroke(*self, r: Rect, color: u32, width: int, radius: int, dash: int) = ()
 
     text(*self, r: Rect, t: string) = ()
 

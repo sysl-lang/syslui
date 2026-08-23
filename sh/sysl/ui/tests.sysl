@@ -193,8 +193,8 @@ private a_scroll_offset_survives_the_tree_being_rebuilt()
     assert(c.dump() == "clip 0,0 100x40\n" +
                        "text 0,0 100x16 'row 2'\ntext 0,16 100x16 'row 3'\ntext 0,32 100x16 'row 4'\n" +
                        "unclip\n" +
-                       s"fill 92,0 8x40 #${GROUND_TINT} r4\n" +
-                       s"fill 92,4 8x24 #${lighten(INERT, 25)} r4\n",
+                       s"fill 92,0 8x40 #${dark().ground} r4\n" +
+                       s"fill 92,4 8x24 #${lighten(dark().inert, 25)} r4\n",
            s"got:\n${c.dump()}")
 end a_scroll_offset_survives_the_tree_being_rebuilt
 
@@ -515,7 +515,7 @@ end a_percentage_outside_the_range_is_clamped_rather_than_wrapped
 // state, so a `measure` that asked the canvas would be caught.
 @test
 private a_reactive_view_measures_at_rest_whatever_the_pointer_is_doing()
-    val v = reactive(i -> if i.hovered() then spacer().frame(90, 90) else spacer().frame(10, 10))
+    val v = reactive((i, _) -> if i.hovered() then spacer().frame(90, 90) else spacer().frame(10, 10))
     var c = recorder()
 
     c.point(5, 5)
@@ -527,7 +527,7 @@ end a_reactive_view_measures_at_rest_whatever_the_pointer_is_doing
 // And paint is where the state is read, because paint is the only moment a view knows its rectangle.
 @test
 private a_reactive_view_paints_the_state_the_canvas_reports()
-    val v = reactive(i -> if i.pressed() then text("down") elif i.hovered() then text("over") else text("rest"))
+    val v = reactive((i, _) -> if i.pressed() then text("down") elif i.hovered() then text("over") else text("rest"))
 
     var away = recorder()
     var over = recorder()
@@ -549,7 +549,7 @@ end a_reactive_view_paints_the_state_the_canvas_reports
 // button down, slide off it, let go, and nothing should have happened.
 @test
 private a_press_outside_the_rectangle_is_not_a_press_on_it()
-    val v = reactive(i -> if i.pressed() then text("down") elif i.hovered() then text("over") else text("rest"))
+    val v = reactive((i, _) -> if i.pressed() then text("down") elif i.hovered() then text("over") else text("rest"))
     var c = recorder()
 
     c.point(400, 10, true)
@@ -578,15 +578,15 @@ private a_button_wears_a_different_ground_in_each_state()
     face.paint(&over, Rect(0, 0, 100, 28))
     face.paint(&down, Rect(0, 0, 100, 28))
 
-    assert(away.dump() == painted(ACCENT), s"away:\n${away.dump()}")
-    assert(over.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"over:\n${over.dump()}")
+    assert(away.dump() == painted(dark().primary), s"away:\n${away.dump()}")
+    assert(over.dump() == painted(lighten(dark().primary, dark().hover_lift)), s"over:\n${over.dump()}")
 
     // **A press is also a hover**, since the pointer has to be on the button to hold it down -- so
     // the pressed ground is the lifted one sunk, not the accent sunk. That falls out of the two
     // being layered rather than chosen between, and it is the right picture: releasing the button
     // leaves the pointer where it is, and what the eye should see is the press relaxing rather than
     // the whole colour jumping.
-    assert(down.dump() == painted(darken(lighten(ACCENT, HOVER_LIFT), PRESS_SINK)),
+    assert(down.dump() == painted(darken(lighten(dark().primary, dark().hover_lift), dark().press_sink)),
            s"down:\n${down.dump()}")
 end a_button_wears_a_different_ground_in_each_state
 
@@ -597,7 +597,7 @@ private painted(ground: u32) -> string =
     s"ink #${WHITE}\n" +
     "text 8,8 84x12 'hi'\n" +
     "unink\n" +
-    s"stroke 0,0 100x28 #${lighten(ground, EDGE_LIFT)} w1 r6\n" +
+    s"stroke 0,0 100x28 #${lighten(ground, dark().edge_lift)} w1 r6\n" +
     "hit 0,0 100x28\n"
 
 // A button still answers to a tap, which is the thing the rewrite could most easily have dropped:
@@ -735,7 +735,7 @@ private a_canvas_with_no_clock_draws_everything_settled()
     c.point(50, 14)
     face.paint(&c, Rect(0, 0, 100, 28))
 
-    assert(c.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"got:\n${c.dump()}")
+    assert(c.dump() == painted(lighten(dark().primary, dark().hover_lift)), s"got:\n${c.dump()}")
 end a_canvas_with_no_clock_draws_everything_settled
 
 // And a button that is hovered *after* it has been drawn eases, rather than snapping.
@@ -750,7 +750,7 @@ private a_button_eases_into_its_hover_rather_than_snapping()
 
     face.paint(&c, at)
 
-    assert(c.dump() == painted(ACCENT), s"at rest:\n${c.dump()}")
+    assert(c.dump() == painted(dark().primary), s"at rest:\n${c.dump()}")
 
     // The pointer arrives, and one frame of a sixtieth of a second passes.
     c.point(50, 14)
@@ -760,7 +760,7 @@ private a_button_eases_into_its_hover_rather_than_snapping()
 
     val part = HOVER_RATE / 60.0
 
-    assert(c.dump() == painted(lighten(ACCENT, int(part * real(HOVER_LIFT)))),
+    assert(c.dump() == painted(lighten(dark().primary, int(part * real(dark().hover_lift)))),
            s"one frame in:\n${c.dump()}")
 
     // Long enough to have arrived, and it is the full hover and no more.
@@ -768,7 +768,7 @@ private a_button_eases_into_its_hover_rather_than_snapping()
     c.ops = buf()
     face.paint(&c, at)
 
-    assert(c.dump() == painted(lighten(ACCENT, HOVER_LIFT)), s"settled:\n${c.dump()}")
+    assert(c.dump() == painted(lighten(dark().primary, dark().hover_lift)), s"settled:\n${c.dump()}")
 end a_button_eases_into_its_hover_rather_than_snapping
 
 // -- the plutovg backend's arithmetic -------------------------------------------------------------
@@ -837,7 +837,7 @@ private a_switch_off_has_its_knob_at_the_left_end()
     val on = signal(false)
 
     assert_paints(switch(on), Size(200, 200), Rect(0, 0, 44, 24),
-                  s"fill 0,0 44x24 #${INERT} r12\n" +
+                  s"fill 0,0 44x24 #${dark().inert} r12\n" +
                   s"fill 3,3 18x18 #${darken(WHITE, 8)} r9\n" +
                   "hit 0,0 44x24\n")
 end a_switch_off_has_its_knob_at_the_left_end
@@ -848,7 +848,7 @@ private a_switch_on_has_its_knob_at_the_right_end_and_a_coloured_track()
     val on = signal(true)
 
     assert_paints(switch(on), Size(200, 200), Rect(0, 0, 44, 24),
-                  s"fill 0,0 44x24 #${ACCENT} r12\n" +
+                  s"fill 0,0 44x24 #${dark().primary} r12\n" +
                   s"fill 23,3 18x18 #${darken(WHITE, 8)} r9\n" +
                   "hit 0,0 44x24\n")
 end a_switch_on_has_its_knob_at_the_right_end_and_a_coloured_track
@@ -869,7 +869,7 @@ private a_sliding_switch_moves_its_knob_and_its_track_together()
     c.tick(0.03)
     v.paint(&c, Rect(0, 0, 44, 24))
 
-    assert(c.dump() == s"fill 0,0 44x24 #${mix(INERT, ACCENT, 42)} r12\n" +
+    assert(c.dump() == s"fill 0,0 44x24 #${mix(dark().inert, dark().primary, 42)} r12\n" +
                        s"fill 11,3 18x18 #${darken(WHITE, 8)} r9\n" +
                        "hit 0,0 44x24\n",
            s"a switch part way across:\n${c.dump()}")
@@ -897,8 +897,8 @@ private an_unchecked_box_draws_no_mark()
     val on = signal(false)
 
     assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
-                  s"fill 0,0 18x18 #${GROUND_TINT} r4\n" +
-                  s"stroke 0,0 18x18 #${INERT} w2 r4\n" +
+                  s"fill 0,0 18x18 #${dark().ground} r4\n" +
+                  s"stroke 0,0 18x18 #${dark().inert} w2 r4\n" +
                   "text 26,1 40x16 'label'\n" +
                   "hit 0,0 66x18\n")
 end an_unchecked_box_draws_no_mark
@@ -909,8 +909,8 @@ private a_checked_box_is_filled_and_marked()
     val on = signal(true)
 
     assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
-                  s"fill 0,0 18x18 #${ACCENT} r4\n" +
-                  s"stroke 0,0 18x18 #${ACCENT} w2 r4\n" +
+                  s"fill 0,0 18x18 #${dark().primary} r4\n" +
+                  s"stroke 0,0 18x18 #${dark().primary} w2 r4\n" +
                   s"fill 5,5 8x8 #${WHITE} r2\n" +
                   "text 26,1 40x16 'label'\n" +
                   "hit 0,0 66x18\n")
@@ -934,8 +934,8 @@ private pointing_at_a_checkbox_label_lights_its_box()
     v.paint(&over, Rect(0, 0, 66, 18))
 
     assert(away.dump() != over.dump(), "the pointer is on the label and the box knows")
-    assert(over.dump() == s"fill 0,0 18x18 #${GROUND_TINT} r4\n" +
-                          s"stroke 0,0 18x18 #${lighten(INERT, 20)} w2 r4\n" +
+    assert(over.dump() == s"fill 0,0 18x18 #${dark().ground} r4\n" +
+                          s"stroke 0,0 18x18 #${lighten(dark().inert, 20)} w2 r4\n" +
                           "text 26,1 40x16 'label'\n" +
                           "hit 0,0 66x18\n",
            s"the lit outline:\n${over.dump()}")
@@ -1038,9 +1038,9 @@ private a_slider_draws_its_track_its_fill_and_its_knob()
     val v = signal(50)
 
     assert_paints(slider(v, 0, 100, 220), Size(300, 300), Rect(0, 0, 220, 16),
-                  s"fill 0,5 220x6 #${INERT} r3\n" +
-                  s"fill 0,5 110x6 #${ACCENT} r3\n" +
-                  s"fill 102,0 16x16 #${lighten(ACCENT, 30)} r8\n" +
+                  s"fill 0,5 220x6 #${dark().inert} r3\n" +
+                  s"fill 0,5 110x6 #${dark().primary} r3\n" +
+                  s"fill 102,0 16x16 #${lighten(dark().primary, 30)} r8\n" +
                   "hit 0,0 220x16\n")
 end a_slider_draws_its_track_its_fill_and_its_knob
 
@@ -1048,11 +1048,11 @@ end a_slider_draws_its_track_its_fill_and_its_knob
 @test
 private a_progress_bar_clamps_at_both_ends()
     assert_paints(progress(1.5, 200), Size(300, 300), Rect(0, 0, 200, 6),
-                  s"fill 0,0 200x6 #${INERT} r3\n" +
-                  s"fill 0,0 200x6 #${ACCENT} r3\n")
+                  s"fill 0,0 200x6 #${dark().inert} r3\n" +
+                  s"fill 0,0 200x6 #${dark().primary} r3\n")
 
     assert_paints(progress(-0.5, 200), Size(300, 300), Rect(0, 0, 200, 6),
-                  s"fill 0,0 200x6 #${INERT} r3\n")
+                  s"fill 0,0 200x6 #${dark().inert} r3\n")
 end a_progress_bar_clamps_at_both_ends
 
 // **It eases toward the fraction rather than jumping to it**, so a bar fed by a task that reports in
@@ -1067,8 +1067,8 @@ private a_progress_bar_eases_toward_a_new_fraction()
     c.tick(0.1)
     progress(1.0, 200).paint(&c, Rect(0, 0, 200, 6))
 
-    assert(c.dump() == s"fill 0,0 200x6 #${INERT} r3\n" +
-                       s"fill 0,0 80x6 #${ACCENT} r3\n",
+    assert(c.dump() == s"fill 0,0 200x6 #${dark().inert} r3\n" +
+                       s"fill 0,0 80x6 #${dark().primary} r3\n",
            s"a bar part of the way along:\n${c.dump()}")
 end a_progress_bar_eases_toward_a_new_fraction
 
@@ -1078,8 +1078,12 @@ end a_progress_bar_eases_toward_a_new_fraction
 private a_divider_asks_for_no_width_and_paints_across_what_it_is_given()
     assert(measured(divider(), Size(300, 300)) == Size(0, 1), "no width, one pixel tall")
 
-    assert_paints(divider(0xFF0000u32, 3), Size(300, 300), Rect(0, 40, 300, 3),
-                  "fill 0,40 300x3 #16711680\n")
+    assert_paints(divider(3), Size(300, 300), Rect(0, 40, 300, 3),
+                  s"fill 0,40 300x3 #${dark().edge}\n")
+
+    // And it takes the theme's edge, so a restyled section's rules move with it.
+    assert_paints(divider().restyle(t -> t with { edge = 0xFF0000u32 }),
+                  Size(300, 300), Rect(0, 40, 300, 1), "fill 0,40 300x1 #16711680\n")
 end a_divider_asks_for_no_width_and_paints_across_what_it_is_given
 
 // -- what a backend does NOT have to write --------------------------------------------------------
@@ -1246,9 +1250,9 @@ private a_slider_in_a_taller_row_centres_its_knob_on_its_track()
     // Sixteen tall by nature, handed twenty-six -- what sitting beside a padded label does to it.
     slider(v, 0, 100, 220).paint(&c, Rect(0, 0, 220, 26))
 
-    assert(c.dump() == s"fill 0,10 220x6 #${INERT} r3\n" +
-                       s"fill 0,10 110x6 #${ACCENT} r3\n" +
-                       s"fill 102,5 16x16 #${lighten(ACCENT, 30)} r8\n" +
+    assert(c.dump() == s"fill 0,10 220x6 #${dark().inert} r3\n" +
+                       s"fill 0,10 110x6 #${dark().primary} r3\n" +
+                       s"fill 102,5 16x16 #${lighten(dark().primary, 30)} r8\n" +
                        "hit 0,0 220x26\n",
            s"the track's centre is 13 and so is the knob's:\n${c.dump()}")
 end a_slider_in_a_taller_row_centres_its_knob_on_its_track
@@ -1262,7 +1266,7 @@ private a_switch_keeps_its_own_size_in_a_bigger_rectangle()
 
     switch(on).paint(&c, Rect(0, 0, 300, 40))
 
-    assert(c.dump() == s"fill 0,8 44x24 #${INERT} r12\n" +
+    assert(c.dump() == s"fill 0,8 44x24 #${dark().inert} r12\n" +
                        s"fill 3,11 18x18 #${darken(WHITE, 8)} r9\n" +
                        "hit 0,0 300x40\n",
            s"forty-four by twenty-four, eight down:\n${c.dump()}")
@@ -1285,8 +1289,8 @@ end a_control_is_tappable_across_all_it_was_given
 @test
 private a_progress_bar_keeps_its_thickness()
     assert_paints(progress(0.5, 200), Size(300, 300), Rect(0, 0, 200, 30),
-                  s"fill 0,12 200x6 #${INERT} r3\n" +
-                  s"fill 0,12 100x6 #${ACCENT} r3\n")
+                  s"fill 0,12 200x6 #${dark().inert} r3\n" +
+                  s"fill 0,12 100x6 #${dark().primary} r3\n")
 end a_progress_bar_keeps_its_thickness
 
 // **A label is centred in the rectangle it was given rather than drawn at the top of it**, which is
@@ -1331,7 +1335,7 @@ private a_thumb_is_the_windows_share_of_the_content()
     // eighth, so twenty-five of the two hundred.
     scroll(column(generate(100usize, i -> text("x")), 0), offset, 200).paint(&c, Rect(0, 0, 100, 200))
 
-    assert(c.dump().contains(s"fill 92,0 8x25 #${lighten(INERT, 25)} r4"),
+    assert(c.dump().contains(s"fill 92,0 8x25 #${lighten(dark().inert, 25)} r4"),
            s"an eighth of the track, at the top:\n${c.dump()}")
 end a_thumb_is_the_windows_share_of_the_content
 
@@ -1343,7 +1347,7 @@ private a_thumb_never_shrinks_past_taking_hold_of()
 
     scroll(column(generate(2000usize, i -> text("x")), 0), offset, 200).paint(&c, Rect(0, 0, 100, 200))
 
-    assert(c.dump().contains(s"fill 92,0 8x24 #${lighten(INERT, 25)} r4"),
+    assert(c.dump().contains(s"fill 92,0 8x24 #${lighten(dark().inert, 25)} r4"),
            s"two thousand rows would ask for a thumb one pixel tall:\n${c.dump()}")
 end a_thumb_never_shrinks_past_taking_hold_of
 
@@ -1364,8 +1368,8 @@ private a_thumb_at_the_end_of_the_list_is_at_the_end_of_its_track()
     offset.set(220)
     list.paint(&bottom, Rect(0, 0, 100, 100))
 
-    assert(top.dump().contains(s"fill 92,0 8x31 #${lighten(INERT, 25)} r4"), s"at the top:\n${top.dump()}")
-    assert(bottom.dump().contains(s"fill 92,69 8x31 #${lighten(INERT, 25)} r4"), s"at the end:\n${bottom.dump()}")
+    assert(top.dump().contains(s"fill 92,0 8x31 #${lighten(dark().inert, 25)} r4"), s"at the top:\n${top.dump()}")
+    assert(bottom.dump().contains(s"fill 92,69 8x31 #${lighten(dark().inert, 25)} r4"), s"at the end:\n${bottom.dump()}")
 end a_thumb_at_the_end_of_the_list_is_at_the_end_of_its_track
 
 // **Dragging the bar scrolls the list**, by the same arithmetic the slider does on the other axis:
@@ -1438,3 +1442,222 @@ private a_pointer_resting_on_the_bar_does_not_scroll()
     assert_eq(offset.read(), 50)
     assert_eq(n.read(), 0)
 end a_pointer_resting_on_the_bar_does_not_scroll
+
+// -- the theme ------------------------------------------------------------------------------------
+//
+// **The change that introduced a theme moved not one recorded frame in this file**, which was the
+// point of `dark()` carrying exactly the constants the controls had: what these tests check is the
+// restyling, rather than a re-recording of the defaults.
+
+// A restyle reaches a control that is two containers below it, because the theme travels on the
+// canvas rather than through the tree.
+@test
+private a_restyle_reaches_a_control_below_it()
+    val on = signal(true)
+    val red = 0xC0453Fu32
+
+    assert_paints(column([row([switch(on)], 0)], 0).restyle(t -> t with { primary = red }),
+                  Size(200, 200), Rect(0, 0, 44, 24),
+                  s"fill 0,0 44x24 #${red} r12\n" +
+                  s"fill 23,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                  "hit 0,0 44x24\n")
+end a_restyle_reaches_a_control_below_it
+
+// And `.tinted` is the shorthand for the commonest one.
+@test
+private tinted_is_a_restyle_of_the_primary_colour()
+    val on = signal(true)
+    val red = 0xC0453Fu32
+
+    var a = recorder()
+    var b = recorder()
+
+    switch(on).tinted(red).paint(&a, Rect(0, 0, 44, 24))
+    switch(on).restyle(t -> t with { primary = red }).paint(&b, Rect(0, 0, 44, 24))
+
+    assert(a.dump() == b.dump(), s"tinted:\n${a.dump()}restyle:\n${b.dump()}")
+end tinted_is_a_restyle_of_the_primary_colour
+
+// **Two restyles nest, and the inner one is handed the outer one's work.** That is why `Themed`
+// holds a function rather than a theme: a wrapper storing a whole `Theme` could only replace one,
+// and could not have known what the outer one had done anyway.
+@test
+private a_restyle_is_handed_what_the_one_above_it_left()
+    val on = signal(true)
+
+    // The outer sets the colour, the inner rounds the corners off. Neither names the other's field
+    // and the switch draws under both.
+    assert_paints(switch(on)
+                      .restyle(t -> t with { radius = 0 })
+                      .restyle(t -> t with { primary = 0x112233u32 }),
+                  Size(200, 200), Rect(0, 0, 44, 24),
+                  s"fill 0,0 44x24 #${0x112233u32} r12\n" +
+                  s"fill 23,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                  "hit 0,0 44x24\n")
+end a_restyle_is_handed_what_the_one_above_it_left
+
+// And it is put back afterwards, so a sibling drawn after a restyled subtree is unaffected -- the
+// same discipline `unink` and `unclip` keep.
+@test
+private a_restyle_ends_where_its_subtree_does()
+    val on = signal(true)
+    var c = recorder()
+
+    column([switch(on).tinted(0xFF0000u32), switch(on)], 0).paint(&c, Rect(0, 0, 44, 48))
+
+    assert(c.dump() == s"fill 0,0 44x24 #${0xFF0000u32} r12\n" +
+                       s"fill 23,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                       "hit 0,0 44x24\n" +
+                       s"fill 0,24 44x24 #${dark().primary} r12\n" +
+                       s"fill 23,27 18x18 #${darken(WHITE, 8)} r9\n" +
+                       "hit 0,24 44x24\n",
+           s"the second switch is the theme's colour again:\n${c.dump()}")
+end a_restyle_ends_where_its_subtree_does
+
+// **`measure` pushes the theme too, and that is load-bearing**: `pad` and `radius` are in the theme,
+// so a restyled button is a different *size*, and a layout pass that did not see the restyle would
+// place its neighbours as though it were not one.
+@test
+private a_restyle_changes_what_a_button_measures_to()
+    val plain = button("hi", () -> ())
+    val roomy = button("hi", () -> ()).restyle(t -> t with { pad = 20 })
+
+    assert(measured(plain, Size(300, 300)) == Size(32, 32), "two characters and eight a side")
+    assert(measured(roomy, Size(300, 300)) == Size(56, 56), "and twenty a side")
+end a_restyle_changes_what_a_button_measures_to
+
+// A role names a colour the caller cannot see, which is the whole reason roles exist.
+@test
+private a_role_picks_its_colour_out_of_the_theme()
+    val on = signal(true)
+    val look = dark()
+
+    assert_eq(look.color(Role.Primary), look.primary)
+    assert_eq(look.color(Role.Error), look.error)
+    assert_eq(look.color(Role.Success), look.success)
+
+    assert_paints(switch(on, .Error), Size(200, 200), Rect(0, 0, 44, 24),
+                  s"fill 0,0 44x24 #${look.error} r12\n" +
+                  s"fill 23,3 18x18 #${darken(WHITE, 8)} r9\n" +
+                  "hit 0,0 44x24\n")
+end a_role_picks_its_colour_out_of_the_theme
+
+// And a role follows the theme, where a hex literal at the call site would not: the same button
+// under two themes is two colours, and nothing at the call site changed.
+@test
+private a_role_moves_when_the_theme_does()
+    val on = signal(true)
+    var c = recorder()
+
+    switch(on, .Success).restyle(t -> light()).paint(&c, Rect(0, 0, 44, 24))
+
+    assert(c.dump().contains(s"#${light().success}"),
+           s"the light theme's green, not the dark theme's:\n${c.dump()}")
+end a_role_moves_when_the_theme_does
+
+// -- the button variants --------------------------------------------------------------------------
+
+// **An outline fills nothing at all**, which is the constraint that shaped the variant: `Canvas` has
+// no alpha, so a ground would have to be painted in whatever is behind, and a view does not know
+// what is behind it.
+@test
+private an_outline_button_paints_no_ground()
+    val look = dark()
+
+    assert_paints(button("hi", () -> (), .Primary, .Outline), Size(300, 300), Rect(0, 0, 100, 28),
+                  s"ink #${look.primary}\n" +
+                  "text 8,8 84x12 'hi'\n" +
+                  "unink\n" +
+                  s"stroke 0,0 100x28 #${look.primary} w1 r6\n" +
+                  "hit 0,0 100x28\n")
+end an_outline_button_paints_no_ground
+
+// A dashed one is the same with a pattern on the stroke, which is the one thing `Canvas.stroke`
+// gained for it.
+@test
+private a_dashed_button_is_an_outline_with_a_pattern()
+    val look = dark()
+
+    assert_paints(button("hi", () -> (), .Accent, .Dashed), Size(300, 300), Rect(0, 0, 100, 28),
+                  s"ink #${look.accent}\n" +
+                  "text 8,8 84x12 'hi'\n" +
+                  "unink\n" +
+                  s"stroke 0,0 100x28 #${look.accent} w1 r6 d4\n" +
+                  "hit 0,0 100x28\n")
+end a_dashed_button_is_an_outline_with_a_pattern
+
+// A soft one has a ground mixed a little way from the theme's `ground` toward the role, and no
+// border at all -- which is what lets a screen carry a dozen of them.
+@test
+private a_soft_button_has_a_muted_ground_and_no_border()
+    val look = dark()
+
+    assert_paints(button("hi", () -> (), .Secondary, .Soft), Size(300, 300), Rect(0, 0, 100, 28),
+                  s"fill 0,0 100x28 #${mix(look.ground, look.secondary, look.soft)} r6\n" +
+                  s"ink #${lighten(look.secondary, 20)}\n" +
+                  "text 8,8 84x12 'hi'\n" +
+                  "unink\n" +
+                  "hit 0,0 100x28\n")
+end a_soft_button_has_a_muted_ground_and_no_border
+
+// **The variant and the role are independent**, which is the whole claim: four shapes times six
+// colours out of ten numbers, and every one of the twenty-four moves when the theme does.
+@test
+private a_variant_and_a_role_are_chosen_separately()
+    var a = recorder()
+    var b = recorder()
+
+    button("hi", () -> (), .Error, .Outline).paint(&a, Rect(0, 0, 100, 28))
+    button("hi", () -> (), .Success, .Outline).paint(&b, Rect(0, 0, 100, 28))
+
+    assert(a.dump().contains(s"#${dark().error}"), "the same shape in one colour")
+    assert(b.dump().contains(s"#${dark().success}"), "and in another")
+    assert(a.dump().contains("w1 r6\n"), "neither of them dashed")
+    assert(b.dump().contains("w1 r6\n"), "nor filled")
+end a_variant_and_a_role_are_chosen_separately
+
+// An outline's hover is carried by the outline and the label, since there is no ground to lift.
+@test
+private an_outline_button_brightens_rather_than_fills_when_hovered()
+    val v = button("hi", () -> (), .Primary, .Outline)
+    val look = dark()
+
+    var away = recorder()
+    var over = recorder()
+
+    over.point(50, 14)
+
+    v.paint(&away, Rect(0, 0, 100, 28))
+    v.paint(&over, Rect(0, 0, 100, 28))
+
+    assert(away.dump().contains(s"#${look.primary}"), "at rest it is the plain colour")
+    assert(over.dump().contains(s"#${lighten(look.primary, look.hover_lift)}"), "and lit when over")
+    assert(!over.dump().contains("fill "), "and it still fills nothing")
+end an_outline_button_brightens_rather_than_fills_when_hovered
+
+// A panel takes its colour and its corner from the theme, which is what makes it the restylable
+// counterpart to `background(color, radius)`.
+@test
+private a_panel_is_the_themes_surface()
+    assert_paints(text("hi").panel(), Size(200, 200), Rect(0, 0, 40, 20),
+                  s"fill 0,0 40x20 #${dark().panel} r6\n" +
+                  "text 0,2 40x16 'hi'\n")
+
+    assert_paints(text("hi").panel().restyle(t -> light()), Size(200, 200), Rect(0, 0, 40, 20),
+                  s"fill 0,0 40x20 #${light().panel} r6\n" +
+                  "text 0,2 40x16 'hi'\n")
+end a_panel_is_the_themes_surface
+
+// **A backend that implements none of the three theme members draws in `dark()` and ignores a
+// restyle**, which is the same bargain `visible` strikes and the same way round: not implementing it
+// costs the feature and never the frame.
+@test
+private a_backend_with_no_theme_draws_in_the_default_one()
+    var b = blind()
+
+    assert(b.theme() == dark(), "the trait's own body")
+
+    b.push_theme(light())
+
+    assert(b.theme() == dark(), "and a push it did not implement changes nothing")
+end a_backend_with_no_theme_draws_in_the_default_one
