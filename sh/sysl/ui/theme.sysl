@@ -81,7 +81,7 @@ end Variant
 // **Every row's ground is painted rather than left to whatever is behind.** `Canvas` has no alpha,
 // so a row that wanted to be "the surface underneath" would have to know what that was; naming it
 // makes striping, the hover and the ordinary row one arithmetic rather than three special cases.
-struct TableStyle deriving Eq
+struct TableStyle derives Eq
     // The header's ground and its text. Dimmer than `ink` on purpose: a column title is a label for
     // what is below it and should not compete with the data.
     head: u32
@@ -115,7 +115,7 @@ end TableStyle
 // **Every one of these is something a control reads and nothing computes for itself.** A control
 // that reached past this for a colour would be one a theme could not restyle, which is the whole
 // test of whether this is finished.
-struct Theme deriving Eq
+struct Theme derives Eq
     // The palette, one to a `Role`.
     primary: u32
     secondary: u32

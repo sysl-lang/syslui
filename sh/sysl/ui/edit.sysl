@@ -20,7 +20,7 @@ import sysl.buf.{Buf, buf}
 // exactly the operation that would cut a character in half.
 
 // A string and where the caret is in it, which is what a key produces.
-struct Edited deriving Eq
+struct Edited derives Eq
     text: string
     sel: Selection
 end Edited

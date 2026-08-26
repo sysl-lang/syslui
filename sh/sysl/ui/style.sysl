@@ -32,7 +32,7 @@ module sh.sysl.ui
 // **Nothing here is stored between frames and nothing is a signal.** Where the pointer is, and how
 // far an ease has got, are facts about the window rather than application state; treating either as
 // state is what would force a rebuild on every mouse move.
-struct Interaction deriving Eq
+struct Interaction derives Eq
     // Zero at rest, one fully hovered, in between while easing.
     hover: real
 

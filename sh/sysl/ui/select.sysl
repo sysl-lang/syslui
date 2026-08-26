@@ -24,7 +24,7 @@ module sh.sysl.ui
 // **`anchor` is where the press began and `head` is where the pointer is**, so a selection dragged
 // leftward has `head` below `anchor`. Keeping the direction is what a shift-click would extend from,
 // and `lo`/`hi` are what everything else asks for.
-struct Selection deriving Eq
+struct Selection derives Eq
     anchor: usize
     head: usize
 

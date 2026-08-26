@@ -45,7 +45,7 @@ const NOBODY: int = 0
 // reports: a composed key, a dead-key sequence and a paste all arrive as a run of text, and a
 // keyboard that could only say "one character" would make an editor that could not type é. A
 // backend hands over whatever the window gave it and the edit inserts it whole.
-enum Key deriving Eq
+enum Key derives Eq
     Typed(text: string)
     Backspace
     Delete
@@ -67,7 +67,7 @@ end Key
 // application because only the application knows what its shortcuts are. ⌘C is not in this file for
 // the same reason the clipboard is not: the toolkit says what is selected and the program decides
 // what that is worth.
-struct Press deriving Eq
+struct Press derives Eq
     key: Key
     shift: bool
     ctrl: bool

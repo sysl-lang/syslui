@@ -20,12 +20,12 @@ import sysl.buf.{Buf, buf}
 
 // How much room a view is offered, and how much it asks for. Both are the same shape, which is what
 // makes the layout pass one function rather than two.
-struct Size deriving Eq
+struct Size derives Eq
     w: int
     h: int
 end Size
 
-struct Rect deriving Eq
+struct Rect derives Eq
     x: int
     y: int
     w: int
