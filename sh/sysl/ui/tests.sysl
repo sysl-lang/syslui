@@ -1166,6 +1166,176 @@ private a_slider_draws_its_track_its_fill_and_its_knob()
                   "hit 0,0 220x16\n")
 end a_slider_draws_its_track_its_fill_and_its_knob
 
+// Two reals within a rounding error of each other. A step of `0.1` is not exactly a tenth, so a value
+// six steps along is `0.6000000000000001`, and that is the value a person dragged to.
+private close(a: real, b: real) -> bool = a - b < 1e-9 && b - a < 1e-9
+
+// Paint `s` once with the pointer held down at `x`, which is a drag to there.
+private drag_to(s: &View, c: *Recorder, x: int)
+    c.point(x, 8, true)
+    s.paint(c, Rect(0, 0, 220, 16))
+
+// **A real slider maps the track the way an int one does**, and lands on a whole number of steps
+// from `lo`. The travel is 204, so a pointer 51 pixels along it is a quarter of the way.
+@test
+private a_real_slider_takes_its_value_from_where_the_pointer_is()
+    val v = signal(0.0)
+    val s = slider(v, 0.0, 1.0, 220, step = 0.01)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 51)
+    assert(close(v.read(), 0.25), s"${v.read()}")
+
+    drag_to(s, &c, 8 + 102)
+    assert(close(v.read(), 0.5), s"${v.read()}")
+
+// **The value snaps to the nearest step**: 61 pixels is 0.299 of the way, which is nearer 0.25 than
+// 0.5, and 82 is 0.402, nearer 0.5.
+@test
+private a_real_slider_snaps_to_its_step()
+    val v = signal(0.0)
+    val s = slider(v, 0.0, 1.0, 220, step = 0.25)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 61)
+    assert_eq(v.read(), 0.25)
+
+    drag_to(s, &c, 8 + 82)
+    assert_eq(v.read(), 0.5)
+
+// The grid starts at `lo`, not at zero, and a drag past either end stops at that end.
+@test
+private a_real_slider_counts_its_steps_from_lo_and_stops_at_either_end()
+    val v = signal(0.0)
+    val s = slider(v, 20.0, 2020.0, 220, step = 10.0)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 51)
+    assert_eq(v.read(), 520.0)
+
+    drag_to(s, &c, 0)
+    assert_eq(v.read(), 20.0)
+
+    drag_to(s, &c, 219)
+    assert_eq(v.read(), 2020.0)
+
+// A range either side of zero: its middle is zero, and its bottom is `lo`.
+@test
+private a_real_slider_with_a_negative_lo_has_zero_in_the_middle()
+    val v = signal(1.0)
+    val s = slider(v, -1.0, 1.0, 220, step = 0.5)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 102)
+    assert_eq(v.read(), 0.0)
+
+    drag_to(s, &c, 0)
+    assert_eq(v.read(), -1.0)
+
+// **A step that does not divide the range leaves `hi` unreachable**: the far end is the last step
+// that fits, so every value the slider can hold is one the keyboard can return to.
+@test
+private a_step_that_does_not_divide_the_range_stops_at_the_last_one_that_fits()
+    val r = signal(0.0)
+    var c = recorder()
+
+    drag_to(slider(r, 0.0, 1.0, 220, step = 0.4), &c, 219)
+    assert_eq(r.read(), 0.8)
+
+    val n = signal(0)
+
+    drag_to(slider(n, 0, 10, 220, step = 3), &c, 219)
+    assert_eq(n.read(), 9)
+
+// An int slider takes a step too, and its default of one is the slider it always was.
+@test
+private an_int_slider_snaps_to_its_step()
+    val v = signal(0)
+    val s = slider(v, 0, 100, 220, step = 5)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 61)
+    assert_eq(v.read(), 30)
+
+    drag_to(s, &c, 8 + 102)
+    assert_eq(v.read(), 50)
+
+// **A step of zero is no grid**: a real slider then takes whatever fraction of the travel the
+// pointer is at.
+@test
+private a_real_slider_with_no_step_follows_the_pointer()
+    val v = signal(0.0)
+    var c = recorder()
+
+    drag_to(slider(v, 0.0, 1.0, 220, step = 0.0), &c, 8 + 51)
+    assert_eq(v.read(), 0.25)
+
+// The knob of a real slider sits at its value exactly as an int one's does.
+@test
+private a_real_slider_draws_its_knob_at_its_value()
+    val v = signal(0.5)
+
+    assert_paints(slider(v, 0.0, 1.0, 220, step = 0.1), Size(300, 300), Rect(0, 0, 220, 16),
+                  s"fill 0,5 220x6 #${dark().inert} r3\n" +
+                  s"fill 0,5 110x6 #${dark().primary} r3\n" +
+                  s"fill 102,0 16x16 #${lighten(dark().primary, 30)} r8\n" +
+                  "hit 0,0 220x16\n")
+
+// Tap a slider and end that frame, as `render` would, leaving the pointer up where it was.
+private tap(s: &View, c: *Recorder, x: int)
+    c.point(x, 8, true)
+    s.paint(c, Rect(0, 0, 220, 16))
+    c.keys_done()
+    c.point(x, 8, false)
+
+// Paint a frame that delivers `keys`, and end it.
+private keys(s: &View, c: *Recorder, ks: []Key)
+    for k in ks
+        c.key(press(k))
+
+    s.paint(c, Rect(0, 0, 220, 16))
+    c.keys_done()
+
+// **A slider with an id takes the arrows once tapped**, a step per press, two presses in a frame
+// being two steps; Home and End go to the ends, and neither end is passed.
+@test
+private a_tapped_slider_steps_with_the_arrow_keys()
+    val v = signal(0.0)
+    val s = slider(v, 0.0, 1.0, 220, step = 0.1, id = 1)
+    var c = recorder()
+
+    tap(s, &c, 8 + 102)
+    assert(close(v.read(), 0.5), s"${v.read()}")
+
+    keys(s, &c, [Key.Right])
+    assert(close(v.read(), 0.6), s"${v.read()}")
+
+    keys(s, &c, [Key.Up, Key.Up])
+    assert(close(v.read(), 0.8), s"${v.read()}")
+
+    keys(s, &c, [Key.Left, Key.Down, Key.Down])
+    assert(close(v.read(), 0.5), s"${v.read()}")
+
+    keys(s, &c, [Key.End, Key.Right])
+    assert_eq(v.read(), 1.0)
+
+    keys(s, &c, [Key.Home, Key.Left])
+    assert_eq(v.read(), 0.0)
+end a_tapped_slider_steps_with_the_arrow_keys
+
+// **A slider nobody gave an id takes no keys**, which is what keeps every slider written before
+// the keyboard reached them exactly as it was.
+@test
+private a_slider_with_no_id_takes_no_keys()
+    val v = signal(0)
+    val s = slider(v, 0, 100, 220)
+    var c = recorder()
+
+    tap(s, &c, 8 + 102)
+    keys(s, &c, [Key.Right, Key.End])
+
+    assert_eq(v.read(), 50)
+
 // A progress bar clamps rather than drawing outside itself, and an empty one draws no fill at all.
 @test
 private a_progress_bar_clamps_at_both_ends()

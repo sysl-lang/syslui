@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.3" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.4" }
 }
 ```
 
@@ -148,6 +148,24 @@ Three of them are worth singling out:
   changing — an unguarded one would mark every frame dirty for as long as a pointer rested on a
   slider nobody was moving.
 
+**A slider is generic over its value**, so one function serves an `int` and a `real`, and the value
+is always a whole number of `step`s from `lo`:
+
+```
+slider(volume, 0, 100, 260)                         // an int, a step of one
+slider(cutoff, 20.0, 2000.0, 260, step = 10.0)      // Hz, in tens
+slider(threshold, 0.0, 1.0, 260, step = 0.01)       // a fraction
+slider(hold, 0.1, 5.0, 260, step = 0.1, id = 3)     // seconds, and the arrow keys once tapped
+```
+
+A step that does not divide the range leaves `hi` unreachable — the far end is the last step that
+fits, as an HTML range input's is — and a `real` slider given a step of `0.0` follows the pointer
+with no grid at all. **A `real` slider names its step**: the default of one is the `int` slider's,
+and with sysl 0.0.159 a literal default is not yet read at the parameter's type, so leaving it out
+of a `real` call is refused. **The keyboard is opt-in**: given an `id`, a tapped slider moves a step
+per arrow and to either end with Home and End, and its knob is lit while it has the keys. A slider
+with no `id` draws exactly as it did before it was generic.
+
 **A meter is a reading on a scale with the stretch of it that counts as right marked** — a tuner's
 cents, a balance control's centre-zero, a level against the mark it should reach:
 
@@ -261,7 +279,7 @@ contents were the same length.
 ```
 grid():
     text("volume").padding(4).cell(4)
-    slider(volume, 0, 100).cell(16)
+    slider(volume, 0, 100, 260).cell(16)
     text(s"${volume.read()}%").padding(4).cell(4)
 
     text("progress").padding(4).cell(4)
