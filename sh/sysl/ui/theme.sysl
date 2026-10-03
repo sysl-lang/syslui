@@ -69,6 +69,54 @@ enum Variant
     Soft
 end Variant
 
+// What a run of text is *for*, which decides how big it is.
+//
+// **The same argument as `Role`, one property over**: a caller naming a size in points is naming a
+// number no theme can move, where `.text_style(.Title)` says "this heads a section" and leaves how
+// big that is to whatever the interface is drawn in. Four is the set a screen actually uses; a
+// design system with eleven is one most screens use four of.
+enum TextStyle
+    // The one big thing on a screen: a reading, a total, the name of what you are looking at.
+    Display
+
+    // A heading over a section.
+    Title
+
+    // Ordinary text, at the size the canvas was made with.
+    Body
+
+    // A note under something -- a unit, a hint, a timestamp.
+    Caption
+end TextStyle
+
+// How big each `TextStyle` is, as a multiple of the canvas's own size.
+//
+// **Multiples rather than sizes, so that an application's base size scales everything.** A program
+// started with `app(..., size = 18.0)` for a television gets eighteen-point body text and headings to
+// match, with nothing restated. A theme wanting tighter hierarchy turns these down.
+//
+// **There is no weight here, and that is the backend rather than a taste.** A canvas draws with one
+// face, and a heading made "bold" by smearing that face would be a fake a real bold would not look
+// like. A size is something every backend can honestly do.
+struct TextSizes derives Eq
+    display: real
+    title: real
+    body: real
+    caption: real
+
+    // How many times the base size `style` is.
+    scale(self, style: TextStyle) -> real =
+        style match
+            Display -> self.display
+            Title -> self.title
+            Body -> self.body
+            Caption -> self.caption
+end TextSizes
+
+// The scale every theme here carries: a display face two and a half times body text, a title one
+// and a half, a caption four fifths -- at the demo's fifteen, 37.5, 22.5, 15 and 12.
+text_sizes() -> TextSizes = TextSizes(display = 2.5, title = 1.5, body = 1.0, caption = 0.8)
+
 // How a table looks, which is a block of its own rather than ten more fields on `Theme`.
 //
 // **A table is the one widget with enough surface to need this.** Everything else here is a colour
@@ -110,7 +158,7 @@ struct TableStyle derives Eq
     pad: int
 end TableStyle
 
-// A whole appearance, as nineteen numbers and a table.
+// A whole appearance, as a palette, a handful of metrics, a table and a scale of text sizes.
 //
 // **Every one of these is something a control reads and nothing computes for itself.** A control
 // that reached past this for a colour would be one a theme could not restyle, which is the whole
@@ -184,6 +232,9 @@ struct Theme derives Eq
     columns: int
     gutter: int
 
+    // How big each named text style is. See `TextSizes`.
+    text: TextSizes
+
     // The colour of a role, which is the whole of what a role is.
     //
     // **A method on the theme rather than a table anywhere else**, so that a theme with a different
@@ -212,7 +263,7 @@ dark() -> Theme =
           selection = 0x2F4A73,
           radius = 6, pad = 8,
           hover_lift = 14, press_sink = 22, edge_lift = 26, soft = 22,
-          table = dark_table(), columns = COLUMNS_24, gutter = 8)
+          table = dark_table(), columns = COLUMNS_24, gutter = 8, text = text_sizes())
 
 // **`head_ink` is exactly `mix(ink, panel, 35)`**, which is what `table.sysl` computed before there
 // was anything to name it -- so naming it moved no recorded frame.
@@ -240,7 +291,7 @@ light() -> Theme =
           selection = 0xB6D3F5,
           radius = 6, pad = 8,
           hover_lift = 8, press_sink = 16, edge_lift = 12, soft = 14,
-          table = light_table(), columns = COLUMNS_24, gutter = 8)
+          table = light_table(), columns = COLUMNS_24, gutter = 8, text = text_sizes())
 
 light_table() -> TableStyle =
     TableStyle(head = 0xF2F4F8, head_ink = 0x6B7280,

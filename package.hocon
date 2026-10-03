@@ -1,7 +1,7 @@
 // syslUI — a declarative retained user interface for a machine with a heap.
 //
 //     dependencies {
-//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.2" }
+//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.3" }
 //     }
 //
 // **The presentation is not in here.** What the toolkit produces is a block of premultiplied ARGB32
@@ -20,7 +20,7 @@
 
 package {
   name    = "syslui"
-  version = "0.1.2"
+  version = "0.1.3"
 
   // **The oldest compiler this builds with, and it is ahead of the newest release.** A tree here is
   // written as an indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler

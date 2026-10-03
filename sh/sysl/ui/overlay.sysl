@@ -53,6 +53,11 @@ struct Overlay
     // demo it was *not*, because `.modal` sits outside `.foreground` in the chain, so the capture
     // was faithfully recording a moment at which nothing had been set.
     tint: Option[u32]
+
+    // The text size in force where this was raised -- the third piece of styling, and captured for
+    // the same reason: a menu raised from under a big heading is drawn at the heading's size, not
+    // at the root's.
+    size: real
 end Overlay
 
 // Paint a whole frame: the tree, and then anything the tree raised above itself.
@@ -84,6 +89,7 @@ render(v: &View, c: *Canvas, at: Rect)
 
         for i in 0..<p.len
             c.push_theme(p[i].look)
+            c.push_font_size(p[i].size)
 
             p[i].tint match
                 Some(colour) ->
@@ -92,6 +98,7 @@ render(v: &View, c: *Canvas, at: Rect)
                     c.unink()
                 None -> p[i].view.paint(c, p[i].at)
 
+            c.pop_font_size()
             c.pop_theme()
 
     // **The frame's keys are forgotten at the end of the frame, and this is the only place that

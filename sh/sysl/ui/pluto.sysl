@@ -26,12 +26,16 @@ struct PlutoCanvas
     vg: &plutovg.Canvas
 
     face: &plutovg.Font
-    size: f32
 
-    // Where a glyph run's baseline sits below the top of its line, and how tall a line is. Both are
-    // computed once from the face's metrics rather than asked for per run.
-    ascent: int
-    line_h: int
+    // Every size this canvas has drawn at, the one it was made with first, and which of them are in
+    // force, innermost last. Empty means the first.
+    //
+    // **An index rather than a size on the stack**, because a size is not all a run needs: its
+    // baseline, its line height and its remembered widths all differ by size, and they are worked
+    // out once per size rather than once per push. An interface uses a handful of sizes, so finding
+    // one is a short walk.
+    sizings: Buf[&Sizing]
+    sized: Buf[usize]
 
     // Where the pointer is and whether it is held, fed in by the frame loop before it paints.
     px: int
@@ -67,19 +71,6 @@ struct PlutoCanvas
     look: Theme
     looks: Buf[Theme]
 
-    // A run measured once and remembered.
-    //
-    // **This is not an optimization, it is the difference between measuring the tree and measuring
-    // the font.** Shaping a run is the most expensive thing this backend does per call, and layout
-    // asks for the same run at least twice a frame -- once as a container sizes itself and again as
-    // it places what it sized -- while a `Reactive` measures its resting body on top of that. A
-    // frame loop without this cache reports the shaper's cost as the toolkit's, which is exactly
-    // the mistake the SDL backend it replaces had a comment warning about.
-    //
-    // It is keyed on the string rather than on the string and the size, because a canvas draws at
-    // one size for its whole life: `size` is a field, not a parameter.
-    widths: Map[string, int]
-
     // Who has the keyboard, what the window has sent it, and where its caret is.
     board: Keyboard
 
@@ -103,6 +94,23 @@ struct PlutoCanvas
     // events before it ticks its clock, so clearing them here would throw away the keys of the frame
     // about to be painted. `render` does it, at the end, which is the only moment that is certain.
     tick(*self, dt: real) = self.anim.tick(dt)
+
+    // The size in force, with everything a run drawn at it needs.
+    private now(*self) -> &Sizing
+        val v = self.sized.view()
+
+        self.sizings.view()[if v.len == 0 then 0 else v[v.len - 1]]
+
+    // Where `pt` sits in `sizings`, reading the face's metrics at it the first time it is asked for.
+    private sizing_of(*self, pt: f32) -> usize
+        val known = self.sizings.view()
+
+        for i in 0..<known.len
+            if known[i].pt == pt then return i
+
+        self.sizings.push(sizing(self.face, pt))
+        known.len
+    end sizing_of
 
     // Set the paint colour from a 0xRRGGBB, which is what every view speaks.
     private use(*self, color: u32)
@@ -165,13 +173,16 @@ impl Canvas for PlutoCanvas
     // speaks and what a rasterizer does: a view is placed by its top-left corner and a glyph is
     // drawn from its baseline.
     text(*self, r: Rect, t: string)
+        val at = self.now()
+
         self.vg.save()
         self.path(r, 0)
         self.vg.clip()
         self.use(self.text_ink())
-        self.vg.set_font(self.face, self.size)
-        self.vg.fill_text(t, f32(r.x), f32(r.y + self.ascent))
+        self.vg.set_font(self.face, at.pt)
+        self.vg.fill_text(t, f32(r.x), f32(r.y + at.ascent))
         self.vg.restore()
+    end text
 
     clip(*self, r: Rect)
         self.vg.save()
@@ -244,20 +255,35 @@ impl Canvas for PlutoCanvas
             Some(t) -> self.look = t
             None -> ()
 
+    override base_font_size(*self) -> real = real(self.sizings.view()[0].pt)
+
+    override font_size(*self) -> real = real(self.now().pt)
+
+    override push_font_size(*self, pt: real) = self.sized.push(self.sizing_of(f32(pt)))
+
+    override pop_font_size(*self)
+        self.sized.pop()
+        ()
+
     // **Measured through the same face the text is drawn with**, which is the whole reason `measure`
     // takes a canvas: a view that measured itself would be guessing, and a list laid out against a
     // guess puts every row in the wrong place.
+    //
+    // **The run is remembered per size**, in the `Sizing` it was measured at, which is what keeps a
+    // word measured for a heading from answering for the same word in body text.
     text_size(*self, s: string) -> Size
-        self.widths.get(s) match
-            Some(w) -> Size(w, self.line_h)
+        val at = self.now()
+
+        at.widths.get(s) match
+            Some(w) -> Size(w, at.line_h)
             None ->
-                self.vg.set_font(self.face, self.size)
+                self.vg.set_font(self.face, at.pt)
 
                 val w = int(self.vg.text_extents(s).advance)
 
-                self.widths.put(s, w)
+                at.widths.put(s, w)
 
-                Size(w, self.line_h)
+                Size(w, at.line_h)
     end text_size
 
     hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
@@ -297,7 +323,8 @@ impl Canvas for PlutoCanvas
         val on = self.tints.view()
 
         self.raised.push(Overlay(v, at, self.look,
-                                 if on.len == 0 then None else Some(on[on.len - 1])))
+                                 if on.len == 0 then None else Some(on[on.len - 1]),
+                                 self.font_size()))
     end raise_above
 
     take_overlays(*self) -> Buf[Overlay]
@@ -315,17 +342,45 @@ end PlutoCanvas
 // a light interface came out drawn in a dark theme's ink. Text with nothing pushed over it is the
 // theme's `ink`, and the theme is the only place that decides.
 //
-// **The vertical metrics are read once here rather than per run.** `descent` is signed by whichever
-// convention the face carries, so the line height is computed from its magnitude — a face whose
+// **The vertical metrics are read once per size rather than per run.** `descent` is signed by
+// whichever convention the face carries, so the line height is computed from its magnitude — a face whose
 // descent is negative and one whose descent is positive describe the same font, and a line height
 // that believed the sign would be wrong for one of them.
+//
+// `size` is the base: what a run is drawn at when nothing in the tree has said otherwise, and what
+// a named text style is a multiple of.
 pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
-    val m = face.metrics(size)
+    var sizings: Buf[&Sizing] = buf()
 
-    PlutoCanvas(vg, face, size, int(m.ascent), line_height(m),
-                -1, -1, false, hits(), clips(), grabbing(), buf(), phases(), buf(), dark(), buf(),
-                map(), keyboard())
+    sizings.push(sizing(face, size))
+
+    PlutoCanvas(vg, face, sizings, buf(), -1, -1, false, hits(), clips(), grabbing(), buf(),
+                phases(), buf(), dark(), buf(), keyboard())
 end pluto_canvas
+
+// One size of the face: where a run's baseline sits below the top of its line, how tall a line is,
+// and the runs measured at it.
+//
+// **The metrics are read once per size rather than per run**, and the widths are remembered for a
+// reason that is not an optimization: it is the difference between measuring the tree and measuring
+// the font. Shaping a run is the most expensive thing this backend does per call, and layout asks
+// for the same run at least twice a frame -- once as a container sizes itself and again as it
+// places what it sized -- while a `Reactive` measures its resting body on top of that. A frame loop
+// without this cache reports the shaper's cost as the toolkit's, which is exactly the mistake the
+// SDL backend it replaces had a comment warning about.
+//
+// **The cache lives here rather than on the canvas so that it is keyed on the size as well as the
+// string**: one word at two sizes is two widths.
+struct Sizing
+    pt: f32
+    ascent: int
+    line_h: int
+    widths: Map[string, int]
+
+private sizing(face: &plutovg.Font, pt: f32) -> &Sizing
+    val m = face.metrics(pt)
+
+    Sizing(pt, int(m.ascent), line_height(m), map())
 
 // ## The arithmetic, lifted out so it can be tested without a font
 //

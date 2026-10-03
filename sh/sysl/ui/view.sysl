@@ -131,6 +131,25 @@ trait View
     // chain near the root. It is `Canvas` state for exactly this reason.
     foreground(&self, color: u32) -> &View = Foreground(self, color)
 
+    // Draw and measure the text inside this view at `pt`.
+    //
+    // **A subtree, like `foreground`, and for both passes**: a row holding a big label is laid out
+    // by the big label's metrics and then painted by them, so nothing is clipped and nothing has to
+    // be told twice. Nested sizes resolve innermost-first, and a sibling after the subtree is back
+    // at whatever was in force before it.
+    //
+    // **A number is a number and cannot be restyled**, which is the argument `panel` makes against
+    // `background`. Reach for `text_style` first, and for this when the size is genuinely one-off --
+    // a tuner's note name, a clock face.
+    font_size(&self, pt: real) -> &View = FontSized(self, pt)
+
+    // Draw and measure the text inside this view in one of the theme's named sizes.
+    //
+    // **The size is a multiple of the canvas's own**, so an application started at a larger size
+    // scales its headings with its body text, and a `.restyle` that changes the theme's `text` moves
+    // every heading under it. `theme.sysl` has the four and what they are for.
+    text_style(&self, style: TextStyle) -> &View = Styled(self, style)
+
     // Ask for a fixed size regardless of what this view would have measured to.
     frame(&self, w: int, h: int) -> &View = Frame(self, w, h)
 
@@ -340,6 +359,56 @@ impl View for Foreground
         c.ink(self.color)
         self.child.paint(c, r)
         c.unink()
+
+// The text size for a subtree, pushed around the child in BOTH passes and popped afterwards.
+//
+// **Unlike `Foreground`, it wraps `measure` too, and that is the half that matters**: a colour
+// changes nothing about where things go, and a size changes everything. A wrapper that sized only
+// the paint would draw a heading into a box measured for body text.
+struct FontSized
+    child: &View
+    pt: real
+
+impl View for FontSized
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        c.push_font_size(self.pt)
+
+        val s = self.child.measure(c, avail)
+
+        c.pop_font_size()
+        s
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.push_font_size(self.pt)
+        self.child.paint(c, r)
+        c.pop_font_size()
+
+// A named text size for a subtree, resolved against the theme and the canvas while it is drawn.
+//
+// **It holds the name rather than a size**, because what the name means is not known until the
+// frame: the theme in force says how many times the base it is, and the canvas says what the base
+// is. Resolved at build time it could follow neither.
+struct Styled
+    child: &View
+    style: TextStyle
+
+    private pt(self, c: *Canvas) -> real = c.base_font_size() * c.theme().text.scale(self.style)
+
+impl View for Styled
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        c.push_font_size(self.pt(c))
+
+        val s = self.child.measure(c, avail)
+
+        c.pop_font_size()
+        s
+    end measure
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.push_font_size(self.pt(c))
+        self.child.paint(c, r)
+        c.pop_font_size()
 
 struct Frame
     child: &View

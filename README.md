@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.2" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.3" }
 }
 ```
 
@@ -165,8 +165,9 @@ outside it. A reading past either end pins to that end, and one that is not a nu
 
 ## Theming
 
-A `Theme` is nineteen numbers: six role colours, a text colour for labels on filled controls, ink,
-inert, ground, panel, edge, alt, a corner radius, a padding, three lifts and a soft mix. Every
+A `Theme` is a palette and a handful of metrics: six role colours, a text colour for labels on filled
+controls, ink, inert, ground, panel, edge, alt, a corner radius, a padding, three lifts, a soft mix
+— and a table's look, a grid and a scale of text sizes (below). Every
 control reads all of its appearance off it and computes none of it, which is the whole test of
 whether a theme is finished.
 
@@ -214,6 +215,38 @@ an unknown surface.
 `Canvas.stroke` gained a `dash` for the dashed one: **one number, not a pattern**, meaning that many
 pixels on and that many off. A general dash array would be a slice a backend has to keep alive past
 the call, and what a dashed border is *for* is saying "provisional" at a glance.
+
+### Text sizes
+
+Text has a size per subtree, in two layers. **Underneath, `.font_size(pt)`** draws and measures
+everything inside it at `pt`; **on top, `.text_style(style)`** names one of the theme's four sizes,
+each a multiple of the size the canvas was made with — so `app(..., size = 18.0)` scales the
+headings with the body text, and a `.restyle` moves every heading under it.
+
+```
+text("E2").font_size(64.0)                   // one-off: a tuner's note name
+text("Settings").text_style(.Title)          // a role: however big a title is here
+panel.restyle(t -> t with { text = t.text with { display = 3.0 } })
+```
+
+| style | multiple of the base | at 15 |
+|---|---|---|
+| `Display` | 2.5 | 37.5 |
+| `Title` | 1.5 | 22.5 |
+| `Body` | 1.0 | 15 |
+| `Caption` | 0.8 | 12 |
+
+**Both passes see the size**, which is the half a colour never needed: a row holding a big label is
+laid out by the big label's metrics and painted by them, so nothing is clipped. Sizes nest — the
+innermost wins, and a sibling after the subtree is back at what was in force before it — and an
+overlay is painted at the size in force where it was raised. On the canvas it is a stack like the
+theme's (`push_font_size`/`pop_font_size`, `font_size()`, `base_font_size()`), every member
+defaulted, so a backend that ignores it draws everything at one size and still compiles.
+`PlutoCanvas` reads the face's metrics once per size and remembers each run's width per size.
+
+**There is no weight.** A canvas draws with one face, and a heading made bold by smearing it would be
+a fake; a size is something every backend can honestly do. A size is a `real`, so it is written
+`64.0` — an integer literal is not one.
 
 ## Positioning: the grid
 

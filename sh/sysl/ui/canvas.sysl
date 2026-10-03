@@ -106,6 +106,30 @@ trait Canvas
 
     pop_theme(*self) = ()
 
+    // How big text is, and the two that change it for a subtree.
+    //
+    // **A stack, for the reason `ink` is one**: a view restores what it found, so a big heading inside
+    // a panel leaves the panel's size standing for the siblings after it, and the innermost size in
+    // force is the one a run is drawn at. `font_size` answers the top of it, and the canvas's own
+    // size when nothing has been pushed -- which is `base_font_size`, what the canvas was made with.
+    //
+    // **One number serves drawing AND measurement, and that is the whole contract.** `text`,
+    // `text_size`, `text_at` and `text_x` all read the size in force, so a subtree laid out by its
+    // big metrics is also painted by them; a backend that drew at one size and measured at another
+    // would put a heading in a box made for body text and clip it.
+    //
+    // **All four have bodies, so a backend owes nothing**, and one that implements none of them draws
+    // every run at the one size it has -- `.font_size(...)` quietly has no effect, which is the
+    // bargain `push_theme` strikes and the same way round. The base defaults to sixteen, a browser's
+    // own, and matters only to a named text style resolved against a canvas that cannot size anyway.
+    base_font_size(*self) -> real = 16.0
+
+    font_size(*self) -> real = self.base_font_size()
+
+    push_font_size(*self, pt: real) = ()
+
+    pop_font_size(*self) = ()
+
     // Override the colour text is drawn in, until the matching `unink`.
     //
     // **What text is drawn in when nothing has said otherwise is the THEME's `ink`**, and that is
@@ -311,9 +335,9 @@ trait Canvas
     // backend is made to think about it.
     raise_above(*self, v: &View, at: Rect)
 
-    // **The theme and the text colour in force are captured with it**, so an overlay paints as
-    // though it were still where it was raised rather than in whatever the root was drawn in. The
-    // clip is the one thing deliberately left behind, which is the whole point of raising.
+    // **The theme, the text colour and the text size in force are captured with it**, so an overlay
+    // paints as though it were still where it was raised rather than in whatever the root was drawn
+    // in. The clip is the one thing deliberately left behind, which is the whole point of raising.
     //
     // Take what has been raised, clearing it. `render` is what calls this.
     take_overlays(*self) -> Buf[Overlay]
@@ -353,6 +377,14 @@ struct Recorder
     // canvas in existence agreed with the guess. Two fonts is what makes the disagreement visible.
     char_w: int
     line_h: int
+
+    // The size that font is, and the sizes pushed over it, innermost last.
+    //
+    // **The advance and the line height scale with the size in force**, so a subtree under
+    // `.font_size(32)` on the default sixteen measures twice as wide and twice as tall -- which is
+    // what lets a test lay a big heading out and see the row around it make room.
+    size: real
+    sizes: Buf[real]
 
     // Where the pointer is and whether it is held down, which is what `hovered` and `pressed`
     // answer from.
@@ -424,6 +456,9 @@ struct Recorder
 
         out
     end dump
+
+    // A metric of the base font at the size in force, rounded to the nearest pixel.
+    private scaled(*self, n: int) -> int = int(real(n) * self.font_size() / self.size + 0.5)
 end Recorder
 
 // A radius, written only when there is one.
@@ -443,8 +478,13 @@ impl Canvas for Recorder
         self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width}" + radii(radius) +
                       (if dash == 0 then "" else s" d${dash}"))
 
+    // **The size is written only when it is not the base**, the way a radius is: a recording of a
+    // tree that never asked for a size reads exactly as it did before there were sizes.
     text(*self, r: Rect, t: string)
-        self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'")
+        val pt = self.font_size()
+
+        self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'" +
+                      (if pt == self.size then "" else s" @${pt}"))
 
     clip(*self, r: Rect)
         self.ops.push(s"clip ${r.x},${r.y} ${r.w}x${r.h}")
@@ -472,6 +512,19 @@ impl Canvas for Recorder
         self.looks.pop() match
             Some(t) -> self.look = t
             None -> ()
+
+    override base_font_size(*self) -> real = self.size
+
+    override font_size(*self) -> real
+        val v = self.sizes.view()
+
+        if v.len == 0 then self.size else v[v.len - 1]
+
+    override push_font_size(*self, pt: real) = self.sizes.push(pt)
+
+    override pop_font_size(*self)
+        self.sizes.pop()
+        ()
 
     ink(*self, color: u32)
         self.ops.push(s"ink #${color}")
@@ -512,7 +565,8 @@ impl Canvas for Recorder
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
         self.anim.at(r, slot, target, rate)
 
-    text_size(*self, s: string) -> Size = Size(int(s.len) * self.char_w, self.line_h)
+    text_size(*self, s: string) -> Size =
+        Size(int(s.len) * self.scaled(self.char_w), self.scaled(self.line_h))
 
     hit(*self, r: Rect, f: &Fn() -> unit)
         self.ops.push(s"hit ${r.x},${r.y} ${r.w}x${r.h}")
@@ -530,7 +584,7 @@ impl Canvas for Recorder
     // opens and asserting what the menu looks like.
     raise_above(*self, v: &View, at: Rect)
         self.ops.push(s"raise ${at.x},${at.y} ${at.w}x${at.h}")
-        self.raised.push(Overlay(v, at, self.look, override_ink(self.tints)))
+        self.raised.push(Overlay(v, at, self.look, override_ink(self.tints), self.font_size()))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised
@@ -540,11 +594,11 @@ impl Canvas for Recorder
     end take_overlays
 end Recorder
 
-// The default font is eight by sixteen, which is what every measurement in the package's own tests
-// is written in terms of.
-recorder(char_w: int = 8, line_h: int = 16) -> Recorder =
-    Recorder(buf(), hits(), char_w, line_h, -1, -1, false, dark(), buf(), clips(), grabbing(),
-             buf(), buf(), phases(), keyboard())
+// The default font is eight by sixteen at a size of sixteen, which is what every measurement in the
+// package's own tests is written in terms of.
+recorder(char_w: int = 8, line_h: int = 16, size: real = 16.0) -> Recorder =
+    Recorder(buf(), hits(), char_w, line_h, size, buf(), -1, -1, false, dark(), buf(), clips(),
+             grabbing(), buf(), buf(), phases(), keyboard())
 
 // The override in force, if anything has pushed one.
 //

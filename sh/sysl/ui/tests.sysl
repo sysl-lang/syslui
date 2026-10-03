@@ -4215,3 +4215,137 @@ private a_picture_that_is_not_there_is_none()
 
     assert(image_from_data(rubbish[..]).is_none(), "and bytes that are not an image")
 end a_picture_that_is_not_there_is_none
+
+// -- text sizes --------------------------------------------------------------------------------------
+
+// The recorder's font is eight by sixteen at a size of sixteen, so doubling the size doubles both.
+@test
+private a_sized_run_measures_in_proportion()
+    assert(measured(text("E2"), Size(200, 200)) == Size(16, 16), "the base: eight a byte, sixteen tall")
+    assert(measured(text("E2").font_size(32.0), Size(200, 200)) == Size(32, 32), "twice the size")
+    assert(measured(text("E2").font_size(64.0), Size(200, 200)) == Size(64, 64), "four times")
+end a_sized_run_measures_in_proportion
+
+// **Innermost wins, and a sibling after the subtree is back at the base** -- the two halves of a
+// stack, and the second is the one a missing pop breaks.
+@test
+private a_nested_size_wins_and_the_next_sibling_is_back_at_the_base()
+    assert(measured(text("a").font_size(32.0).font_size(8.0), Size(200, 200)) == Size(16, 32),
+           "the inner 32 rather than the outer 8")
+
+    var c = recorder()
+
+    column([text("big").font_size(32.0), text("b")]).paint(&c, Rect(0, 0, 200, 200))
+
+    val d = c.dump()
+
+    assert(d.contains("'big' @32"), s"the run inside is drawn at its size:\n${d}")
+    assert(d.contains("'b'\n"), s"the sibling after it is drawn at the base:\n${d}")
+end a_nested_size_wins_and_the_next_sibling_is_back_at_the_base
+
+// **A size changes where things go, so it has to reach `measure` as well as `paint`.** A big note
+// name beside a unit: the row is as tall as the big one, and the unit starts where the big one's
+// sized width ends and sits centred on its height. Measured at the base and painted at the size,
+// the unit would overlap the note.
+@test
+private a_sized_subtree_is_laid_out_by_the_size_it_is_painted_at()
+    val v = row([text("E").font_size(64.0), text("Hz")])
+
+    assert(measured(v, Size(200, 200)) == Size(48, 64), "thirty-two wide and sixty-four tall, plus two bytes")
+
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 48, 64))
+
+    val d = c.dump()
+
+    assert(d.contains("text 0,0 32x64 'E' @64\n"), s"the note, at its own metrics:\n${d}")
+    assert(d.contains("text 32,24 16x16 'Hz'\n"), s"the unit after it, centred, at the base:\n${d}")
+end a_sized_subtree_is_laid_out_by_the_size_it_is_painted_at
+
+// A named style is the theme's multiple of the canvas's base, resolved while the tree is drawn.
+@test
+private a_text_style_is_the_themes_multiple_of_the_base()
+    assert(measured(text("ab").text_style(.Display), Size(200, 200)) == Size(40, 40), "two and a half")
+    assert(measured(text("ab").text_style(.Title), Size(200, 200)) == Size(24, 24), "one and a half")
+    assert(measured(text("ab").text_style(.Body), Size(200, 200)) == Size(16, 16), "the base itself")
+    assert(measured(text("ab").text_style(.Caption), Size(200, 200)) == Size(12, 13), "four fifths")
+
+    var c = recorder(size = 20.0)
+
+    text("T").text_style(.Title).paint(&c, Rect(0, 0, 100, 100))
+
+    assert(c.dump().contains("'T' @30"), s"a title over a base of twenty is thirty:\n${c.dump()}")
+end a_text_style_is_the_themes_multiple_of_the_base
+
+// **The style names a role and the theme decides its size**, so a restyle moves it -- which is the
+// whole difference from `font_size`.
+@test
+private a_text_style_follows_a_theme_change()
+    val v = text("ab").text_style(.Title).restyle(t -> t with { text = t.text with { title = 2.0 } })
+
+    assert(measured(v, Size(200, 200)) == Size(32, 32), "the restyled title is twice the base")
+end a_text_style_follows_a_theme_change
+
+// **A tree that never asks for a size records exactly as it did before there were sizes**, and so
+// does one that asks for the size already in force.
+@test
+private a_default_sized_tree_records_as_it_always_did()
+    val plain = column([text("one"), row([text("two"), text("three")], 4)], 2)
+
+    assert_paints(plain, Size(200, 200), Rect(0, 0, 200, 200),
+                  "text 0,0 200x16 'one'\ntext 0,18 24x16 'two'\ntext 28,18 40x16 'three'\n")
+    assert_paints(plain.font_size(16.0), Size(200, 200), Rect(0, 0, 200, 200),
+                  "text 0,0 200x16 'one'\ntext 0,18 24x16 'two'\ntext 28,18 40x16 'three'\n")
+    assert_paints(plain.text_style(.Body), Size(200, 200), Rect(0, 0, 200, 200),
+                  "text 0,0 200x16 'one'\ntext 0,18 24x16 'two'\ntext 28,18 40x16 'three'\n")
+end a_default_sized_tree_records_as_it_always_did
+
+// **An overlay is painted at the size in force where it was raised**, the third piece of styling an
+// overlay carries -- painted after the tree, it would otherwise come out at the root's size.
+@test
+private an_overlay_keeps_the_size_it_was_raised_at()
+    val open = signal(true)
+    var c = recorder()
+
+    render(text("menu").popover(open, text("one")).font_size(32.0), &c, Rect(0, 0, 200, 200))
+
+    assert(c.dump().contains("'one' @32"), s"the menu is drawn at its anchor's size:\n${c.dump()}")
+end an_overlay_keeps_the_size_it_was_raised_at
+
+// **The real backend remembers a run's width per size, and this is the test that says so.** Its
+// cache was keyed on the string alone while a canvas had one size; keyed that way still, the word
+// measured at sixty would answer for the same word at fifteen, and the other way round.
+//
+// **It needs a real face, which is the one thing every other test here avoids**, so it takes the
+// first of the fonts the demo looks for -- and fails rather than passing over nothing when the
+// machine has none of them.
+@test
+private the_real_backend_measures_each_size_by_its_own_metrics()
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+
+    var c = pluto_canvas(plutovg.canvas(plutovg.surface(64, 64).unwrap()).unwrap(), face.unwrap(), 15.0)
+
+    val small = c.text_size("E2")
+
+    c.push_font_size(60.0)
+
+    val big = c.text_size("E2")
+
+    assert(c.font_size() == 60.0 && c.base_font_size() == 15.0, "the size in force and the base")
+    assert(c.text_x("E2", 2) == big.w, "the caret agrees with the measurement at the size in force")
+    assert(big.w >= 3 * small.w && big.h >= 3 * small.h,
+           s"four times the size is far bigger: ${small.w}x${small.h} against ${big.w}x${big.h}")
+
+    c.pop_font_size()
+
+    assert(c.text_size("E2") == small, "back at the base, the base's own width answers")
+    assert(c.font_size() == 15.0, "and the base is in force again")
+end the_real_backend_measures_each_size_by_its_own_metrics
