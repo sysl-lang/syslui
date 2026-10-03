@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.6" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.7" }
 }
 ```
 
@@ -451,6 +451,36 @@ text("hi").background(red).padding(8)    // margin  — the ground stops at the 
 ```
 
 A second name for the same wrapper would be two ways to write one thing.
+
+## Taking what is left: `.flex(n)`
+
+```
+column(spacing = 8):
+    meter(cents, -50.0, 50.0, 300)
+    scroll(detections, offset).flex()       // everything under the meter
+    text("ok").background(green).flex(2)    // …or two shares of it, beside a one-share sibling
+```
+
+A `column` measures its children, adds up what they asked for, and hands **what is left over** to the
+children that asked for a share of it — `n` shares each, in proportion. A `row` does the same on
+width. `spacer()` is the same request from a view with nothing to draw, so a `Spacer` and a `.flex()`
+view share alike.
+
+- **The view is measured as it always is and then painted in the bigger rectangle**, and what it does
+  with the room is its own affair, exactly as under `.frame()`: a `background` fills it, a `text` is
+  drawn as in any taller rectangle, a `scroll` makes it the window.
+- **Nothing spare, nothing extra.** When the inflexible children already fill the column, a flexible
+  child gets its natural size and no more; the leftover never goes negative.
+- **The last link in the chain**, as `.cell` is: in `text("a").flex().padding(4)` the column asks the
+  padding, which has no opinion. Outside a `column` or a `row` it means nothing.
+- **It nests in one pass**: a `.flex()` column inside a column gets its share, and hands its own
+  leftover to its own flexible children.
+
+**A `scroll` with no height** — `scroll(child, offset)` — is the one that fills. Under `.flex()` its
+window is exactly its share. Anywhere else it is as tall as its content, up to the room it is offered,
+so a short list leaves no hole under it. A flexible child is asked its size with nothing to grow into,
+so a filling scroll above a footer leaves the footer its room, and two filling scrolls split the space
+by weight. `scroll(child, offset, height)` keeps its height whatever the layout, as before.
 
 ## Selecting text
 

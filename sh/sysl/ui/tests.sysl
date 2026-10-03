@@ -2636,6 +2636,205 @@ private a_spacer_asks_for_nothing_when_measured()
            "sixteen pixels of text and a gap that wants nothing of its own")
 end a_spacer_asks_for_nothing_when_measured
 
+// -- `.flex(n)` -----------------------------------------------------------------------------------
+//
+// The request a `Spacer` makes, made by any view. The backgrounds are what shows the rectangle each
+// child was painted in, since a text is drawn the same size whatever it is handed.
+
+// Two children asking for one share and two split what is left 1:2. Two texts of sixteen in a
+// hundred leave 68, which is 22 and 45 -- the last pixel is not handed out.
+@test
+private flex_children_split_the_leftover_by_weight()
+    var c = recorder()
+
+    column([text("a").background(0xFF0000u32).flex(1),
+            text("b").background(0x00FF00u32).flex(2)], 0).paint(&c, Rect(0, 0, 40, 100))
+
+    assert(c.dump().contains("fill 0,0 40x38 #16711680"), s"a takes one share:\n${c.dump()}")
+    assert(c.dump().contains("fill 0,38 40x61 #65280"), s"b takes two:\n${c.dump()}")
+end flex_children_split_the_leftover_by_weight
+
+// And a row does the same on width: two letters of eight in a hundred leave 84, so 28 and 56.
+@test
+private flex_children_in_a_row_split_the_width()
+    var c = recorder()
+
+    row([text("a").background(0xFF0000u32).flex(1),
+         text("b").background(0x00FF00u32).flex(2)], 0).paint(&c, Rect(0, 0, 100, 16))
+
+    assert(c.dump().contains("fill 0,0 36x16 #16711680"), s"a takes one share:\n${c.dump()}")
+    assert(c.dump().contains("fill 36,0 64x16 #65280"), s"b takes two:\n${c.dump()}")
+end flex_children_in_a_row_split_the_width
+
+// A plain view under `.flex()` is painted in the larger rectangle, and the view after it is pushed
+// down to make room -- where without it the background would stop at the text.
+@test
+private flex_grows_the_rectangle_a_view_is_painted_in()
+    var c = recorder()
+
+    column([text("hi").background(0xFF0000u32).flex(), text("x")], 0).paint(&c, Rect(0, 0, 40, 100))
+
+    assert(c.dump().contains("fill 0,0 40x84 #16711680"), s"everything the x leaves:\n${c.dump()}")
+    assert(c.dump().contains("text 0,84 40x16 'x'"), s"and the x at the bottom:\n${c.dump()}")
+end flex_grows_the_rectangle_a_view_is_painted_in
+
+// **A `Spacer` and a `.flex()` view are one mechanism**, so they share by weight with each other:
+// 84 spare between two shares is 42 each.
+@test
+private a_spacer_and_a_flex_view_share_alike()
+    var c = recorder()
+
+    row([spacer(), text("a").background(0xFF0000u32).flex(), text("b")], 0)
+        .paint(&c, Rect(0, 0, 100, 16))
+
+    assert(c.dump().contains("fill 42,0 50x16 #16711680"), s"the a after the gap:\n${c.dump()}")
+    assert(c.dump().contains("text 92,0 8x16 'b'"), s"the b at the end:\n${c.dump()}")
+end a_spacer_and_a_flex_view_share_alike
+
+// **With nothing spare, a flexible child gets nothing extra** -- it is painted at its natural size
+// and in order, exactly as an inflexible one would be.
+@test
+private with_nothing_spare_a_flex_child_keeps_its_natural_size()
+    assert_paints(column([text("a").flex(), text("b").flex(2)], 0), Size(200, 200), Rect(0, 0, 40, 20),
+                  "text 0,0 40x16 'a'\ntext 0,16 40x16 'b'\n")
+end with_nothing_spare_a_flex_child_keeps_its_natural_size
+
+// A view's flex is its own business: wrapped in anything else it has none, as a framed spacer has
+// none, so `.flex()` is the last link in a chain.
+@test
+private flex_is_answered_by_the_outermost_wrapper()
+    assert_eq(text("a").flex(3).weight(), 3)
+    assert_eq(text("a").flex(3).padding(2).weight(), 0)
+    assert_eq(text("a").weight(), 0)
+end flex_is_answered_by_the_outermost_wrapper
+
+// -- a scroll that fills ---------------------------------------------------------------------------
+//
+// Twenty rows of sixteen, so 320 of content, under a heading of sixteen in a window of a hundred.
+
+private filling(offset: &Signal[int]) -> &View =
+    column([text("head"), scroll(column(generate(20usize, i -> text("x")), 0), offset).flex()], 0)
+
+// **A flexed scroll's window is everything the heading leaves**, 84, and it scrolls by the wheel to
+// the end of a travel of 320 - 84 = 236 -- a number only that window height gives.
+@test
+private a_flexed_scroll_fills_and_scrolls_by_the_wheel()
+    val offset = signal(0)
+    val v = filling(offset)
+    var c = recorder()
+
+    c.point(40, 50)
+    c.spin(0.0, -30.0)
+    v.paint(&c, Rect(0, 0, 100, 100))
+
+    assert(c.dump().contains("clip 0,16 100x84"), s"the window is what is left:\n${c.dump()}")
+    assert_eq(offset.read(), 30)
+
+    c.keys_done()
+    c.spin(0.0, -1000.0)
+    v.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 236)
+end a_flexed_scroll_fills_and_scrolls_by_the_wheel
+
+// And by a drag of the content, by exactly the pointer's travel once past the slop.
+@test
+private a_flexed_scroll_scrolls_by_a_drag()
+    val offset = signal(0)
+    val v = filling(offset)
+    var c = recorder()
+
+    c.point(40, 90, true)
+    v.paint(&c, Rect(0, 0, 100, 100))
+    c.point(40, 60, true)
+    v.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 30)
+end a_flexed_scroll_scrolls_by_a_drag
+
+// **A filling scroll above a footer leaves the footer its room**, because a flexible child is asked
+// its size with nothing to grow into and is handed its share afterwards.
+@test
+private a_flexed_scroll_leaves_room_for_what_follows_it()
+    val offset = signal(0)
+    var c = recorder()
+
+    column([scroll(column(generate(20usize, i -> text("x")), 0), offset).flex(), text("foot")], 0)
+        .paint(&c, Rect(0, 0, 100, 100))
+
+    assert(c.dump().contains("clip 0,0 100x84"), s"the window stops at the footer:\n${c.dump()}")
+    assert(c.dump().contains("text 0,84 100x16 'foot'"), s"and the footer is drawn:\n${c.dump()}")
+end a_flexed_scroll_leaves_room_for_what_follows_it
+
+// Two of them split the leftover by weight as any two flexible views do.
+@test
+private two_flexed_scrolls_split_the_room()
+    val a = signal(0)
+    val b = signal(0)
+    var c = recorder()
+
+    column([scroll(column(generate(20usize, i -> text("x")), 0), a).flex(),
+            scroll(column(generate(20usize, i -> text("y")), 0), b).flex(2)], 0)
+        .paint(&c, Rect(0, 0, 100, 90))
+
+    assert(c.dump().contains("clip 0,0 100x30"), s"one share:\n${c.dump()}")
+    assert(c.dump().contains("clip 0,30 100x60"), s"two shares:\n${c.dump()}")
+end two_flexed_scrolls_split_the_room
+
+// **A scroll with a height keeps it**, flexed or not, with room to spare or not.
+@test
+private a_fixed_height_scroll_keeps_its_height()
+    val offset = signal(0)
+    val list = column(generate(20usize, i -> text("x")), 0)
+    var c = recorder()
+
+    column([scroll(list, offset, 40), spacer()], 0).paint(&c, Rect(0, 0, 100, 100))
+    assert(c.dump().contains("clip 0,0 100x40"), s"forty, beside a spacer:\n${c.dump()}")
+
+    var d = recorder()
+
+    column([scroll(list, offset, 40).flex()], 0).paint(&d, Rect(0, 0, 100, 100))
+    assert(d.dump().contains("clip 0,0 100x40"), s"forty, flexed:\n${d.dump()}")
+    assert(measured(scroll(list, offset, 40), Size(100, 500)) == Size(100, 40), "and it measures forty")
+end a_fixed_height_scroll_keeps_its_height
+
+// **With nothing spare a filling scroll gets nothing**, and a window of nothing draws nothing -- no
+// thumb hanging below it over the next view.
+@test
+private a_flexed_scroll_with_no_room_draws_nothing()
+    val offset = signal(0)
+
+    assert_paints(column([text("a"), text("b"),
+                          scroll(column(generate(20usize, i -> text("x")), 0), offset).flex()], 0),
+                  Size(200, 200), Rect(0, 0, 100, 20),
+                  "text 0,0 100x16 'a'\ntext 0,16 100x16 'b'\n")
+end a_flexed_scroll_with_no_room_draws_nothing
+
+// **Outside a flexing container a scroll with no height is as tall as its content, up to the room
+// offered** -- a short list leaves no hole under it and a long one stops at the edge.
+@test
+private a_height_less_scroll_measures_to_its_content_within_the_room()
+    val offset = signal(0)
+    val short = scroll(column([text("a"), text("b")], 0), offset)
+
+    assert(measured(short, Size(100, 500)) == Size(100, 32), "two rows")
+    assert(measured(short, Size(100, 20)) == Size(100, 20), "clamped to the room")
+    assert(measured(short, Size(100, 0)) == Size(100, 0), "and nothing for no room")
+end a_height_less_scroll_measures_to_its_content_within_the_room
+
+// **A flexed column inside a column gets its share, and hands its own leftover on** -- in one pass,
+// because each container hands out only what it was given. The outer heading takes 16 of 200, the
+// inner column the rest; its own heading takes 16 more, and the scroll the 168 after that.
+@test
+private a_flexed_scroll_in_a_flexed_column_gets_the_share_it_is_given()
+    val offset = signal(0)
+    var c = recorder()
+
+    column([text("top"), filling(offset).flex()], 0).paint(&c, Rect(0, 0, 100, 200))
+
+    assert(c.dump().contains("clip 0,32 100x168"), s"what both headings leave:\n${c.dump()}")
+end a_flexed_scroll_in_a_flexed_column_gets_the_share_it_is_given
+
 // **A table builds only the rows that can be seen**, which is the one thing it can do that a column
 // of arbitrary views cannot. Culling already stops an invisible row being *painted* -- but the row
 // still has to exist to be culled, and a table's body is built during paint, so at three hundred

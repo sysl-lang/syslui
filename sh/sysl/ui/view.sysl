@@ -176,16 +176,28 @@ trait View
 
     // How much of a container's leftover room this view wants, relative to its siblings.
     //
-    // **Zero for everything but a `Spacer`, and that is what makes a flexible gap possible in a
-    // tree whose nodes are erased.** A `Row` cannot ask a child what type it is -- object safety
-    // refuses it -- so a container that wanted to stretch one child would have no way to find it.
-    // A defaulted member turns the question round: the child says, and nothing has to be
-    // recognised.
+    // **Zero for everything but a `Spacer` and a view wrapped by `.flex(n)`, and that is what makes
+    // a flexible gap possible in a tree whose nodes are erased.** A `Row` cannot ask a child what
+    // type it is -- object safety refuses it -- so a container that wanted to stretch one child
+    // would have no way to find it. A defaulted member turns the question round: the child says,
+    // and nothing has to be recognised.
     //
     // **A leftover is shared in proportion**, so two spacers either side of a view centre it and one
     // spacer before it pushes it to the end. That is the whole of the alignment story, and it is why
     // there is no `align` parameter on anything.
-    flex(&self) -> int = 0
+    weight(&self) -> int = 0
+
+    // Take `n` shares of what a `column` has left over in height, or a `row` in width.
+    //
+    // **The view is measured as it always is and then handed the bigger rectangle**, and what it
+    // does with the room is its own affair, exactly as under `frame`: a `scroll` makes it the
+    // window, a `background` fills it, a `text` is drawn as it is in any taller rectangle. A
+    // `Spacer` is the same request made by a view with nothing to draw.
+    //
+    // **It must be the last link in a chain**, as `.cell` must: in `text("a").flex().padding(4)` the
+    // container asks the padding, which has no opinion. Nor does it mean anything outside a `column`
+    // or a `row`, the two containers that have a leftover to hand out.
+    flex(&self, n: int = 1) -> &View = Flex(self, n)
 
     // How many of a grid's columns this view takes, and how many to skip before it.
     //
@@ -269,7 +281,7 @@ struct Spacer end Spacer
 impl View for Spacer
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(0, 0)
 
-    override flex(&self) -> int = 1
+    override weight(&self) -> int = 1
 
     paint(&self, c: *Canvas, r: Rect) = ()
 
@@ -417,6 +429,19 @@ struct Frame
 
 impl View for Frame
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.w, self.h)
+
+    paint(&self, c: *Canvas, r: Rect) = self.child.paint(c, r)
+
+// A view asking for a share of the leftover. It measures and paints as its child does, and the
+// rectangle it is painted in is where the share shows.
+struct Flex
+    child: &View
+    n: int
+
+impl View for Flex
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    override weight(&self) -> int = self.n
 
     paint(&self, c: *Canvas, r: Rect) = self.child.paint(c, r)
 

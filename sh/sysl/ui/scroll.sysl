@@ -20,8 +20,9 @@ struct Scroll
     child: &View
     offset: &Signal[int]
 
-    // How tall the window onto the child is. The child is measured unbounded and may be far taller.
-    height: int
+    // How tall the window onto the child is, or `None` for as tall as layout makes it. The child is
+    // measured unbounded and may be far taller.
+    height: Option[int]
 
     // The scrollbar, drawn over the right-hand edge of the window and only when there is something
     // to scroll.
@@ -123,10 +124,24 @@ private const SLOP: int = 8
 private const SIDEWAYS: int = 1_000_000
 
 impl View for Scroll
-    measure(&self, c: *Canvas, avail: Size) -> Size = Size(avail.w, self.height)
+    // **A window with no height of its own asks for as much of its content as fits**, and no more:
+    // a short list does not leave a hole under it, and a long one stops at the edge of the room it
+    // was offered. Under `.flex()` it is offered nothing and handed its share, which is how it fills.
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.height match
+        Some(h) -> Size(avail.w, h)
+        None ->
+            if avail.h <= 0 then return Size(avail.w, 0)
+
+            val inner = self.child.measure(c, Size(avail.w, 1_000_000))
+
+            Size(avail.w, if inner.h < avail.h then inner.h else avail.h)
 
     paint(&self, c: *Canvas, r: Rect)
-        val window = Rect(r.x, r.y, r.w, self.height)
+        val window = Rect(r.x, r.y, r.w, self.height.unwrap_or(r.h))
+
+        // **A window layout left no room for shows nothing**, bar included: a thumb has a minimum
+        // height, and drawn over a window of none it would hang below it over whatever came next.
+        if window.h <= 0 then return
 
         // The child is measured against an unbounded height, which is what makes it a scroller: a
         // list of a thousand rows asks for the height of a thousand rows and gets clipped to the
@@ -150,4 +165,9 @@ end Scroll
 // **The offset is passed in rather than made here**, which is the whole finding above expressed as
 // a signature. A caller that wants a list to remember where it was keeps the signal; one that does
 // not, does not have a list that scrolls.
-scroll(child: &View, offset: &Signal[int], height: int) -> &View = Scroll(child, offset, height)
+scroll(child: &View, offset: &Signal[int], height: int) -> &View =
+    Scroll(child, offset, Some(height))
+
+// A window as tall as layout makes it. `scroll(list, offset).flex()` in a `column` fills whatever
+// the other children leave; anywhere else it is as tall as its content, up to the room offered.
+scroll(child: &View, offset: &Signal[int]) -> &View = Scroll(child, offset, None)

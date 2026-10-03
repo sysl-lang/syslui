@@ -27,22 +27,8 @@ struct Column
 end Column
 
 impl View for Column
-    measure(&self, c: *Canvas, avail: Size) -> Size
-        var w = 0
-        var h = 0
-        val v = self.children.view()
-
-        for i in 0..<v.len
-            val s = v[i].measure(c, Size(avail.w, avail.h - h))
-
-            if s.w > w then w = s.w
-
-            h += s.h
-
-            if i + 1 < v.len then h += self.spacing
-
-        Size(w, h)
-    end measure
+    measure(&self, c: *Canvas, avail: Size) -> Size =
+        extent(c, self.children.view(), avail, self.spacing, true)
 
     // **A child outside the clip is measured and not painted**, which is what makes a long list
     // affordable: the height is still needed to know where the next child starts, and the drawing --
@@ -60,7 +46,7 @@ impl View for Column
         var y = r.y
 
         for i in 0..<v.len
-            val h = hv[i] + stretch(v[i].flex(), spare, weight)
+            val h = hv[i] + stretch(v[i].weight(), spare, weight)
             val at = Rect(r.x, y, r.w, h)
 
             if c.visible(at) then v[i].paint(c, at)
@@ -76,22 +62,8 @@ struct Row
 end Row
 
 impl View for Row
-    measure(&self, c: *Canvas, avail: Size) -> Size
-        var w = 0
-        var h = 0
-        val v = self.children.view()
-
-        for i in 0..<v.len
-            val s = v[i].measure(c, Size(avail.w - w, avail.h))
-
-            if s.h > h then h = s.h
-
-            w += s.w
-
-            if i + 1 < v.len then w += self.spacing
-
-        Size(w, h)
-    end measure
+    measure(&self, c: *Canvas, avail: Size) -> Size =
+        extent(c, self.children.view(), avail, self.spacing, false)
 
     paint(&self, c: *Canvas, r: Rect)
         val v = self.children.view()
@@ -101,7 +73,7 @@ impl View for Row
         var x = r.x
 
         for i in 0..<v.len
-            val w = wv[i] + stretch(v[i].flex(), spare, weight)
+            val w = wv[i] + stretch(v[i].weight(), spare, weight)
             val at = Rect(x, r.y, w, r.h)
 
             if c.visible(at) then v[i].paint(c, at)
@@ -116,6 +88,12 @@ end Row
 // container cannot know how much is left over until the last child has answered, so it cannot place
 // the first until then. That is the same double measure `layout.sysl` has always done and hidden
 // nowhere -- the second pass is the paint itself.
+//
+// **A flexible child is asked its size with nothing along the axis to grow into**, and is then given
+// its share on top. A view whose size does not depend on the room -- a label, a `Spacer` -- answers
+// as it would anyway; one that would take whatever it was offered -- a `scroll` with no height of its
+// own -- answers zero, so its whole size is its share. Offered `left` instead, the first such child
+// would take everything, and a footer under it or a second one beside it would get nothing.
 private share(c: *Canvas, v: []&View, along: int, spacing: int, vertical: bool,
               across: int) -> (Buf[int], int, int)
     var sizes: Buf[int] = buf()
@@ -124,14 +102,14 @@ private share(c: *Canvas, v: []&View, along: int, spacing: int, vertical: bool,
     var left = along
 
     for i in 0..<v.len
-        val avail = if vertical then Size(across, left) else Size(left, across)
-        val s = v[i].measure(c, avail)
+        val room = if v[i].weight() > 0 then 0 else left
+        val s = v[i].measure(c, if vertical then Size(across, room) else Size(room, across))
         val n = if vertical then s.h else s.w
 
         sizes.push(n)
 
         taken += n
-        weight += v[i].flex()
+        weight += v[i].weight()
         left -= n + spacing
 
     val gaps = if v.len > 0 then (int(v.len) - 1) * spacing else 0
@@ -139,6 +117,37 @@ private share(c: *Canvas, v: []&View, along: int, spacing: int, vertical: bool,
 
     (sizes, if spare > 0 then spare else 0, weight)
 end share
+
+// How big a column or a row would like to be: the sum along the axis and the largest across it.
+//
+// **The flexible children are measured last, against what the others left**, which is the only
+// order in which their answer means anything: a filling `scroll` above a footer is as tall as its
+// content or as the room above the footer, whichever is less. Each child is still measured once.
+private extent(c: *Canvas, v: []&View, avail: Size, spacing: int, vertical: bool) -> Size
+    val total = if vertical then avail.h else avail.w
+    val across = if vertical then avail.w else avail.h
+
+    var taken = 0
+    var widest = 0
+
+    for pass in 0..<2
+        for i in 0..<v.len
+            if (v[i].weight() > 0) == (pass == 1)
+                // What is left once everything measured so far, and the gaps before this child, are
+                // taken out.
+                val room = total - taken - int(i) * spacing
+                val s = v[i].measure(c, if vertical then Size(across, room) else Size(room, across))
+
+                taken += if vertical then s.h else s.w
+
+                val m = if vertical then s.w else s.h
+
+                if m > widest then widest = m
+
+    val gaps = if v.len > 0 then (int(v.len) - 1) * spacing else 0
+
+    if vertical then Size(widest, taken + gaps) else Size(taken + gaps, widest)
+end extent
 
 // One child's share of the leftover.
 //
