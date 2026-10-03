@@ -1260,15 +1260,66 @@ private an_int_slider_snaps_to_its_step()
     drag_to(s, &c, 8 + 102)
     assert_eq(v.read(), 50)
 
-// **A step of zero is no grid**: a real slider then takes whatever fraction of the travel the
-// pointer is at.
+// **A real slider given no step has no grid**: it takes whatever fraction of the travel the pointer
+// is at, so 61 pixels is 61/204 of the way rather than the nearest hundredth or the nearest one.
 @test
 private a_real_slider_with_no_step_follows_the_pointer()
     val v = signal(0.0)
+    val s = slider(v, 0.0, 1.0, 220)
     var c = recorder()
 
-    drag_to(slider(v, 0.0, 1.0, 220, step = 0.0), &c, 8 + 51)
+    drag_to(s, &c, 8 + 51)
     assert_eq(v.read(), 0.25)
+
+    drag_to(s, &c, 8 + 61)
+    assert_eq(v.read(), 61.0 / 204.0)
+
+    drag_to(s, &c, 8 + 62)
+    assert_eq(v.read(), 62.0 / 204.0)
+
+// A step of zero, written out, is the same slider as no step at all.
+@test
+private a_real_slider_with_a_zero_step_follows_the_pointer()
+    val v = signal(0.0)
+    var c = recorder()
+
+    drag_to(slider(v, 0.0, 1.0, 220, step = 0.0), &c, 8 + 61)
+    assert_eq(v.read(), 61.0 / 204.0)
+
+// **An int slider given no step moves by whole numbers and rounds to the nearest**, as it did when
+// its default step was one: 61 pixels of 204 is 29.9 of 100, which rounds to 30 where truncating
+// would say 29, and 1 pixel is 0.49, which rounds down to 0.
+@test
+private an_int_slider_with_no_step_rounds_to_whole_numbers()
+    val v = signal(0)
+    val s = slider(v, 0, 100, 220)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 61)
+    assert_eq(v.read(), 30)
+
+    drag_to(s, &c, 8 + 1)
+    assert_eq(v.read(), 0)
+
+    drag_to(s, &c, 8 + 3)
+    assert_eq(v.read(), 1)
+
+// An int step of two lands on even numbers from `lo`: 61 pixels is 2.99 of 10, which a step of one
+// would round to 3 and a step of two takes to 2.
+@test
+private an_int_slider_snaps_to_a_step_of_two()
+    val v = signal(0)
+    val s = slider(v, 0, 10, 220, step = 2)
+    var c = recorder()
+
+    drag_to(s, &c, 8 + 61)
+    assert_eq(v.read(), 2)
+
+    drag_to(s, &c, 8 + 82)
+    assert_eq(v.read(), 4)
+
+    drag_to(s, &c, 219)
+    assert_eq(v.read(), 10)
 
 // The knob of a real slider sits at its value exactly as an int one's does.
 @test

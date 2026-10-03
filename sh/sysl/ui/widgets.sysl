@@ -266,8 +266,9 @@ radio_group(labels: []string, chosen: &Signal[int], role: Role = Role.Primary,
 // anywhere has ever behaved.
 //
 // **One slider serves every numeric type, because the arithmetic is done in `real` and the answer is
-// converted back.** A value is a whole number of `step`s from `lo`, so an `int` slider's step of one
-// lands on exactly the integers it always did, and a `real` one lands on the grid its step names.
+// converted back.** A value is a whole number of `step`s from `lo`, so an `int` slider lands on
+// exactly the integers it always did, and a `real` one lands on the grid its step names, or anywhere
+// at all when it was given none.
 // The conversion in each direction is checked where the slider is instantiated, which is why a
 // slider over a type with no conversion to `real` is refused at the call rather than in here.
 //
@@ -296,10 +297,9 @@ struct Slider[T: Eq + Ord]
     private snap(self, d: real) -> T
         val span = real(self.hi) - real(self.lo)
         val held = if d < 0.0 then 0.0 elif d > span then span else d
-        val s = real(self.step)
+        val s = self.grid()
 
-        // A step of zero is no grid at all: a real slider then takes every value the track's pixels
-        // can tell apart.
+        // No grid at all: a real slider takes every value the track's pixels can tell apart.
         if s <= 0.0 then return T(real(self.lo) + held)
 
         // Rounded rather than truncated, so the two ends of the track are reachable and the steps
@@ -312,9 +312,19 @@ struct Slider[T: Eq + Ord]
         T(real(self.lo) + real(n) * s)
     end snap
 
+    // **The grid a step of zero leaves is the finest `T` can hold**: none at all for a `real`, and
+    // one for an `int`, whose values are whole numbers whatever the slider says. That is why the
+    // default step is zero rather than one -- a literal `1` is an `int` and can never be a `real` --
+    // and why an `int` slider given no step still rounds to the nearest whole number, as it always
+    // did, rather than truncating. A type is whole-numbered when converting a half into it loses it.
+    private grid(self) -> real
+        val s = real(self.step)
+
+        if s > 0.0 then s elif real(T(0.5)) != 0.5 then 1.0 else 0.0
+
     // How far one key moves the value: a step, or a hundredth of the range where there is none.
     private unit(self) -> real =
-        if real(self.step) > 0.0 then real(self.step) else (real(self.hi) - real(self.lo)) / 100.0
+        if self.grid() > 0.0 then self.grid() else (real(self.hi) - real(self.lo)) / 100.0
 
     private put(self, want: T) = if want != self.value.read() then self.value.set(want)
 
@@ -374,11 +384,17 @@ impl[T: Eq + Ord] View for Slider[T]
     end paint
 
 // A slider over the inclusive range `lo` to `hi`, in multiples of `step` from `lo` -- an `int` or a
-// `real` alike: `slider(volume, 0, 100, 260)`, `slider(cutoff, 20.0, 2000.0, 260, step = 10.0)`.
-// Give it an `id` and arrows, Home and End move it once it has been tapped.
-slider[T: Eq + Ord](value: &Signal[T], lo: T, hi: T, width: int, step: T = 1,
+// `real` alike: `slider(volume, 0, 100, 260)`, `slider(gain, 0.0, 1.0, 260)`,
+// `slider(cutoff, 20.0, 2000.0, 260, step = 10.0)`. With no step an `int` slider moves by whole
+// numbers and a `real` one moves continuously. Give it an `id` and arrows, Home and End move it once
+// it has been tapped.
+slider[T: Eq + Ord + Zero](value: &Signal[T], lo: T, hi: T, width: int, step: T = no_step(),
                role: Role = Role.Primary, id: int = NOBODY) -> &View =
     Slider(value, lo, hi, width, step, id, role, () -> ())
+
+// The step a slider given none takes. A default may not name the declaration's own `T`, so `T.zero()`
+// is reached through a function whose `T` the expected type fixes.
+private no_step[T: Zero]() -> T = T.zero()
 
 // ## The two that take no input
 
