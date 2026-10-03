@@ -1,5 +1,6 @@
 module sh.sysl.ui
 
+import sysl.math.Float
 import sysl.seq.{Sequence, generate}
 
 // The controls, and what they are all made of.
@@ -32,6 +33,9 @@ const SWITCH_H: int = 24
 const BOX_SIDE: int = 18
 const TRACK_H: int = 6
 const KNOB: int = 16
+const METER_H: int = 20
+const NEEDLE_W: int = 4
+const TICK_W: int = 2
 
 // Which animation on a control is which, in the canvas's store.
 //
@@ -44,6 +48,7 @@ private const CHECK_SLOT: int = 3
 private const KNOB_SLOT: int = 4
 private const FILL_SLOT: int = 5
 private const DOT_SLOT: int = 6
+private const NEEDLE_SLOT: int = 7
 
 // Which grabbable thing a slider is, in the canvas's single grab. Slots are a namespace of their
 // own here rather than shared with the animation slots above, because they are stored apart.
@@ -53,6 +58,11 @@ private const DRAG_SLOT: int = 0
 // press rate; a progress bar is reporting on something else's pace and should not look hurried.
 private const FLIP_RATE: real = 14.0
 private const PROGRESS_RATE: real = 4.0
+
+// A meter's needle is reporting a reading that may change every frame, so it settles faster than a
+// progress bar -- quick enough to follow, slow enough that a jittery input reads as a needle
+// settling rather than a needle shaking.
+private const NEEDLE_RATE: real = 6.0
 
 // Where a control of this size sits in the rectangle it was actually handed.
 //
@@ -338,6 +348,101 @@ impl View for Progress
 
 progress(fraction: real, width: int, role: Role = Role.Primary) -> &View =
     Progress(fraction, width, role)
+
+// A reading on a scale, with the stretch of it that counts as right marked.
+//
+// **A needle that cannot turn, because nothing here draws at an angle**: the scale is a strip, the
+// needle a bar standing across it, and the ticks rules standing across it too. That is a tuner's
+// cents display, a balance control's centre-zero readout and a level meter alike, which is why the
+// target is a parameter rather than zero written into the paint.
+//
+// **The needle eases toward the reading, as a progress bar's fill does**, and for a better reason
+// here: a meter is usually fed by a measurement, and a measurement jitters. Easing turns frame-to-
+// frame noise into a needle settling, which is how the eye wants to read it.
+//
+// **The colour follows the reading and the position follows the ease.** A needle swinging into the
+// band turns as the reading arrives there rather than when the needle does, which is the moment a
+// person tuning a string wants to be told. It is also the comparison that is exact at the band's
+// edge, where one built from an eased fraction would be a rounding error either side of it.
+struct Meter
+    value: real
+    lo: real
+    hi: real
+    width: int
+    target: real
+    band: real
+    role: Role
+
+    private frac(self, v: real) -> real = clamped_fraction(v, self.lo, self.hi)
+
+// Where a fraction of the scale lands, in pixels from the left of the needle's travel. Rounded rather
+// than truncated, so the two ends are reached and a tick and a needle at one value agree.
+private along(f: real, travel: int) -> int = int(f * real(travel) + 0.5)
+
+// Every position on a meter is a fraction of its scale, clamped, so a reading past either end pins
+// to it and a band reaching past an end stops there.
+private clamped_fraction(v: real, lo: real, hi: real) -> real
+    val f = (v - lo) / (hi - lo)
+    if f < 0.0 then 0.0 elif f > 1.0 then 1.0 else f
+
+impl View for Meter
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.width, METER_H)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val look = c.theme()
+        val b = inside(r, r.w, METER_H)
+        val track = Rect(b.x, b.y + (b.h - TRACK_H) / 2, b.w, TRACK_H)
+        val travel = b.w - NEEDLE_W
+
+        // A scale with no length has nowhere to put anything, so it is a bare track.
+        if travel <= 0 || !(self.hi > self.lo)
+            c.fill(track, look.inert, TRACK_H / 2)
+            return
+
+        // The centre of the needle's travel at a fraction, which is where a tick sits too.
+        val mid = b.x + NEEDLE_W / 2 - TICK_W / 2
+        val major = mix(look.inert, look.ink, 40)
+        val aim = along(self.frac(self.target), travel)
+
+        // Ticks first and the track over them, so a tick reads as a mark through the scale. Tenths
+        // are the minor ones; the two ends and the target are major, and a tenth that falls on the
+        // target is drawn once, as the target's.
+        for i in 1..<10
+            val at = along(real(i) / 10.0, travel)
+
+            if at != aim then c.fill(Rect(mid + at, b.y + 5, TICK_W, 10), look.inert)
+
+        c.fill(Rect(mid, b.y + 2, TICK_W, 16), major)
+        c.fill(Rect(mid + travel, b.y + 2, TICK_W, 16), major)
+
+        if aim != 0 && aim != travel then c.fill(Rect(mid + aim, b.y + 2, TICK_W, 16), major)
+
+        c.fill(track, look.inert, TRACK_H / 2)
+
+        if self.band > 0.0
+            val left = along(self.frac(self.target - self.band), travel)
+            val right = along(self.frac(self.target + self.band), travel)
+
+            c.fill(Rect(b.x + NEEDLE_W / 2 + left, track.y, right - left, TRACK_H),
+                   mix(look.inert, look.success, 55), TRACK_H / 2)
+
+        // A reading that is not a number is no reading, and a needle drawn anywhere would claim one.
+        if self.value.is_nan() then return
+
+        val t = c.phase(r, NEEDLE_SLOT, self.frac(self.value), NEEDLE_RATE)
+        val inside_band = self.band > 0.0 && self.value >= self.target - self.band &&
+                          self.value <= self.target + self.band
+        val color = if inside_band then look.success else look.color(self.role)
+
+        c.fill(Rect(b.x + along(t, travel), b.y, NEEDLE_W, METER_H), color, NEEDLE_W / 2)
+    end paint
+
+// A meter reading `value` on a scale from `lo` to `hi`, with the stretch within `band` of `target`
+// marked as right. A band of zero marks nothing; a target of zero on a scale from `-hi` to `hi` is a
+// centre-zero meter.
+meter(value: real, lo: real, hi: real, width: int, band: real = 0.0, target: real = 0.0,
+      role: Role = Role.Primary) -> &View =
+    Meter(value, lo, hi, width, target, band, role)
 
 // A rule across whatever it is given.
 //

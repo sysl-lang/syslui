@@ -2,6 +2,7 @@ module sh.sysl.ui
 @tests
 
 import sysl.buf.{Buf, buf}
+import sysl.math.Float
 import sysl.seq.{Sequence, generate}
 import sysl.text.Search
 import sh.sysl.plutovg
@@ -1192,6 +1193,130 @@ private a_progress_bar_eases_toward_a_new_fraction()
                        s"fill 0,0 80x6 #${dark().primary} r3\n",
            s"a bar part of the way along:\n${c.dump()}")
 end a_progress_bar_eases_toward_a_new_fraction
+
+// The last thing a meter paints is its needle, so the needle is the recording's last line -- or the
+// band, or a tick, when there is no needle to paint.
+private last_painted(v: &View) -> string
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 220, 20))
+
+    val ops = c.ops.view()
+    ops[ops.len - 1]
+end last_painted
+
+// A tuner's scale: fifty cents either way, in tune within five. Two hundred and twenty pixels less a
+// four-pixel needle is two hundred and sixteen of travel.
+private tuner(cents: real) -> &View = meter(cents, -50.0, 50.0, 220, band = 5.0)
+
+private needle_at(x: int, color: u32) -> string = s"fill ${x},0 4x20 #${color} r2"
+
+@test
+private a_meter_asks_for_its_width_and_its_own_height()
+    assert(measured(tuner(0.0), Size(300, 300)) == Size(220, 20), "the width asked for, twenty tall")
+
+// **The needle lands where the reading is on the scale**: the two ends at the two ends of the travel,
+// the middle at the middle, and a reading between them in proportion -- -20 is three tenths of the
+// way along, 64.8 pixels, which rounds to 65.
+@test
+private a_meter_needle_sits_at_the_reading()
+    val off = dark().primary
+
+    assert(last_painted(tuner(-50.0)) == needle_at(0, off), last_painted(tuner(-50.0)))
+    assert(last_painted(tuner(50.0)) == needle_at(216, off), last_painted(tuner(50.0)))
+    assert(last_painted(tuner(-20.0)) == needle_at(65, off), last_painted(tuner(-20.0)))
+    assert(last_painted(tuner(25.0)) == needle_at(162, off), last_painted(tuner(25.0)))
+    assert(last_painted(tuner(0.0)) == needle_at(108, dark().success), last_painted(tuner(0.0)))
+end a_meter_needle_sits_at_the_reading
+
+// A reading past either end pins to that end rather than drawing outside the meter.
+@test
+private a_meter_pins_a_reading_past_either_end()
+    val off = dark().primary
+
+    assert(last_painted(tuner(-400.0)) == needle_at(0, off), last_painted(tuner(-400.0)))
+    assert(last_painted(tuner(75.0)) == needle_at(216, off), last_painted(tuner(75.0)))
+end a_meter_pins_a_reading_past_either_end
+
+// **The band is shaded across the track, from five cents flat to five sharp**: 0.45 and 0.55 of the
+// travel, plus the half-needle that puts a position at the needle's centre.
+@test
+private a_meter_shades_its_band_across_the_track()
+    var c = recorder()
+
+    tuner(30.0).paint(&c, Rect(0, 0, 220, 20))
+
+    val band = s"fill 99,7 22x6 #${mix(dark().inert, dark().success, 55)} r3"
+
+    assert(c.dump().contains(band), s"expected ${band} in:\n${c.dump()}")
+
+    var bare = recorder()
+
+    meter(30.0, -50.0, 50.0, 220).paint(&bare, Rect(0, 0, 220, 20))
+    assert(!bare.dump().contains("22x6"), s"a meter with no band shades nothing:\n${bare.dump()}")
+end a_meter_shades_its_band_across_the_track
+
+// **The needle turns to the theme's success colour exactly at the band's edge, on both sides**, since
+// the band is a claim about the reading and a reading of exactly five cents is in tune.
+@test
+private a_meter_needle_turns_at_the_band_edge()
+    val ok = dark().success
+    val off = dark().primary
+
+    assert(last_painted(tuner(5.0)).ends_with(s"#${ok} r2"), last_painted(tuner(5.0)))
+    assert(last_painted(tuner(5.001)).ends_with(s"#${off} r2"), last_painted(tuner(5.001)))
+    assert(last_painted(tuner(-5.0)).ends_with(s"#${ok} r2"), last_painted(tuner(-5.0)))
+    assert(last_painted(tuner(-5.001)).ends_with(s"#${off} r2"), last_painted(tuner(-5.001)))
+
+    // Around a target that is not zero, the band follows it.
+    val level = meter(0.8, 0.0, 1.0, 220, band = 0.1, target = 0.75)
+
+    assert(last_painted(level).ends_with(s"#${ok} r2"), last_painted(level))
+end a_meter_needle_turns_at_the_band_edge
+
+// **Ticks at the tenths, and major ones at the two ends and at the target**, each centred where a
+// needle at that value would be centred. The target's tenth is drawn once, as the major one.
+@test
+private a_meter_marks_its_ends_and_its_target_as_major_ticks()
+    var c = recorder()
+
+    tuner(30.0).paint(&c, Rect(0, 0, 220, 20))
+
+    val major = mix(dark().inert, dark().ink, 40)
+    val d = c.dump()
+
+    assert(d.contains(s"fill 1,2 2x16 #${major}\n"), d)
+    assert(d.contains(s"fill 217,2 2x16 #${major}\n"), d)
+    assert(d.contains(s"fill 109,2 2x16 #${major}\n"), d)
+    assert(d.contains(s"fill 23,5 2x10 #${dark().inert}\n"), d)
+    assert(!d.contains("fill 109,5 2x10"), s"the target is not also a minor tick:\n${d}")
+end a_meter_marks_its_ends_and_its_target_as_major_ticks
+
+// A reading that is not a number draws no needle, so the last thing painted is the band.
+@test
+private a_meter_draws_no_needle_for_a_reading_that_is_not_a_number()
+    val last = last_painted(tuner(real.nan()))
+
+    assert(!last.contains("4x20"), s"no needle: ${last}")
+    assert(last.contains("22x6"), s"the band is still there: ${last}")
+end a_meter_draws_no_needle_for_a_reading_that_is_not_a_number
+
+// **The needle eases toward a new reading**, as a progress bar's fill does: six per second for a
+// tenth of a second is six tenths of the way from one end to the other, 129.6 pixels.
+@test
+private a_meter_needle_eases_toward_a_new_reading()
+    var c = recorder()
+
+    tuner(-50.0).paint(&c, Rect(0, 0, 220, 20))
+
+    c.ops = buf()
+    c.tick(0.1)
+    tuner(50.0).paint(&c, Rect(0, 0, 220, 20))
+
+    val ops = c.ops.view()
+
+    assert(ops[ops.len - 1] == needle_at(130, dark().primary), s"part of the way:\n${c.dump()}")
+end a_meter_needle_eases_toward_a_new_reading
 
 // **A divider asks for no width and paints across all of it**, which is how it fills its container
 // without knowing what its container is.

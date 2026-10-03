@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.0" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.2" }
 }
 ```
 
@@ -27,7 +27,7 @@ device.
 
 ## What the probe has established
 
-Two hundred and fifty-two tests, `sysl test .` green — and all six of card `0203`'s questions answered.
+Two hundred and fifty-nine tests, `sysl test .` green — and all six of card `0203`'s questions answered.
 
 - **A modifier chain works.** `text("hi").padding(8).background(red)` — the modifiers are trait
   defaults on `View` returning `&View`, with `&self` receivers so a wrapper stores the child's box
@@ -123,7 +123,7 @@ settled on, so adding one moves nothing. Text colour is canvas state rather than
 
 ## The controls
 
-`switch`, `checkbox`, `radio`, `slider`, `progress` and `divider`, in `widgets.sysl`. Every one of
+`switch`, `checkbox`, `radio`, `slider`, `progress`, `meter` and `divider`, in `widgets.sysl`. Every one of
 them is the same four things: a size it asks for, some filled rounded rectangles, a question put to
 the canvas about the pointer, and a phase easing toward the answer. There is nothing else, because
 `Canvas` offers nothing else — which is what lets a switch drawn as two rounded rectangles be a
@@ -147,6 +147,21 @@ Three of them are worth singling out:
   `pointer()`, the drag happens during `paint`, and the write is guarded on the value actually
   changing — an unguarded one would mark every frame dirty for as long as a pointer rested on a
   slider nobody was moving.
+
+**A meter is a reading on a scale with the stretch of it that counts as right marked** — a tuner's
+cents, a balance control's centre-zero, a level against the mark it should reach:
+
+```
+meter(cents, -50.0, 50.0, 380, band = 5.0)                                // in tune within five cents
+meter(level, 0.0, 1.0, 380, band = 0.1, target = 0.75, role = .Accent)   // a level and its mark
+```
+
+Nothing in `Canvas` draws at an angle, so the needle cannot turn: the scale is a strip with ticks at
+the tenths and major ones at both ends and the target, the band within `band` of `target` is shaded
+in the theme's `success`, and the needle is a bar standing across it. It **eases toward the reading**
+as a progress bar's fill does, so a jittery measurement reads as a needle settling; it takes the
+`success` colour while the *reading* is inside the band, edges included, and the role's colour
+outside it. A reading past either end pins to that end, and one that is not a number draws no needle.
 
 ## Theming
 
@@ -580,7 +595,7 @@ catches it is a `sysl build-c` of something that uses the toolkit, which is what
 - `sh/sysl/ui/view.sysl` — the `View` trait, the leaves, and the modifiers
 - `sh/sysl/ui/theme.sysl` — `Theme`, `Role`, `Variant`, and the `Themed`/`Panel` views
 - `sh/sysl/ui/style.sysl` — `Interaction`, `Reactive`, and `button`'s four variants built on them
-- `sh/sysl/ui/widgets.sysl` — `switch`, `checkbox`, `radio`, `slider`, `progress` and `divider`
+- `sh/sysl/ui/widgets.sysl` — `switch`, `checkbox`, `radio`, `slider`, `progress`, `meter` and `divider`
 - `sh/sysl/ui/color.sysl` — `mix`, `lighten` and `darken`
 - `sh/sysl/ui/phases.sysl` — where an animation lives, in a framework with nowhere to put it
 - `sh/sysl/ui/signal.sysl` — `Signal[T]` and its weak dependent list
