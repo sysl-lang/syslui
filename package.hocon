@@ -1,7 +1,7 @@
 // syslUI — a declarative retained user interface for a machine with a heap.
 //
 //     dependencies {
-//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.5" }
+//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.6" }
 //     }
 //
 // **The presentation is not in here.** What the toolkit produces is a block of premultiplied ARGB32
@@ -20,14 +20,15 @@
 
 package {
   name    = "syslui"
-  version = "0.1.5"
+  version = "0.1.6"
 
   // **The oldest compiler this builds with, and it is ahead of the newest release.** A tree here is
   // written as an indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler
   // to write their own `Eq`; both of those shipped in 0.0.66. `sysl.seq` moved the floor past it,
   // and what moves it again is the **leading-dot call chain**: `style.sysl` breaks a four-link
   // modifier chain before the dot, which no released compiler can read.
-  sysl = "0.0.82"
+  // 0.0.160: a default naming a type parameter (`step: T = T.zero()`).
+  sysl = "0.0.160"
 }
 
 // The drawing backend, and the one dependency.

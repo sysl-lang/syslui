@@ -314,9 +314,8 @@ struct Slider[T: Eq + Ord]
 
     // **The grid a step of zero leaves is the finest `T` can hold**: none at all for a `real`, and
     // one for an `int`, whose values are whole numbers whatever the slider says. That is why the
-    // default step is zero rather than one -- a literal `1` is an `int` and can never be a `real` --
-    // and why an `int` slider given no step still rounds to the nearest whole number, as it always
-    // did, rather than truncating. A type is whole-numbered when converting a half into it loses it.
+    // default step is `T.zero()`, which every `T` has, and why an `int` slider given no step still
+    // rounds to the nearest whole number rather than truncating. A type is whole-numbered when converting a half into it loses it.
     private grid(self) -> real
         val s = real(self.step)
 
@@ -385,16 +384,12 @@ impl[T: Eq + Ord] View for Slider[T]
 
 // A slider over the inclusive range `lo` to `hi`, in multiples of `step` from `lo` -- an `int` or a
 // `real` alike: `slider(volume, 0, 100, 260)`, `slider(gain, 0.0, 1.0, 260)`,
-// `slider(cutoff, 20.0, 2000.0, 260, step = 10.0)`. With no step an `int` slider moves by whole
-// numbers and a `real` one moves continuously. Give it an `id` and arrows, Home and End move it once
+// `slider(cutoff, 20.0, 2000.0, 260, step = 10.0)`. A step of zero, the default, is the finest grid
+// `T` holds: an `int` slider moves by whole numbers and a `real` one moves continuously. Give it an `id` and arrows, Home and End move it once
 // it has been tapped.
-slider[T: Eq + Ord + Zero](value: &Signal[T], lo: T, hi: T, width: int, step: T = no_step(),
+slider[T: Eq + Ord + Zero](value: &Signal[T], lo: T, hi: T, width: int, step: T = T.zero(),
                role: Role = Role.Primary, id: int = NOBODY) -> &View =
     Slider(value, lo, hi, width, step, id, role, () -> ())
-
-// The step a slider given none takes. A default may not name the declaration's own `T`, so `T.zero()`
-// is reached through a function whose `T` the expected type fixes.
-private no_step[T: Zero]() -> T = T.zero()
 
 // ## The two that take no input
 

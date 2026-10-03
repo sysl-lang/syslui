@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.5" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.6" }
 }
 ```
 
@@ -152,7 +152,9 @@ Three of them are worth singling out:
 is always a whole number of `step`s from `lo`:
 
 ```
-slider(volume, 0, 100, 260)                         // an int, a step of one
+slider(r, 0.0, 1.0, 260)                            // a real, continuous
+slider(n, 0, 100, 260)                              // an int, a step of one
+slider(n, 0, 100, 260, step = 2)                    // an int, in twos
 slider(cutoff, 20.0, 2000.0, 260, step = 10.0)      // Hz, in tens
 slider(threshold, 0.0, 1.0, 260, step = 0.01)       // a fraction
 slider(hold, 0.1, 5.0, 260, step = 0.1, id = 3)     // seconds, and the arrow keys once tapped
@@ -160,9 +162,8 @@ slider(hold, 0.1, 5.0, 260, step = 0.1, id = 3)     // seconds, and the arrow ke
 
 A step that does not divide the range leaves `hi` unreachable — the far end is the last step that
 fits, as an HTML range input's is — and a `real` slider given a step of `0.0` follows the pointer
-with no grid at all. **A `real` slider names its step**: the default of one is the `int` slider's,
-and with sysl 0.0.159 a literal default is not yet read at the parameter's type, so leaving it out
-of a `real` call is refused. **The keyboard is opt-in**: given an `id`, a tapped slider moves a step
+with no grid at all. **The step is `step: T = T.zero()`**, and zero means the finest grid `T`
+holds: continuous at `real`, one at `int`. **The keyboard is opt-in**: given an `id`, a tapped slider moves a step
 per arrow and to either end with Home and End, and its knob is lit while it has the keys. A slider
 with no `id` draws exactly as it did before it was generic.
 
