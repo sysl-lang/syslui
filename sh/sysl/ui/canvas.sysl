@@ -224,6 +224,32 @@ trait Canvas
     // capturing the pointer meant recording where the press began.
     press_origin(*self) -> (int, int) = (-1, -1)
 
+    // How far the pointer has come since `r` last asked, once the press is `r`'s drag -- a
+    // pressed-and-moved pointer, for something that pans rather than something that is dragged.
+    //
+    // **This is what tells a tap from a drag, and the line is a slop**: the press becomes `r`'s only
+    // once it has travelled more than `slop_x` across or `slop_y` down, so a finger that was never
+    // quite still still presses the button it landed on. A view that does not move along an axis
+    // passes a slop no pointer travels. **It claims the grab, and only an unclaimed one**, so a
+    // control that took the press when it landed keeps it -- which is why a view asking this asks
+    // after painting what it holds. `Grab.drag` has the arithmetic.
+    //
+    // The default answers that nothing moved, so a backend with no grab has lists that only scroll
+    // by their bar and the wheel.
+    drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int) = (0, 0)
+
+    // How many points the wheel has turned this frame, if the pointer is over `r` -- and taking
+    // them, so that nothing asking after `r` sees them as well.
+    //
+    // **Taking is the whole point of asking with a rectangle.** A list inside a list has to move on
+    // its own, and the inner one is asked first because a container asks after painting what it
+    // holds; a delta every asker could read would scroll both. The sense is the one `drag` answers
+    // in -- positive `y` moves the content down -- so a view reads a wheel and a finger alike, and
+    // what a platform calls natural scrolling has been settled before it arrives here.
+    //
+    // A canvas with no wheel answers that it did not turn.
+    wheel(*self, r: Rect) -> (int, int) = (0, 0)
+
     // ## The keyboard, which is the one thing a rectangle cannot key
     //
     // **A click carries a position and a key carries nothing**, so where a key goes is decided by
@@ -261,8 +287,9 @@ trait Canvas
     // Put it somewhere else, which is what a key or a click in the focused view does.
     edit(*self, sel: Selection) = ()
 
-    // Forget the keys this frame delivered. **`render` calls it, and nothing else should**: a key
-    // belongs to exactly one frame, and where a frame ends is the one thing a canvas cannot see.
+    // Forget the keys this frame delivered, and the wheel nobody took. **`render` calls it, and
+    // nothing else should**: a key belongs to exactly one frame, and where a frame ends is the one
+    // thing a canvas cannot see.
     keys_done(*self) = ()
 
     // The byte offset in `s` of the character boundary nearest `x` pixels from the run's left edge.
@@ -434,6 +461,21 @@ struct Recorder
         self.board.moved(x, y, down)
     end point
 
+    // Let go of the pointer at `(x, y)`, which is where a press becomes a tap.
+    //
+    // **A tap is decided at the release rather than at the press**, because only then is it known
+    // that the press was not the start of a drag: a finger that scrolls a list of buttons must not
+    // press the one it happened to land on. `Hits.release` has the rest of the rule.
+    release(*self, x: int, y: int)
+        if self.down && !self.hold.dragging
+            self.taps.release(self.hold.began_x, self.hold.began_y, x, y)
+
+        self.point(x, y, false)
+    end release
+
+    // Turn the wheel by `(dx, dy)` points, so a test can scroll without a window.
+    spin(*self, dx: real, dy: real) = self.hold.spin(dx, dy)
+
     // Send a key, so a test can type without a window.
     //
     // **Nothing clears these between paints unless a test asks**, which is the opposite of what a
@@ -544,6 +586,16 @@ impl Canvas for Recorder
 
     override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
 
+    // **Both are asked only where the clip in force still shows the point**, so a list scrolled
+    // half out of the one around it cannot be dragged or wheeled from the part that is not there.
+    override drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)
+        val shown = self.clips.shows(Rect(self.hold.began_x, self.hold.began_y, 1, 1))
+
+        if shown then self.hold.drag(r, slot, slop_x, slop_y) else (0, 0)
+
+    override wheel(*self, r: Rect) -> (int, int) =
+        if self.clips.shows(Rect(self.px, self.py, 1, 1)) then self.hold.turned(r) else (0, 0)
+
     override focus(*self) -> int = self.board.focus
 
     override take_focus(*self, id: int) = self.board.take(id)
@@ -558,7 +610,9 @@ impl Canvas for Recorder
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
 
-    override keys_done(*self) = self.board.reset()
+    override keys_done(*self)
+        self.board.reset()
+        self.hold.settle()
 
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.

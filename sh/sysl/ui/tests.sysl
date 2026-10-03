@@ -1866,6 +1866,266 @@ private a_pointer_resting_on_the_bar_does_not_scroll()
     assert_eq(n.read(), 0)
 end a_pointer_resting_on_the_bar_does_not_scroll
 
+// -- scrolling by touch and by wheel ----------------------------------------------------------------
+//
+// Twenty rows of sixteen in a window of a hundred, so the content can travel 220.
+
+private long_list(offset: &Signal[int]) -> &View =
+    scroll(column(generate(20usize, i -> text("x")), 0), offset, 100)
+
+// **A press that travels past the slop drags the content, and by exactly the pointer's travel** --
+// the first answer carries the slop as well, so the row under the finger stays under it.
+@test
+private a_drag_past_the_slop_scrolls_by_the_pointer_travel()
+    val offset = signal(0)
+    val list = long_list(offset)
+    var c = recorder()
+
+    c.point(40, 80, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 0)
+
+    c.point(40, 50, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 30)
+
+    c.point(40, 40, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 40)
+
+    // Back down follows too, and letting go ends it: a move afterwards does nothing.
+    c.point(40, 70, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 10)
+
+    c.release(40, 70)
+    c.point(40, 10)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 10)
+end a_drag_past_the_slop_scrolls_by_the_pointer_travel
+
+// **Under the slop a press is still a tap**, so a finger that wobbled on a button presses it -- and
+// the tap lands at the release, which is the only moment that is known.
+@test
+private a_press_that_moves_less_than_the_slop_is_a_tap()
+    val offset = signal(0)
+    val hit = signal(0)
+    val list = scroll(column([button("go", () -> hit.set(hit.read() + 1)),
+                              column(generate(20usize, i -> text("x")), 0)], 0), offset, 100)
+    var c = recorder()
+
+    c.point(10, 6, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+    c.point(10, 13, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 0)
+    assert_eq(hit.read(), 0)
+
+    c.release(10, 13)
+
+    assert_eq(hit.read(), 1)
+end a_press_that_moves_less_than_the_slop_is_a_tap
+
+// And past it the press is the list's: the content moves and the button it began on is not pressed.
+@test
+private a_drag_that_scrolls_does_not_press_what_it_began_on()
+    val offset = signal(0)
+    val hit = signal(0)
+    val list = scroll(column([button("go", () -> hit.set(hit.read() + 1)),
+                              column(generate(20usize, i -> text("x")), 0)], 0), offset, 100)
+    var c = recorder()
+
+    // Both ends are on the button as it was first painted, so only the drag stands between this
+    // release and a tap.
+    c.point(10, 14, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+    c.point(10, 0, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 14)
+
+    c.release(10, 0)
+
+    assert_eq(hit.read(), 0)
+end a_drag_that_scrolls_does_not_press_what_it_began_on
+
+// A press that wanders off what it landed on and lets go elsewhere taps nothing, list or no list.
+@test
+private a_release_away_from_the_press_is_not_a_tap()
+    val hit = signal(0)
+    val b = button("go", () -> hit.set(hit.read() + 1))
+    var c = recorder()
+
+    c.point(20, 10, true)
+    b.paint(&c, Rect(0, 0, 100, 28))
+    c.release(300, 10)
+
+    assert_eq(hit.read(), 0)
+
+    c.point(20, 10, true)
+    c.release(30, 12)
+
+    assert_eq(hit.read(), 1)
+end a_release_away_from_the_press_is_not_a_tap
+
+// **A drag that begins on a slider is the slider's**: it claimed the pointer when the press landed,
+// so the finger then travelling down the list moves the knob and not the content.
+@test
+private a_drag_that_begins_on_a_slider_moves_the_slider()
+    val offset = signal(0)
+    val v = signal(0)
+    val list = scroll(column([slider(v, 0, 100, 80), column(generate(20usize, i -> text("x")), 0)], 0),
+                      offset, 100)
+    var c = recorder()
+
+    c.point(8, 8, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+    c.point(72, 60, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert(v.read() > 50, s"the knob followed the pointer along: ${v.read()}")
+    assert_eq(offset.read(), 0)
+end a_drag_that_begins_on_a_slider_moves_the_slider
+
+// **The content stops at both ends**, and pushing it past one writes nothing at all.
+@test
+private a_drag_is_clamped_at_both_ends()
+    val offset = signal(0)
+    val writes = signal(0)
+
+    offset.watch(() -> writes.set(writes.read() + 1))
+
+    val list = long_list(offset)
+    var c = recorder()
+
+    // Down from the top, which is already as far down as the content goes.
+    c.point(40, 10, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+    c.point(40, 90, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 0)
+    assert_eq(writes.read(), 0)
+
+    c.release(40, 90)
+
+    // Up by far more than the content has.
+    c.point(40, 90, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+    c.point(40, -500, true)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 220)
+end a_drag_is_clamped_at_both_ends
+
+// **The wheel scrolls the list under the pointer**, and a glide made of fractions of a point adds
+// up rather than rounding away.
+@test
+private the_wheel_scrolls_the_list_under_the_pointer()
+    val offset = signal(0)
+    val list = long_list(offset)
+    var c = recorder()
+
+    c.point(40, 50)
+    c.spin(0.0, -30.0)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 30)
+
+    c.keys_done()
+    c.spin(0.0, -0.6)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 30)
+
+    c.keys_done()
+    c.spin(0.0, -0.6)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 31)
+
+    // Off the list, the wheel moves nothing -- and the turn is gone by the next frame.
+    c.keys_done()
+    c.point(300, 50)
+    c.spin(0.0, -30.0)
+    list.paint(&c, Rect(0, 0, 100, 100))
+    c.keys_done()
+    c.point(40, 50)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 31)
+end the_wheel_scrolls_the_list_under_the_pointer
+
+// **A wheel over a list at its end leaves it there**, and writes nothing.
+@test
+private the_wheel_does_not_move_a_list_past_its_end()
+    val offset = signal(220)
+    val writes = signal(0)
+
+    offset.watch(() -> writes.set(writes.read() + 1))
+
+    val list = long_list(offset)
+    var c = recorder()
+
+    c.point(40, 50)
+    c.spin(0.0, -30.0)
+    list.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(offset.read(), 220)
+    assert_eq(writes.read(), 0)
+end the_wheel_does_not_move_a_list_past_its_end
+
+// **Only the innermost list under the pointer takes the wheel or a drag**: the inner one asks first,
+// because the outer one asks after painting it, and what it takes the outer one never sees -- even
+// when the inner one is at its end and cannot use it.
+@test
+private only_the_innermost_list_takes_the_wheel_and_the_drag()
+    val outer = signal(0)
+    val inner = signal(0)
+    val tree = scroll(column([scroll(column(generate(20usize, i -> text("x")), 0), inner, 50),
+                              column(generate(20usize, i -> text("x")), 0)], 0), outer, 100)
+    var c = recorder()
+
+    c.point(40, 20)
+    c.spin(0.0, -30.0)
+    tree.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(inner.read(), 30)
+    assert_eq(outer.read(), 0)
+
+    inner.set(270)
+    c.keys_done()
+    c.spin(0.0, -30.0)
+    tree.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(inner.read(), 270)
+    assert_eq(outer.read(), 0)
+
+    // Below the inner list the outer one takes it.
+    c.keys_done()
+    c.point(40, 80)
+    c.spin(0.0, -30.0)
+    tree.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(outer.read(), 30)
+
+    // And a drag begun in the inner list is the inner list's alone.
+    inner.set(100)
+    c.point(40, 10, true)
+    tree.paint(&c, Rect(0, 0, 100, 100))
+    c.point(40, 1, true)
+    tree.paint(&c, Rect(0, 0, 100, 100))
+
+    assert_eq(inner.read(), 109)
+    assert_eq(outer.read(), 30)
+end only_the_innermost_list_takes_the_wheel_and_the_drag
+
 // -- the theme ------------------------------------------------------------------------------------
 //
 // **The change that introduced a theme moved not one recorded frame in this file**, which was the

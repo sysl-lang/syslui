@@ -74,6 +74,33 @@ struct Scroll
         c.fill(Rect(track.x, track.y + y, BAR_W, thumb),
                lighten(look.inert, 25 + int(lit * 30.0)), BAR_W / 2)
     end bar
+
+    // The content follows a finger dragged anywhere in the window, and the wheel turned over it.
+    //
+    // **Asked after the content and the bar are painted, and that order is the whole of who wins.**
+    // A slider in the list or the bar itself claims the pointer on the frame the press lands, and
+    // `drag` only claims one nobody has -- so a press that began on a control stays that control's
+    // however far it travels. A list inside a list is painted inside this one, so it asks first and
+    // takes both the drag and the wheel, and this one sees neither.
+    //
+    // **What it costs is a frame**: the content was painted where it was before the pointer moved,
+    // so it lands under the finger on the next frame rather than this one. Asking first would
+    // instead hand the press to the list whenever a finger was fast enough to clear the slop before
+    // the first frame, and a slider that a quick thumb turns into a scroll is the worse defect.
+    private follow(&self, c: *Canvas, window: Rect, content: int)
+        val (_, dy) = c.drag(window, DRAG_GRAB, SIDEWAYS, SLOP)
+        val (_, wy) = c.wheel(window)
+        val moved = dy + wy
+
+        if moved == 0 then return
+
+        val span = content - window.h
+        val off = self.offset.read() - moved
+        val want = if off < 0 then 0 elif off > span then span else off
+
+        // Guarded as the bar is: a list already at its end, pushed further, writes nothing.
+        if want != self.offset.read() then self.offset.set(want)
+    end follow
 end Scroll
 
 private const BAR_W: int = 8
@@ -83,6 +110,17 @@ private const BAR_SLOT: int = 6
 // The bar's identity in the canvas's grab, which is what lets a thumb be dragged the length of a
 // window without the pointer having to stay inside a track eight pixels wide.
 private const BAR_GRAB: int = 1
+
+// The window's own identity in it, for a drag of the content rather than of the thumb.
+private const DRAG_GRAB: int = 3
+
+// How far a press travels down before it is a scroll rather than a tap: about the width of the
+// wobble in a fingertip that meant to stay still, which is what every touch platform settles on.
+private const SLOP: int = 8
+
+// A slop no pointer travels. The list only scrolls down, so a sideways movement never starts one --
+// which leaves a sideways drag for whatever inside it wants one.
+private const SIDEWAYS: int = 1_000_000
 
 impl View for Scroll
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(avail.w, self.height)
@@ -101,8 +139,11 @@ impl View for Scroll
 
         // **Only when there is something to scroll.** A bar on a list that fits is an interface
         // element that says nothing, and it would be drawn full-height over content that has no
-        // reason to be covered.
-        if inner.h > window.h then self.bar(c, window, inner.h)
+        // reason to be covered. **Nor does a list that fits take a drag or the wheel**, so both
+        // reach a list around it that can still move.
+        if inner.h > window.h
+            self.bar(c, window, inner.h)
+            self.follow(c, window, inner.h)
     end paint
 end Scroll
 

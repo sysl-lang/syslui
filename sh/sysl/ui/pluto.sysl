@@ -83,6 +83,20 @@ struct PlutoCanvas
         self.board.moved(x, y, down)
     end point
 
+    // The pointer let go at `(x, y)`, which is where a press becomes a tap -- unless something took
+    // it as a drag. The frame loop calls this for the release and `point` for everything else; see
+    // the recorder's, which is the same rule.
+    release(*self, x: int, y: int)
+        if self.down && !self.hold.dragging
+            self.taps.release(self.hold.began_x, self.hold.began_y, x, y)
+
+        self.point(x, y, false)
+    end release
+
+    // The wheel turned by `(dx, dy)` points, in the sense `Canvas.wheel` answers in. A frame loop
+    // calls this once per wheel event, and the turns add up until something takes them.
+    spin(*self, dx: real, dy: real) = self.hold.spin(dx, dy)
+
     // A key the window reported. **The frame loop hands these over as they arrive and clears them
     // in `tick`**, so a field sees exactly the keys of the frame it is painting.
     key(*self, p: Press) = self.board.press(p)
@@ -210,6 +224,14 @@ impl Canvas for PlutoCanvas
 
     override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
 
+    override drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)
+        val shown = self.clips.shows(Rect(self.hold.began_x, self.hold.began_y, 1, 1))
+
+        if shown then self.hold.drag(r, slot, slop_x, slop_y) else (0, 0)
+
+    override wheel(*self, r: Rect) -> (int, int) =
+        if self.clips.shows(Rect(self.px, self.py, 1, 1)) then self.hold.turned(r) else (0, 0)
+
     override focus(*self) -> int = self.board.focus
 
     override take_focus(*self, id: int) = self.board.take(id)
@@ -224,7 +246,9 @@ impl Canvas for PlutoCanvas
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
 
-    override keys_done(*self) = self.board.reset()
+    override keys_done(*self)
+        self.board.reset()
+        self.hold.settle()
 
     // **PlutoVG is asked rather than a clip stack being kept beside it**, which is one fewer thing
     // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a

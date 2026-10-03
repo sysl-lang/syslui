@@ -1,6 +1,7 @@
 module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
+import sysl.math.Signed
 
 // Where a tap goes, once the frame that could answer it has been drawn.
 //
@@ -55,6 +56,29 @@ struct Hits
         false
     end tap
 
+    // A press that went down at `(bx, by)` has let go at `(x, y)`: call the topmost region holding
+    // the press, if it holds the release as well, and say whether it did.
+    //
+    // **A press that wanders off what it went down on and lets go elsewhere is a change of mind**,
+    // and every platform treats it as one -- which is also what keeps a finger that slid off a row
+    // and onto the next from choosing either of them.
+    release(*self, bx: int, by: int, x: int, y: int) -> bool
+        val v = self.items.view()
+        var i = v.len
+
+        while i > 0
+            i -= 1
+
+            if v[i].r.holds(bx, by)
+                if !v[i].r.holds(x, y) then return false
+
+                (v[i].action)()
+
+                return true
+
+        false
+    end release
+
     // How many regions this frame offered -- what a measurement counts and a test asserts.
     len(*self) -> usize = self.items.view().len
 end Hits
@@ -91,6 +115,23 @@ struct Grab
     at: Rect
     slot: int
 
+    // Where the pointer is now.
+    x: int
+    y: int
+
+    // Whether the press was taken as a drag -- moved past a slop by something that pans -- and
+    // where the pointer was the last time the dragger was told how far it had come.
+    //
+    // **It outlives the release on purpose**: the release is exactly when a backend asks whether the
+    // press was a tap, and a drag is the one thing that says it was not.
+    dragging: bool
+    last_x: int
+    last_y: int
+
+    // The wheel's travel that nothing has taken yet, in points.
+    wheel_x: real
+    wheel_y: real
+
     // Told by the frame loop, through the canvas's `point`, once a frame.
     //
     // **The release is what ends a grab**, not the pointer leaving anything -- which is the entire
@@ -99,9 +140,12 @@ struct Grab
         if down && !self.down
             self.began_x = x
             self.began_y = y
+            self.dragging = false
 
         if !down then self.held = false
 
+        self.x = x
+        self.y = y
         self.down = down
     end moved
 
@@ -125,6 +169,68 @@ struct Grab
 
         false
     end claim
+
+    // How far the pointer has come since `r` was last told, once the press is `r`'s drag.
+    //
+    // **A press only becomes a drag once it has travelled further than a slop**, `slop_x` across or
+    // `slop_y` down, and until then it is still a tap -- which is what lets a button inside a list
+    // be pressed by a finger that was never perfectly still. It is claimed the way `claim` claims,
+    // so whatever took the press first keeps it: a slider grabbed at the press is never turned
+    // into a scroll by the finger then wandering down.
+    //
+    // **The first answer is the whole travel from the press**, slop included, and every later one
+    // what has happened since -- so the answers sum to exactly how far the pointer is from where it
+    // went down, and what follows it lands where the finger is rather than a slop behind.
+    drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)
+        if !self.down then return (0, 0)
+
+        if self.held
+            if !self.dragging || self.at != r || self.slot != slot then return (0, 0)
+        else
+            if !r.holds(self.began_x, self.began_y) then return (0, 0)
+
+            if (self.x - self.began_x).abs() <= slop_x && (self.y - self.began_y).abs() <= slop_y
+                return (0, 0)
+
+            self.held = true
+            self.at = r
+            self.slot = slot
+            self.dragging = true
+            self.last_x = self.began_x
+            self.last_y = self.began_y
+
+        val moved = (self.x - self.last_x, self.y - self.last_y)
+
+        self.last_x = self.x
+        self.last_y = self.y
+        moved
+    end drag
+
+    // The wheel turned, by this many points.
+    spin(*self, dx: real, dy: real)
+        self.wheel_x += dx
+        self.wheel_y += dy
+
+    // The whole points the wheel has turned, if the pointer is inside `r` -- taking them, so that
+    // whatever asks after this gets nothing.
+    //
+    // **The fraction stays behind**, because a trackpad reports a slow glide as a run of deltas
+    // well under a point each, and rounding every one away would be a glide that never moves.
+    turned(*self, r: Rect) -> (int, int)
+        if !r.holds(self.x, self.y) then return (0, 0)
+
+        val whole = (int(self.wheel_x), int(self.wheel_y))
+
+        self.wheel_x -= real(whole.0)
+        self.wheel_y -= real(whole.1)
+        whole
+    end turned
+
+    // The frame is over: the turn nothing was under the pointer to take is gone, and only the
+    // fraction a glide is building up survives.
+    settle(*self)
+        self.wheel_x -= real(int(self.wheel_x))
+        self.wheel_y -= real(int(self.wheel_y))
 end Grab
 
-grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0)
+grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0, -1, -1, false, 0, 0, 0.0, 0.0)

@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.4" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.5" }
 }
 ```
 
@@ -605,6 +605,51 @@ element card `0168` spent its length refusing.
 
 A backend with no clock answers the target outright, so a tree drawn through one is drawn settled.
 That is what makes animation something a backend opts into rather than something every backend owes.
+
+## Scrolling: the bar, a finger, and the wheel
+
+A `scroll` moves three ways, and all three write the one `&Signal[int]` the application passed in:
+
+- **Its bar**, dragged by the thumb, which is grabbed by its middle and follows the pointer anywhere.
+- **A finger dragged anywhere in the window.** A press becomes a scroll once it has travelled more
+  than **eight points** down from where it landed, and from then on the content follows the pointer
+  by exactly its travel, slop included, stopping at both ends. **Under the slop it is still a tap**,
+  so a finger that wobbled on a button presses it.
+- **The wheel and a trackpad**, over the window. A glide made of fractions of a point adds up rather
+  than rounding away.
+
+**Who wins is decided by asking order.** A list asks after painting its content and its bar, so a
+control that claimed the pointer when the press landed — a slider, a text field, a selectable run, the
+bar's thumb — keeps it however far the finger travels, and a list inside a list asks before the one
+around it and takes both the drag and the wheel. The cost is one frame: the content lands under the
+finger on the frame after it moved. A list whose content fits takes neither, so both reach a list
+around it. The list scrolls vertically only, so a sideways drag never starts one and is left for
+whatever inside wants it.
+
+**A tap now lands at the release, not at the press**, because only then is it known that the press
+was not the start of a drag — a finger scrolling a list of buttons must not press the one it happened
+to land on. And a press that wanders off what it went down on and lets go elsewhere taps nothing.
+
+Two members on `Canvas` carry it, both with defaults so every other backend still compiles:
+
+```
+drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int) = (0, 0)
+wheel(*self, r: Rect) -> (int, int) = (0, 0)
+```
+
+`drag` claims the pointer for `r` once the press has passed the slop and nothing else holds it, and
+answers how far the pointer has moved since `r` last asked. `wheel` answers the whole points the wheel
+turned while the pointer was over `r` **and takes them**, which is how the innermost list is the only
+one to move. Both answer in the same sense — positive `y` moves the content down — so a view reads a
+finger and a wheel alike. A backend without them has lists that scroll only by their bar.
+
+**What a frame loop owes**: `release(x, y)` for a button coming up, in place of `point(x, y, false)`
+and of calling the hit list itself; `spin(dx, dy)` for each wheel event, in points and in that sense,
+with the platform's natural-scrolling setting already applied; and `render`, which forgets a turn
+nobody was under the pointer to take. The recorder has the same two, which is how the tests drive it.
+
+**There is no fling.** A finger lifted mid-drag stops the content where it is; momentum would need a
+velocity remembered per list between frames, and the canvas has nowhere keyed to keep one yet.
 
 ## The backend
 
