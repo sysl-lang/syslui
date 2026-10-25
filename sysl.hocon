@@ -1,7 +1,7 @@
 // syslUI — a declarative retained user interface for a machine with a heap.
 //
 //     dependencies {
-//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.7" }
+//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.8" }
 //     }
 //
 // **The presentation is not in here.** What the toolkit produces is a block of premultiplied ARGB32
@@ -20,7 +20,7 @@
 
 package {
   name    = "syslui"
-  version = "0.1.7"
+  version = "0.1.8"
 
   // **The oldest compiler this builds with, and it is ahead of the newest release.** A tree here is
   // written as an indented block -- `column(spacing = 8):` -- and `Size` and `Rect` ask the compiler
@@ -28,7 +28,7 @@ package {
   // and what moves it again is the **leading-dot call chain**: `style.sysl` breaks a four-link
   // modifier chain before the dot, which no released compiler can read.
   // 0.0.160: a default naming a type parameter (`step: T = T.zero()`).
-  sysl = "0.0.160"
+  sysl = "0.6.0"
 }
 
 // The drawing backend, and the one dependency.
@@ -39,7 +39,7 @@ package {
 // rasterizer, carries its own C, and needs nothing installed, which is why the same backend serves
 // a desktop and a phone.
 dependencies {
-  plutovg { git = "github.com/sysl-lang/plutovg", version = "0.2.1" }
+  plutovg { git = "github.com/sysl-lang/plutovg", version = "0.2.5" }
 }
 
 // **An erased tree is boxes, so `heap` is not negotiable** — that is the bargain 0168 struck against
