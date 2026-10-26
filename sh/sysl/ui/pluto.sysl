@@ -471,9 +471,9 @@ line_height(m: plutovg.Metrics) -> int
     int(m.ascent + drop + m.line_gap)
 
 // Device-space placement uses the complete affine matrix, not just a guessed DPI.
-private native_pixel_scale(m: []const f32) -> real =
+private[ui] native_pixel_scale(m: []const f32) -> real =
     (real(m[0]) * real(m[0]) + real(m[1]) * real(m[1])).sqrt()
 
-private native_pixel_anchor(m: []const f32, x: int, y: int) -> (int,int) =
+private[ui] native_pixel_anchor(m: []const f32, x: int, y: int) -> (int,int) =
     (int((real(m[0]) * real(x) + real(m[2]) * real(y) + real(m[4])).round()),
      int((real(m[1]) * real(x) + real(m[3]) * real(y) + real(m[5])).round()))
