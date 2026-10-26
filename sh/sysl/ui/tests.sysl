@@ -5029,3 +5029,18 @@ private the_real_backend_measures_each_size_by_its_own_metrics()
     assert(c.text_size("E2") == small, "back at the base, the base's own width answers")
     assert(c.font_size() == 15.0, "and the base is in force again")
 end the_real_backend_measures_each_size_by_its_own_metrics
+
+@test
+private native_pixels_follow_device_scale_and_snap_the_transformed_anchor()
+    val identity = [1.0f32,0.0f32,0.0f32,1.0f32,0.0f32,0.0f32]
+    val retina = [2.0f32,0.0f32,0.0f32,2.0f32,10.0f32,20.0f32]
+    val fractional = [1.5f32,0.0f32,0.0f32,1.5f32,0.25f32,-0.25f32]
+    val rotated = [0.0f32,2.0f32,-2.0f32,0.0f32,11.5f32,17.5f32]
+    assert(native_pixel_scale(identity[..]) == 1.0)
+    assert(native_pixel_scale(retina[..]) == 2.0)
+    assert(native_pixel_scale(fractional[..]) == 1.5)
+    assert(native_pixel_scale(rotated[..]) == 2.0)
+    assert(native_pixel_anchor(identity[..],3,5) == (3,5))
+    assert(native_pixel_anchor(retina[..],3,5) == (16,30))
+    assert(native_pixel_anchor(fractional[..],3,5) == (5,7))
+    assert(native_pixel_anchor(rotated[..],3,5) == (2,24))

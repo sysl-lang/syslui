@@ -346,6 +346,16 @@ trait Canvas
     // adding at all -- a photograph is not expressible as filled rectangles at any price.
     draw_image(*self, r: Rect, img: &Image, radius: int = 0) = ()
 
+    // Device pixels per horizontal layout unit. A raster inspector uses this to
+    // reserve space without enlarging the pixels it is meant to show faithfully.
+    pixel_scale(*self) -> real = 1.0
+
+    // Position the top-left in layout coordinates, snapped to a device pixel;
+    // each source pixel occupies exactly one device pixel. The image remains
+    // upright regardless of the canvas transform, and existing clips still apply.
+    draw_native_image(*self, x: int, y: int, img: &Image) =
+        self.draw_image(Rect(x,y,img.width(),img.height()),img,0)
+
     // Paint this view after the whole tree has been painted, above everything, at `at`.
     //
     // **Everything else composes downward and this is the one thing that does not.** A dropdown is

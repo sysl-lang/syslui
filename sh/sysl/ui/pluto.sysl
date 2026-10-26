@@ -3,6 +3,8 @@ module sh.sysl.ui
 import sysl.buf.{Buf, buf}
 import sysl.container.{Map, map}
 import sh.sysl.plutovg
+import sh.sysl.plutovg.c as native
+import sysl.math.Float
 
 // The real backend: a frame drawn into a plutovg surface.
 //
@@ -319,6 +321,24 @@ impl Canvas for PlutoCanvas
     // **So the corner radius is divided by that scale before it is asked for**, or a picture squeezed
     // into a rectangle of another shape would come out with elliptical corners. `round_rect` takes
     // its two radii separately, which is what makes the compensation exact rather than a compromise.
+    override pixel_scale(*self) -> real
+        var matrix: [6]f32
+        native.canvas_get_matrix(self.vg.handle,&matrix[0])
+        native_pixel_scale(matrix[..])
+
+    override draw_native_image(*self, x: int, y: int, img: &Image)
+        var matrix: [6]f32
+        native.canvas_get_matrix(self.vg.handle,&matrix[0])
+        val (px,py) = native_pixel_anchor(matrix[..],x,y)
+        self.vg.save()
+        self.vg.reset_transform()
+        self.vg.translate(f32(px),f32(py))
+        self.vg.texture(img.pixels)
+        self.vg.begin()
+        self.vg.rect(0.0,0.0,f32(img.width()),f32(img.height()))
+        self.vg.fill()
+        self.vg.restore()
+
     override draw_image(*self, r: Rect, img: &Image, radius: int)
         val w = img.width()
         val h = img.height()
@@ -449,3 +469,11 @@ line_height(m: plutovg.Metrics) -> int
     val drop = if m.descent < 0.0 then -m.descent else m.descent
 
     int(m.ascent + drop + m.line_gap)
+
+// Device-space placement uses the complete affine matrix, not just a guessed DPI.
+private native_pixel_scale(m: []const f32) -> real =
+    (real(m[0]) * real(m[0]) + real(m[1]) * real(m[1])).sqrt()
+
+private native_pixel_anchor(m: []const f32, x: int, y: int) -> (int,int) =
+    (int((real(m[0]) * real(x) + real(m[2]) * real(y) + real(m[4])).round()),
+     int((real(m[1]) * real(x) + real(m[3]) * real(y) + real(m[5])).round()))
