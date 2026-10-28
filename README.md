@@ -746,3 +746,13 @@ catches it is a `sysl build-c` of something that uses the toolkit, which is what
 - `sh/sysl/ui/input.sysl` — where a tap goes: the regions the paint pass collected
 - `sh/sysl/ui/clips.sysl` — the clip stack both backends cull against, in view coordinates
 - `sh/sysl/ui/tests.sysl` — the findings, kept as tests rather than as prose
+
+### Native-pixel images
+
+`Canvas.draw_native_image(x, y, image)` renders each source pixel as one device
+pixel, including on high-density displays. The anchor follows the current canvas
+transform and snaps to an integer device pixel; the bitmap stays upright and
+unscaled, with existing clipping preserved. `Canvas.pixel_scale()` reports device
+pixels per horizontal layout unit so a view can reserve the appropriate space.
+This is useful for emulators and raster inspection; ordinary `draw_image` keeps
+its existing layout-scaled behavior.
