@@ -592,14 +592,15 @@ private a_button_wears_a_different_ground_in_each_state()
 end a_button_wears_a_different_ground_in_each_state
 
 // What a button of label "hi" in a 100x28 rectangle draws, given the ground it settled on. The
-// order is the chain read outside in, and the `hit` at the end is `on_tap` still being a modifier.
+// order is the chain read outside in, and the `hit` at the start is `on_tap` still being a modifier:
+// a tappable registers its region before its child paints, so a tappable inside it is on top.
 private painted(ground: u32) -> string =
+    "hit 0,0 100x28\n" +
     s"fill 0,0 100x28 #${ground} r6\n" +
     s"ink #${WHITE}\n" +
     "text 8,8 84x12 'hi'\n" +
     "unink\n" +
-    s"stroke 0,0 100x28 #${lighten(ground, dark().edge_lift)} w1 r6\n" +
-    "hit 0,0 100x28\n"
+    s"stroke 0,0 100x28 #${lighten(ground, dark().edge_lift)} w1 r6\n"
 
 // A button still answers to a tap, which is the thing the rewrite could most easily have dropped:
 // the `Reactive` sits *inside* the `Tappable`, so the region is the whole button rather than
@@ -898,10 +899,10 @@ private an_unchecked_box_draws_no_mark()
     val on = signal(false)
 
     assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  "hit 0,0 66x18\n" +
                   s"fill 0,0 18x18 #${dark().ground} r4\n" +
                   s"stroke 0,0 18x18 #${dark().inert} w2 r4\n" +
-                  "text 26,1 40x16 'label'\n" +
-                  "hit 0,0 66x18\n")
+                  "text 26,1 40x16 'label'\n")
 end an_unchecked_box_draws_no_mark
 
 // And a checked one is filled, outlined in the accent, and carries the mark.
@@ -910,11 +911,11 @@ private a_checked_box_is_filled_and_marked()
     val on = signal(true)
 
     assert_paints(checkbox(on, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  "hit 0,0 66x18\n" +
                   s"fill 0,0 18x18 #${dark().primary} r4\n" +
                   s"stroke 0,0 18x18 #${dark().primary} w2 r4\n" +
                   s"fill 5,5 8x8 #${WHITE} r2\n" +
-                  "text 26,1 40x16 'label'\n" +
-                  "hit 0,0 66x18\n")
+                  "text 26,1 40x16 'label'\n")
 end a_checked_box_is_filled_and_marked
 
 // **Pointing at the LABEL lights the BOX**, which is the composition the whole styling layer was
@@ -935,10 +936,10 @@ private pointing_at_a_checkbox_label_lights_its_box()
     v.paint(&over, Rect(0, 0, 66, 18))
 
     assert(away.dump() != over.dump(), "the pointer is on the label and the box knows")
-    assert(over.dump() == s"fill 0,0 18x18 #${dark().ground} r4\n" +
+    assert(over.dump() == "hit 0,0 66x18\n" +
+                          s"fill 0,0 18x18 #${dark().ground} r4\n" +
                           s"stroke 0,0 18x18 #${lighten(dark().inert, 20)} w2 r4\n" +
-                          "text 26,1 40x16 'label'\n" +
-                          "hit 0,0 66x18\n",
+                          "text 26,1 40x16 'label'\n",
            s"the lit outline:\n${over.dump()}")
 end pointing_at_a_checkbox_label_lights_its_box
 
@@ -961,10 +962,10 @@ private an_unchosen_radio_draws_no_dot()
     val chosen = signal(1)
 
     assert_paints(radio(chosen, 0, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  "hit 0,0 66x18\n" +
                   s"fill 0,0 18x18 #${dark().ground} r9\n" +
                   s"stroke 0,0 18x18 #${dark().inert} w2 r9\n" +
-                  "text 26,1 40x16 'label'\n" +
-                  "hit 0,0 66x18\n")
+                  "text 26,1 40x16 'label'\n")
 end an_unchosen_radio_draws_no_dot
 
 // And the chosen one is filled, ringed in the accent, and carries a dot that is round rather than
@@ -975,11 +976,11 @@ private the_chosen_radio_is_filled_and_dotted()
     val chosen = signal(0)
 
     assert_paints(radio(chosen, 0, "label"), Size(200, 200), Rect(0, 0, 66, 18),
+                  "hit 0,0 66x18\n" +
                   s"fill 0,0 18x18 #${dark().primary} r9\n" +
                   s"stroke 0,0 18x18 #${dark().primary} w2 r9\n" +
                   s"fill 5,5 8x8 #${dark().on_fill} r4\n" +
-                  "text 26,1 40x16 'label'\n" +
-                  "hit 0,0 66x18\n")
+                  "text 26,1 40x16 'label'\n")
 end the_chosen_radio_is_filled_and_dotted
 
 // Pointing at the label lights the ring, for the reason the checkbox's does: the `Reactive` is the
@@ -999,10 +1000,10 @@ private pointing_at_a_radio_label_lights_its_ring()
     v.paint(&over, Rect(0, 0, 66, 18))
 
     assert(away.dump() != over.dump(), "the pointer is on the label and the ring knows")
-    assert(over.dump() == s"fill 0,0 18x18 #${dark().ground} r9\n" +
+    assert(over.dump() == "hit 0,0 66x18\n" +
+                          s"fill 0,0 18x18 #${dark().ground} r9\n" +
                           s"stroke 0,0 18x18 #${lighten(dark().inert, 20)} w2 r9\n" +
-                          "text 26,1 40x16 'label'\n" +
-                          "hit 0,0 66x18\n",
+                          "text 26,1 40x16 'label'\n",
            s"the lit ring:\n${over.dump()}")
 end pointing_at_a_radio_label_lights_its_ring
 
@@ -1582,6 +1583,64 @@ private a_backend_with_no_pointer_answers_off_the_surface()
     assert(x == -1 && y == -1, "off the surface")
     assert(!Rect(0, 0, 1000, 1000).holds(x, y), "and no rectangle holds it")
 end a_backend_with_no_pointer_answers_off_the_surface
+
+// A whole frame through the canvas that draws nothing, with an overlay raised in the tree: the
+// drain loop in `render` reads what `take_overlays` hands back.
+@test
+private render_over_a_blind_canvas_walks_the_tree_and_draws_nothing()
+    val open = signal(true)
+    var b = blind()
+
+    render(text("menu").popover(open, text("one")), &b, Rect(0, 0, 40, 16))
+    render(column([text("a"), text("b")]), &b, Rect(0, 0, 40, 40))
+end render_over_a_blind_canvas_walks_the_tree_and_draws_nothing
+
+// Every container and wrapper, the way an application composes them, over the same canvas.
+@test
+private render_over_a_blind_canvas_survives_a_composed_tree()
+    val open = signal(true)
+    val offset = signal(0)
+    val hit = signal(0)
+    var b = blind()
+    val tapped: &Fn() -> unit = () -> hit.set(1)
+
+    render(column([
+               row([text("a").on_tap(tapped), spacer(), text("b")], 4),
+               scroll(text("menu").on_tap(tapped).popover(open, text("one")), offset, 16),
+               text("page").modal(open, text("hi")).named("page")]),
+           &b, Rect(0, 0, 100, 100))
+    render(button("x", tapped), &b, Rect(0, 0, 100, 100))
+    render(text("").on_tap(tapped), &b, Rect(0, 0, 0, 0))
+end render_over_a_blind_canvas_survives_a_composed_tree
+
+// The canvas need not be named: a zero-sized value passed by address as a temporary, and the same
+// one reused for two frames, are both ordinary ways to call it.
+@test
+private render_over_a_blind_canvas_given_as_a_temporary_or_a_val()
+    val open = signal(true)
+    var once = blind()
+
+    render(text("a").popover(open, text("b")), &blind(), Rect(0, 0, 40, 16))
+    render(text("a").popover(open, text("b")), &once, Rect(0, 0, 40, 16))
+    render(text("a").popover(open, text("b")), &once, Rect(0, 0, 40, 16))
+end render_over_a_blind_canvas_given_as_a_temporary_or_a_val
+
+// A canvas that cannot measure answers a text height of zero, so every view that divides by a line
+// height has to survive it.
+@test
+private render_over_a_blind_canvas_survives_a_zero_line_height()
+    val words = signal("one\ntwo\nthree")
+    val offset = signal(0)
+    val on = signal(true)
+    val at = signal(0)
+    var b = blind()
+
+    render(text_field(words, 1, 100, "hint"), &b, Rect(0, 0, 120, 30))
+    render(text_area(words, 2, 100, 3, "hint"), &b, Rect(0, 0, 120, 60))
+    render(table([col("a"), flex_col("b")], [["1", "2"], ["3", "4"]], offset, 40), &b, Rect(0, 0, 120, 60))
+    render(column([switch(on), checkbox(on, "c"), radio(at, 0, "r"), progress(0.5, 40)]),
+           &b, Rect(0, 0, 120, 60))
+end render_over_a_blind_canvas_survives_a_zero_line_height
 
 // The recorder does have one, and it is the same one `hovered` and `pressed` answer from.
 @test
@@ -2299,11 +2358,11 @@ private an_outline_button_paints_no_ground()
     val look = dark()
 
     assert_paints(button("hi", () -> (), .Primary, .Outline), Size(300, 300), Rect(0, 0, 100, 28),
+                  "hit 0,0 100x28\n" +
                   s"ink #${look.primary}\n" +
                   "text 8,8 84x12 'hi'\n" +
                   "unink\n" +
-                  s"stroke 0,0 100x28 #${look.primary} w1 r6\n" +
-                  "hit 0,0 100x28\n")
+                  s"stroke 0,0 100x28 #${look.primary} w1 r6\n")
 end an_outline_button_paints_no_ground
 
 // A dashed one is the same with a pattern on the stroke, which is the one thing `Canvas.stroke`
@@ -2313,11 +2372,11 @@ private a_dashed_button_is_an_outline_with_a_pattern()
     val look = dark()
 
     assert_paints(button("hi", () -> (), .Accent, .Dashed), Size(300, 300), Rect(0, 0, 100, 28),
+                  "hit 0,0 100x28\n" +
                   s"ink #${look.accent}\n" +
                   "text 8,8 84x12 'hi'\n" +
                   "unink\n" +
-                  s"stroke 0,0 100x28 #${look.accent} w1 r6 d4\n" +
-                  "hit 0,0 100x28\n")
+                  s"stroke 0,0 100x28 #${look.accent} w1 r6 d4\n")
 end a_dashed_button_is_an_outline_with_a_pattern
 
 // A soft one has a ground mixed a little way from the theme's `ground` toward the role, and no
@@ -2327,11 +2386,11 @@ private a_soft_button_has_a_muted_ground_and_no_border()
     val look = dark()
 
     assert_paints(button("hi", () -> (), .Secondary, .Soft), Size(300, 300), Rect(0, 0, 100, 28),
+                  "hit 0,0 100x28\n" +
                   s"fill 0,0 100x28 #${mix(look.ground, look.secondary, look.soft)} r6\n" +
                   s"ink #${lighten(look.secondary, 20)}\n" +
                   "text 8,8 84x12 'hi'\n" +
-                  "unink\n" +
-                  "hit 0,0 100x28\n")
+                  "unink\n")
 end a_soft_button_has_a_muted_ground_and_no_border
 
 // **The variant and the role are independent**, which is the whole claim: four shapes times six

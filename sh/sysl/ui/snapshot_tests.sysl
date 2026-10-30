@@ -620,10 +620,146 @@ private what_a_frame_paints_has_not_moved()
 
     render(all_controls(signal(true)), &c, WINDOW)
 
-    val made = fnv(c.dump())
+    // **Without the `hit` lines**, which are not paint: a tappable registers its region before its
+    // child paints, so a nested one is on top, and that moved the hit lines and nothing else. The
+    // number is the one the full recording had before that change, with those lines taken out.
+    val made = fnv(without_hits(c.dump()))
 
-    assert(made == 12353207007764517522, s"${made}\n${c.dump()}")
+    assert(made == 8753789231368584446, s"${made}\n${c.dump()}")
 end what_a_frame_paints_has_not_moved
+
+private without_hits(d: string) -> string
+    var kept = ""
+    var from = 0
+
+    for i in 0..<d.len
+        if d[i] == u8('\n')
+            val line = d[from..<i + 1]
+
+            if !(line.len > 4 && line[0..<4] == "hit ") then kept = kept + line
+
+            from = i + 1
+
+    kept
+end without_hits
+
+// A tappable inside a tappable: the inner one is drawn on top, so it gets the click, and the outer one
+// is clicked where the inner one is not. Both the real tap and the snapshot's `click_point` say so.
+private nest(outer: &Signal[int], inner: &Signal[int]) -> &View =
+    column([
+        button("in", bump(inner)).named("in").frame(100, 40),
+        spacer().frame(100, 40)
+    ]).on_tap(bump(outer)).named("out")
+
+private tap_at(v: &View, c: *Recorder, x: int, y: int) -> bool
+    c.taps.reset()
+    render(v, c, WINDOW)
+    c.taps.tap(x, y)
+end tap_at
+
+@test
+private a_tappable_inside_a_tappable_takes_the_click()
+    val outer = signal(0)
+    val inner = signal(0)
+    val v = nest(outer, inner)
+    var c = recorder()
+
+    assert(tap_at(v, &c, 20, 20), "the inner button is there")
+    assert_eq((outer.read(), inner.read()), (0, 1))
+
+    click(v, &c, "in")
+    assert_eq((outer.read(), inner.read()), (0, 2))
+end a_tappable_inside_a_tappable_takes_the_click
+
+@test
+private the_outer_tappable_is_clicked_where_the_inner_one_is_not()
+    val outer = signal(0)
+    val inner = signal(0)
+    val v = nest(outer, inner)
+    var c = recorder()
+
+    render(v, &c, WINDOW)
+
+    val s = snapshot(v, &c, WINDOW)
+    val e = s.find("out").unwrap()
+    val (x, y) = s.click_point("out").unwrap()
+
+    assert_eq(e.covered, false)
+    assert(!s.find("in").unwrap().rect.holds(x, y), s"${x},${y} is under the inner button")
+
+    click(v, &c, "out")
+    assert_eq((outer.read(), inner.read()), (1, 0))
+end the_outer_tappable_is_clicked_where_the_inner_one_is_not
+
+@test
+private an_outer_tappable_wholly_under_an_inner_one_is_covered()
+    val outer = signal(0)
+    val v = button("in", no_op()).named("in").on_tap(bump(outer)).named("out")
+    val s = shot(v)
+
+    assert_eq(s.click_point("out").unwrap_err().kind, MissKind.Covered)
+    assert_eq(s.click_point("in").is_ok(), true)
+end an_outer_tappable_wholly_under_an_inner_one_is_covered
+
+@test
+private three_levels_of_tappable_each_take_their_own_part()
+    val a = signal(0)
+    val b = signal(0)
+    val c3 = signal(0)
+    val deepest = button("c", bump(c3)).named("c").frame(100, 40)
+    val middle = column([deepest, spacer().frame(100, 40)]).on_tap(bump(b)).named("b")
+    val v = column([middle, spacer().frame(100, 40)]).on_tap(bump(a)).named("a")
+    var c = recorder()
+
+    click(v, &c, "c")
+    assert_eq((a.read(), b.read(), c3.read()), (0, 0, 1))
+
+    click(v, &c, "b")
+    assert_eq((a.read(), b.read(), c3.read()), (0, 1, 1))
+
+    click(v, &c, "a")
+    assert_eq((a.read(), b.read(), c3.read()), (1, 1, 1))
+end three_levels_of_tappable_each_take_their_own_part
+
+@test
+private a_nested_tappable_inside_a_scroll_takes_the_click()
+    val outer = signal(0)
+    val inner = signal(0)
+    val off = signal(0)
+    val v = scroll(column([button("in", bump(inner)).named("in").frame(100, 40), spacer().frame(100, 200)])
+                       .on_tap(bump(outer)).named("out"), off, 80)
+    var c = recorder()
+
+    click(v, &c, "in")
+    assert_eq((outer.read(), inner.read()), (0, 1))
+
+    click(v, &c, "out")
+    assert_eq((outer.read(), inner.read()), (1, 1))
+end a_nested_tappable_inside_a_scroll_takes_the_click
+
+@test
+private an_overlay_above_a_nest_takes_the_click_from_both()
+    val outer = signal(0)
+    val inner = signal(0)
+    val over = signal(0)
+    val v = column([
+        nest(outer, inner),
+        Raiser(button("over", bump(over)).named("over"), Rect(0, 0, 400, 40))
+    ])
+    var c = recorder()
+
+    render(v, &c, WINDOW)
+
+    val s = snapshot(v, &c, WINDOW)
+
+    assert_eq(s.click_point("in").unwrap_err().kind, MissKind.Covered)
+
+    click(v, &c, "over")
+    assert_eq((outer.read(), inner.read(), over.read()), (0, 0, 1))
+
+    click(v, &c, "out")
+    assert_eq((outer.read(), inner.read(), over.read()), (1, 0, 1))
+end an_overlay_above_a_nest_takes_the_click_from_both
 
 // FNV-1a, so a recording of a hundred and fifty lines can be held as one number. A failure prints the
 // recording itself.

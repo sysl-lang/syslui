@@ -155,12 +155,20 @@ private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> Edited
     apply_all(s, sel, c.keys(), multiline)
 end typing
 
+// The height of a line to divide by. A canvas that cannot measure answers zero, and a field drawn on
+// it has to lay out as one line to a row rather than divide by it.
+private line_height(c: *Canvas) -> int
+    val h = c.text_size("").h
+
+    if h < 1 then 1 else h
+end line_height
+
 // Which byte offset a point lands on, which is a line and then a column in it.
 //
 // **Past the last line lands at the end of the text and above the first lands at nothing**, which is
 // what makes dragging out of the box in either direction select to the end rather than stopping.
 private offset_at(c: *Canvas, s: string, inner: Rect, x: int, y: int) -> usize
-    val h = c.text_size("").h
+    val h = line_height(c)
     val ls = line_starts(s)
     val v = ls.view()
     val first = top_line(c, s, inner)
@@ -173,7 +181,7 @@ end offset_at
 // The text, its selection and its caret, drawn from whichever line is first.
 private run(c: *Canvas, inner: Rect, s: string, sel: Selection, mine: bool)
     val look = c.theme()
-    val h = c.text_size("").h
+    val h = line_height(c)
     val ls = line_starts(s)
     val v = ls.view()
     val first = top_line(c, s, inner)
@@ -238,7 +246,7 @@ end shift
 
 // And which line is drawn at the top, by the same rule.
 private top_line(c: *Canvas, s: string, inner: Rect) -> usize
-    val h = c.text_size("").h
+    val h = line_height(c)
     val rows = if inner.h / h < 1 then 1usize else usize(inner.h / h)
     val v = line_starts(s).view()
     val at = line_of(v, clamped(c.editing(), s).head)

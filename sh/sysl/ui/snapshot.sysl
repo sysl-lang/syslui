@@ -153,7 +153,7 @@ end Snapshot
 // Take a snapshot of `v` painted at `at`, reading fonts and focus from `c`. Call it after `render`, so
 // the answer describes the frame that was just drawn.
 snapshot(v: &View, c: *Canvas, at: Rect) -> Snapshot
-    var s = Survey(c, buf(), buf(), clips(), buf(), buf(), 0)
+    var s = Survey(c, buf(), buf(), clips(), buf(), buf(), buf(), 0)
 
     s.clips.push(at)
     render(v, &s, at)
@@ -191,6 +191,9 @@ struct Node
 
     // The survey's count of drawing operations when this was opened.
     drew_from: int
+
+    // Whether it registered a tap region, so that a region registered after it can sit on top of it.
+    taps: bool
 end Node
 
 // Something raised above the tree, and how many nodes were opened before it, which it is above.
@@ -252,6 +255,11 @@ struct Survey
     raised: Buf[Overlay]
     covers: Buf[Cover]
 
+    // The tap regions registered so far, each with the index of the node that registered it. A node
+    // that took taps is above everything opened before it, which is what the hit list's last-wins
+    // order says, so it covers an earlier node that took taps too.
+    regions: Buf[Cover]
+
     // How many drawing operations have happened, which tells a tappable that drew nothing from one
     // that drew something.
     drew: int
@@ -272,6 +280,22 @@ struct Survey
     leaf(*self, role: string, r: Rect, value: string = "", marks: string = "")
         self.open(role, r, Words.Ignored, value, marks)
         self.close()
+
+    // Say that the innermost open entry takes taps over `r`, which puts it above every entry opened
+    // before it that takes taps too. Only a tappable says so: a control that registers a region of its
+    // own (a switch, a field) closes or has not opened its entry by then, so the innermost one open is
+    // someone else's. The region is what the clip lets through, as the entry's own `shown` is.
+    tap_region(*self, r: Rect)
+        val o = self.opened.view()
+
+        if o.len == 0 then return
+
+        val at = o[o.len - 1]
+        val top = self.clips.stack.view()
+
+        self.nodes.set(at, self.nodes.view()[at] with { taps = true })
+        self.regions.push(Cover(at, if top.len == 0 then r else meet(top[top.len - 1], r)))
+    end tap_region
 
     // Add a state to the innermost open entry: the checkbox's box saying that the checkbox is checked.
     mark(*self, word: string)
@@ -347,7 +371,7 @@ struct Survey
         val top = self.clips.stack.view()
         val shown = if top.len == 0 then r else meet(top[top.len - 1], r)
 
-        self.nodes.push(Node(role, "", "", value, marks, r, shown, words, parent, true, self.drew))
+        self.nodes.push(Node(role, "", "", value, marks, r, shown, words, parent, true, self.drew, false))
         self.nodes.view().len - 1
     end add
 
@@ -367,7 +391,7 @@ struct Survey
             if v[i].kept
                 id += 1
 
-                val (shown, covered) = self.exposed(v[i].shown, i)
+                val (shown, covered) = self.exposed(v[i].shown, i, v[i].taps)
                 val marks = if covered then joined(v[i].marks, "covered") else v[i].marks
 
                 out.push(Entry(id, v[i].role, v[i].label, v[i].name, v[i].value, marks, v[i].rect,
@@ -377,7 +401,7 @@ struct Survey
     end finished
 
     // What is left of `shown` after everything raised later than node `i`.
-    private exposed(*self, shown: Rect, i: usize) -> (Rect, bool)
+    private exposed(*self, shown: Rect, i: usize, taps: bool) -> (Rect, bool)
         val raised = self.covers.view()
         var left = shown
 
@@ -386,6 +410,17 @@ struct Survey
                 beside(left, raised[k].r) match
                     Some(rest) -> left = rest
                     None -> return (shown, true)
+
+        // Only a node that takes taps is under a later tap region: a group that merely contains the
+        // tappable is not clicked, so it is not covered by it.
+        if taps
+            val over = self.regions.view()
+
+            for k in 0..<over.len
+                if i < over[k].before
+                    beside(left, over[k].r) match
+                        Some(rest) -> left = rest
+                        None -> return (shown, true)
 
         (left, false)
     end exposed

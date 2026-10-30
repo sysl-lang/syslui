@@ -476,14 +476,18 @@ impl View for Tappable
     measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
 
     paint(&self, c: *Canvas, r: Rect)
+        // **The region is registered before the child paints, because the hit list is last-wins**: a
+        // tappable inside this one registers after it and so is the one the eye says was clicked.
         c.survey() match
             Some(s) ->
                 s.open(self.role, r, Words.Label, "", if self.selected then "selected" else "")
+                s.tap_region(r)
+                c.hit(r, self.action)
                 self.child.paint(c, r)
                 s.close()
-            None -> self.child.paint(c, r)
-
-        c.hit(r, self.action)
+            None ->
+                c.hit(r, self.action)
+                self.child.paint(c, r)
 
 // The constructors, and the reason they are not the struct names.
 //
