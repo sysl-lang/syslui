@@ -234,3 +234,66 @@ struct Grab
 end Grab
 
 grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0, -1, -1, false, 0, 0, 0.0, 0.0)
+
+// Which button of the pointer. A finger is `Primary`, and a button past these three is not reported.
+enum PointerButton
+    Primary
+    Secondary
+    Middle
+
+// The modifier keys held right now. `cmd` is the platform's own key: Command on a Mac, the Windows key
+// elsewhere.
+struct Modifiers derives Eq
+    shift: bool
+    ctrl: bool
+    alt: bool
+    cmd: bool
+
+no_modifiers() -> Modifiers = Modifiers(false, false, false, false)
+
+// What a frame loop tells a canvas about a button going down or coming up.
+//
+// **`Primary` is the only one a control hears.** A press of it is `point(x, y, true)` and its release
+// is `release(x, y)`, which is where a tap is decided; the other two reach only a view that asks for
+// them by name, through `Canvas.held`, `grab_by` and `drag_by`. So a right-click on a button does
+// nothing, and a right-drag that crosses a list does not scroll it.
+trait Pointing
+    press(*self, x: int, y: int, b: PointerButton)
+    let_go(*self, x: int, y: int, b: PointerButton)
+
+// The buttons beyond the primary, and the modifiers.
+//
+// **Each button has a `Grab` of its own**, because two can be held at once and they are two drags: a
+// view can follow the left button while another follows the right, and releasing one leaves the other
+// holding what it held. The primary's is the canvas's `hold`, which every control already reads.
+struct Chord
+    secondary: Grab
+    middle: Grab
+    keys: Modifiers
+
+    private of(*self, b: PointerButton) -> *Grab =
+        if b == PointerButton.Middle then &self.middle else &self.secondary
+
+    // The pointer moved, with whichever of these buttons it had down still down.
+    moved(*self, x: int, y: int)
+        self.secondary.moved(x, y, self.secondary.down)
+        self.middle.moved(x, y, self.middle.down)
+
+    press(*self, x: int, y: int, b: PointerButton) = self.of(b).moved(x, y, true)
+
+    let_go(*self, x: int, y: int, b: PointerButton) = self.of(b).moved(x, y, false)
+
+    held(*self, b: PointerButton) -> bool = self.of(b).down
+
+    claim(*self, r: Rect, slot: int, b: PointerButton) -> bool = self.of(b).claim(r, slot)
+
+    drag(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int) =
+        self.of(b).drag(r, slot, slop_x, slop_y)
+
+    origin(*self, b: PointerButton) -> (int, int)
+        val g = self.of(b)
+
+        (g.began_x, g.began_y)
+end Chord
+
+chord() -> Chord = Chord(grabbing(), grabbing(), no_modifiers())

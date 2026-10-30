@@ -5044,3 +5044,272 @@ private native_pixels_follow_device_scale_and_snap_the_transformed_anchor()
     assert(native_pixel_anchor(retina[..],3,5) == (16,30))
     assert(native_pixel_anchor(fractional[..],3,5) == (5,7))
     assert(native_pixel_anchor(rotated[..],3,5) == (2,24))
+
+// ## Which button, and the modifiers
+
+private val screen = Rect(0, 0, 100, 100)
+private val inside = Rect(10, 10, 40, 40)
+
+// **Only the primary button taps.** A control hears nothing of the other two.
+@test
+private only_the_primary_button_taps_a_control()
+    val n = signal(0)
+    val bump: &Fn() -> unit = () -> n.set(n.read() + 1)
+    val tree = text("button").on_tap(bump)
+    var c = recorder()
+
+    tree.paint(&c, screen)
+
+    c.press(5, 5, PointerButton.Secondary)
+    assert(!c.pressed(screen), "a right press presses nothing")
+    c.let_go(5, 5, PointerButton.Secondary)
+    assert_eq(n.read(), 0)
+
+    c.press(5, 5, PointerButton.Middle)
+    assert(!c.pressed(screen), "a middle press presses nothing")
+    c.let_go(5, 5, PointerButton.Middle)
+    assert_eq(n.read(), 0)
+
+    c.press(5, 5, PointerButton.Primary)
+    assert(c.pressed(screen), "a primary press presses")
+    c.let_go(5, 5, PointerButton.Primary)
+    assert_eq(n.read(), 1)
+end only_the_primary_button_taps_a_control
+
+// **A right-drag is nobody's but its asker's**: the slider's grab, the list's drag and the field's
+// focus tap all stay with the primary.
+@test
+private the_other_buttons_reach_no_grab_drag_or_focus_tap()
+    val offset = signal(0)
+    val list = long_list(offset)
+    var c = recorder()
+
+    c.press(40, 50, PointerButton.Secondary)
+    assert(!c.grab(screen, 0), "grab is the primary's")
+    assert(!c.tapped(screen), "a right press lands no focus tap")
+    c.point(40, 20)
+    list.paint(&c, screen)
+    assert_eq(offset.read(), 0)
+end the_other_buttons_reach_no_grab_drag_or_focus_tap
+
+@test
+private two_buttons_are_held_at_once_and_let_go_apart()
+    var c = recorder()
+
+    assert(!c.held(PointerButton.Primary) && !c.held(PointerButton.Secondary) && !c.held(PointerButton.Middle))
+
+    c.press(20, 20, PointerButton.Primary)
+    c.press(20, 20, PointerButton.Secondary)
+    assert(c.held(PointerButton.Primary) && c.held(PointerButton.Secondary) && !c.held(PointerButton.Middle))
+
+    c.let_go(20, 20, PointerButton.Secondary)
+    assert(c.held(PointerButton.Primary), "the left is still down")
+    assert(!c.held(PointerButton.Secondary))
+    assert(c.grab(inside, 0), "and still owns the press")
+
+    c.press(20, 20, PointerButton.Middle)
+    c.let_go(20, 20, PointerButton.Primary)
+    assert(!c.held(PointerButton.Primary))
+    assert(c.held(PointerButton.Middle), "the middle outlives the left")
+end two_buttons_are_held_at_once_and_let_go_apart
+
+// **A second button in the middle of a primary press does not disturb the tap**, in either order.
+@test
+private another_button_does_not_disturb_a_primary_tap()
+    val n = signal(0)
+    val bump: &Fn() -> unit = () -> n.set(n.read() + 1)
+    val tree = text("button").on_tap(bump)
+    var c = recorder()
+
+    tree.paint(&c, screen)
+
+    c.press(5, 5, PointerButton.Primary)
+    c.press(5, 5, PointerButton.Secondary)
+    c.let_go(5, 5, PointerButton.Secondary)
+    assert_eq(n.read(), 0)
+    c.let_go(5, 5, PointerButton.Primary)
+    assert_eq(n.read(), 1)
+
+    c.press(5, 5, PointerButton.Secondary)
+    c.press(5, 5, PointerButton.Primary)
+    c.let_go(5, 5, PointerButton.Primary)
+    assert_eq(n.read(), 2)
+    c.let_go(5, 5, PointerButton.Secondary)
+    assert_eq(n.read(), 2)
+end another_button_does_not_disturb_a_primary_tap
+
+@test
+private letting_go_of_a_button_never_pressed_changes_nothing()
+    var c = recorder()
+
+    c.let_go(7, 8, PointerButton.Secondary)
+    assert(!c.held(PointerButton.Secondary))
+    assert_eq(c.pointer(), (7, 8))
+
+    c.press(20, 20, PointerButton.Primary)
+    c.let_go(30, 30, PointerButton.Middle)
+    assert(c.held(PointerButton.Primary))
+end letting_go_of_a_button_never_pressed_changes_nothing
+
+// **The pointer keeps being reported while only a secondary button is down**, or a drag by it would
+// have no position to read.
+@test
+private a_grab_by_a_button_survives_leaving_the_rectangle()
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Secondary)
+    assert(c.grab_by(inside, 0, PointerButton.Secondary))
+
+    c.point(500, -40)
+    assert(c.grab_by(inside, 0, PointerButton.Secondary), "the grab outlives leaving")
+    assert_eq(c.pointer(), (500, -40))
+    assert_eq(c.press_origin_by(PointerButton.Secondary), (20, 20))
+    assert(c.held(PointerButton.Secondary))
+    assert(!c.grab_by(screen, 0, PointerButton.Secondary), "and nothing else can take it")
+    assert(!c.grab_by(inside, 1, PointerButton.Secondary), "not even another slot")
+
+    c.let_go(500, -40, PointerButton.Secondary)
+    assert(!c.grab_by(inside, 0, PointerButton.Secondary))
+end a_grab_by_a_button_survives_leaving_the_rectangle
+
+@test
+private a_grab_by_a_button_needs_the_press_inside_and_that_button()
+    var c = recorder()
+
+    c.press(90, 90, PointerButton.Middle)
+    assert(!c.grab_by(inside, 0, PointerButton.Middle), "the press began elsewhere")
+    assert(!c.grab_by(inside, 0, PointerButton.Secondary), "that button is not down")
+
+    c.point(20, 20)
+    assert(!c.grab_by(inside, 0, PointerButton.Middle), "moving in afterwards does not claim it")
+end a_grab_by_a_button_needs_the_press_inside_and_that_button
+
+@test
+private the_primary_is_reached_through_the_same_three_members()
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Primary)
+    assert(c.grab_by(inside, 0, PointerButton.Primary))
+    assert(c.grab(inside, 0), "one grab, not a second one")
+    assert_eq(c.press_origin_by(PointerButton.Primary), (20, 20))
+    c.let_go(20, 20, PointerButton.Primary)
+
+    c.press(20, 20, PointerButton.Primary)
+    c.point(23, 26, true)
+    assert_eq(c.drag_by(inside, 0, PointerButton.Primary, 0, 0), (3, 6))
+    assert_eq(c.drag(inside, 0, 0, 0), (0, 0))
+end the_primary_is_reached_through_the_same_three_members
+
+// **Two buttons are two drags on one rectangle**, each with its own origin and its own running total,
+// and the answers of each sum to how far the pointer has come since that button went down.
+@test
+private two_buttons_drag_one_rectangle_apart()
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Secondary)
+    c.point(25, 20)
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 0, 0), (5, 0))
+
+    c.press(25, 20, PointerButton.Middle)
+    c.point(25, 28)
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 0, 0), (0, 8))
+    assert_eq(c.drag_by(inside, 0, PointerButton.Middle, 0, 0), (0, 8))
+    assert_eq(c.press_origin_by(PointerButton.Secondary), (20, 20))
+    assert_eq(c.press_origin_by(PointerButton.Middle), (25, 20))
+
+    c.let_go(25, 28, PointerButton.Secondary)
+    c.point(200, 28)
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 0, 0), (0, 0))
+    assert_eq(c.drag_by(inside, 0, PointerButton.Middle, 0, 0), (175, 0))
+end two_buttons_drag_one_rectangle_apart
+
+@test
+private a_drag_by_a_button_waits_for_its_slop_and_keeps_the_travel()
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Secondary)
+    c.point(23, 20)
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 8, 8), (0, 0))
+    c.point(30, 20)
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 8, 8), (10, 0))
+end a_drag_by_a_button_waits_for_its_slop_and_keeps_the_travel
+
+// For the reason `drag` is: a view half out of the clip around it is not dragged from the hidden part.
+@test
+private a_drag_by_a_button_is_refused_where_the_clip_hides_the_press()
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Secondary)
+    c.point(30, 20)
+    c.clip(Rect(50, 50, 10, 10))
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 0, 0), (0, 0))
+    c.unclip()
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 0, 0), (10, 0))
+end a_drag_by_a_button_is_refused_where_the_clip_hides_the_press
+
+@test
+private a_modifier_changing_in_the_middle_of_a_drag_shows_at_once()
+    var c = recorder()
+
+    assert(c.modifiers() == no_modifiers())
+
+    c.chord.keys = Modifiers(true, false, false, false)
+    c.press(20, 20, PointerButton.Secondary)
+    assert(c.modifiers().shift)
+
+    c.point(30, 20)
+    c.chord.keys = Modifiers(false, true, true, true)
+
+    val held = c.modifiers()
+
+    assert(!held.shift && held.ctrl && held.alt && held.cmd)
+    assert(c.held(PointerButton.Secondary), "a modifier does not end the drag")
+    assert_eq(c.drag_by(inside, 0, PointerButton.Secondary, 0, 0), (10, 0))
+end a_modifier_changing_in_the_middle_of_a_drag_shows_at_once
+
+// What an application's own view has: nothing but the erased `*Canvas`.
+@test
+private a_view_reads_buttons_and_modifiers_through_the_erased_canvas()
+    val orbit = signal(0)
+    val pan = signal(0)
+    val shifted = signal(false)
+    val tree: &View = PointerReader((c, r) ->
+        val (dx, _) = c.drag_by(r, 0, PointerButton.Primary, 0, 0)
+        val (px, _) = c.drag_by(r, 0, PointerButton.Middle, 0, 0)
+
+        orbit.set(orbit.read() + dx)
+        pan.set(pan.read() + px)
+        shifted.set(c.modifiers().shift))
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Primary)
+    c.point(25, 20, true)
+    c.chord.keys = Modifiers(true, false, false, false)
+    tree.paint(&c, inside)
+    assert_eq(orbit.read(), 5)
+    assert_eq(pan.read(), 0)
+    assert(shifted.read())
+    c.let_go(25, 20, PointerButton.Primary)
+
+    c.press(25, 20, PointerButton.Middle)
+    c.point(500, 20)
+    c.chord.keys = no_modifiers()
+    tree.paint(&c, inside)
+    assert_eq(orbit.read(), 5)
+    assert_eq(pan.read(), 475)
+    assert(!shifted.read())
+end a_view_reads_buttons_and_modifiers_through_the_erased_canvas
+
+// **A canvas that implements none of this still compiles and answers that nothing is happening.**
+@test
+private a_canvas_implementing_none_of_it_answers_at_rest()
+    val tree: &View = PointerReader((c, r) ->
+        assert(!c.held(PointerButton.Primary) && !c.held(PointerButton.Secondary))
+        assert(c.modifiers() == no_modifiers())
+        assert(!c.grab_by(r, 0, PointerButton.Secondary))
+        assert_eq(c.drag_by(r, 0, PointerButton.Middle, 0, 0), (0, 0))
+        assert_eq(c.press_origin_by(PointerButton.Secondary), (-1, -1)))
+    var c = Blind()
+
+    tree.paint(&c, inside)
+end a_canvas_implementing_none_of_it_answers_at_rest

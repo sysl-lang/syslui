@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.10" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.11" }
 }
 ```
 
@@ -681,6 +681,44 @@ nobody was under the pointer to take. The recorder has the same two, which is ho
 
 **There is no fling.** A finger lifted mid-drag stops the content where it is; momentum would need a
 velocity remembered per list between frames, and the canvas has nowhere keyed to keep one yet.
+
+## Which button, and the modifiers
+
+A control hears only the primary button: `pressed`, `grab`, `drag` and a tap are all its, so a
+right-click on a button does nothing and a right-drag across a list does not scroll it. A view that
+wants more asks by name, which is what a 3D viewport does to orbit on one button and pan on another:
+
+```
+held(*self, b: PointerButton) -> bool = false
+modifiers(*self) -> Modifiers = no_modifiers()
+grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool
+drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int)
+press_origin_by(*self, b: PointerButton) -> (int, int)
+```
+
+`PointerButton` is `Primary`, `Secondary` or `Middle`; `Modifiers` is `shift`, `ctrl`, `alt` and `cmd`.
+All five have defaults, so a backend that implements none of them still compiles and reports nothing
+held.
+
+```
+paint(&self, c: *Canvas, r: Rect)
+    val (ox, oy) = c.drag_by(r, 0, PointerButton.Primary, 0, 0)
+    val (px, py) = c.drag_by(r, 0, PointerButton.Middle, 0, 0)
+
+    if c.modifiers().shift then pan(ox, oy) else orbit(ox, oy)
+    pan(px, py)
+```
+
+- **Each button is a drag of its own**, with its own origin and its own claim, so two can be held at
+  once and letting go of one leaves the other where it was.
+- **A drag keeps going outside `r`.** `grab_by` and `drag_by` key on where the press began, exactly as
+  `grab` and `drag` do, until that button comes up; `pointer()` may by then be anywhere.
+- **`modifiers` is live**, not what was held at the press: a key changing mid-drag shows at once.
+- **A wheel has no kind.** `wheel` serves a mouse and a trackpad alike, since SDL does not say which.
+
+**What a frame loop owes** (`Pointing`, implemented by `PlutoCanvas` and the recorder): `press(x, y, b)`
+and `let_go(x, y, b)` for a button, where `Primary` means `point(x, y, true)` and `release(x, y)`; and
+`chord.keys`, set each frame. The recorder takes the same calls, which is how the tests drive it.
 
 ## The backend
 

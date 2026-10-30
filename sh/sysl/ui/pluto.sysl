@@ -76,6 +76,9 @@ struct PlutoCanvas
     // Who has the keyboard, what the window has sent it, and where its caret is.
     board: Keyboard
 
+    // The buttons beyond the primary, and the modifiers. The frame loop sets `chord.keys`.
+    chord: Chord
+
     // Where the pointer is, which the frame loop sets once a frame before painting.
     point(*self, x: int, y: int, down: bool)
         self.px = x
@@ -83,6 +86,7 @@ struct PlutoCanvas
         self.down = down
         self.hold.moved(x, y, down)
         self.board.moved(x, y, down)
+        self.chord.moved(x, y)
     end point
 
     // The pointer let go at `(x, y)`, which is where a press becomes a tap -- unless something took
@@ -234,6 +238,24 @@ impl Canvas for PlutoCanvas
     override wheel(*self, r: Rect) -> (int, int) =
         if self.clips.shows(Rect(self.px, self.py, 1, 1)) then self.hold.turned(r) else (0, 0)
 
+    override held(*self, b: PointerButton) -> bool =
+        if b == PointerButton.Primary then self.down else self.chord.held(b)
+
+    override modifiers(*self) -> Modifiers = self.chord.keys
+
+    override grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool =
+        if b == PointerButton.Primary then self.grab(r, slot) else self.chord.claim(r, slot, b)
+
+    override drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int)
+        if b == PointerButton.Primary then return self.drag(r, slot, slop_x, slop_y)
+
+        val (x, y) = self.chord.origin(b)
+
+        if self.clips.shows(Rect(x, y, 1, 1)) then self.chord.drag(r, slot, b, slop_x, slop_y) else (0, 0)
+
+    override press_origin_by(*self, b: PointerButton) -> (int, int) =
+        if b == PointerButton.Primary then self.press_origin() else self.chord.origin(b)
+
     override focus(*self) -> int = self.board.focus
 
     override take_focus(*self, id: int) = self.board.take(id)
@@ -379,6 +401,24 @@ impl Canvas for PlutoCanvas
     end take_overlays
 end PlutoCanvas
 
+impl Pointing for PlutoCanvas
+    press(*self, x: int, y: int, b: PointerButton)
+        if b == PointerButton.Primary
+            self.point(x, y, true)
+        else
+            self.point(x, y, self.down)
+            self.chord.press(x, y, b)
+    end press
+
+    let_go(*self, x: int, y: int, b: PointerButton)
+        if b == PointerButton.Primary
+            self.release(x, y)
+        else
+            self.point(x, y, self.down)
+            self.chord.let_go(x, y, b)
+    end let_go
+end PlutoCanvas
+
 // A canvas over a plutovg canvas and a face, at a size in pixels.
 //
 // **It takes no text colour, and that is deliberate.** It used to, and a backend that carries its
@@ -399,7 +439,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     sizings.push(sizing(face, size))
 
     PlutoCanvas(vg, face, sizings, buf(), -1, -1, false, hits(), clips(), grabbing(), buf(),
-                phases(), buf(), dark(), buf(), keyboard())
+                phases(), buf(), dark(), buf(), keyboard(), chord())
 end pluto_canvas
 
 // One size of the face: where a run's baseline sits below the top of its line, how tall a line is,

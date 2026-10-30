@@ -238,6 +238,31 @@ trait Canvas
     // by their bar and the wheel.
     drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int) = (0, 0)
 
+    // Is this button down right now, wherever the pointer is?
+    //
+    // **`pressed`, `grab` and `drag` are the primary button's and stay so**, which is what keeps a
+    // right-click off every control. A view that wants the others names them here and through the
+    // two below, so a viewport can orbit on one button and pan on another. The default answers that
+    // nothing is held.
+    held(*self, b: PointerButton) -> bool = false
+
+    // The modifier keys held now, read live: one pressed or let go in the middle of a drag shows in
+    // the next frame's answer.
+    modifiers(*self) -> Modifiers = no_modifiers()
+
+    // `grab` for a named button: does `r` own this button's press, having been where it began? It
+    // stays true however far the pointer goes, until that button comes up.
+    grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool =
+        b == PointerButton.Primary && self.grab(r, slot)
+
+    // `drag` for a named button. A slop of 0 takes the press at its first movement.
+    drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int) =
+        if b == PointerButton.Primary then self.drag(r, slot, slop_x, slop_y) else (0, 0)
+
+    // `press_origin` for a named button.
+    press_origin_by(*self, b: PointerButton) -> (int, int) =
+        if b == PointerButton.Primary then self.press_origin() else (-1, -1)
+
     // How many points the wheel has turned this frame, if the pointer is over `r` -- and taking
     // them, so that nothing asking after `r` sees them as well.
     //
@@ -462,6 +487,9 @@ struct Recorder
     // Who has the keyboard, what it has been sent, and where its caret is.
     board: Keyboard
 
+    // The buttons beyond the primary, and the modifiers. A test sets `chord.keys` directly.
+    chord: Chord
+
     // Put the pointer somewhere, so a test can hover and press without a window.
     point(*self, x: int, y: int, down: bool = false)
         self.px = x
@@ -469,6 +497,7 @@ struct Recorder
         self.down = down
         self.hold.moved(x, y, down)
         self.board.moved(x, y, down)
+        self.chord.moved(x, y)
     end point
 
     // Let go of the pointer at `(x, y)`, which is where a press becomes a tap.
@@ -511,6 +540,24 @@ struct Recorder
 
     // A metric of the base font at the size in force, rounded to the nearest pixel.
     private scaled(*self, n: int) -> int = int(real(n) * self.font_size() / self.size + 0.5)
+end Recorder
+
+impl Pointing for Recorder
+    press(*self, x: int, y: int, b: PointerButton)
+        if b == PointerButton.Primary
+            self.point(x, y, true)
+        else
+            self.point(x, y, self.down)
+            self.chord.press(x, y, b)
+    end press
+
+    let_go(*self, x: int, y: int, b: PointerButton)
+        if b == PointerButton.Primary
+            self.release(x, y)
+        else
+            self.point(x, y, self.down)
+            self.chord.let_go(x, y, b)
+    end let_go
 end Recorder
 
 // A radius, written only when there is one.
@@ -606,6 +653,25 @@ impl Canvas for Recorder
     override wheel(*self, r: Rect) -> (int, int) =
         if self.clips.shows(Rect(self.px, self.py, 1, 1)) then self.hold.turned(r) else (0, 0)
 
+    override held(*self, b: PointerButton) -> bool =
+        if b == PointerButton.Primary then self.down else self.chord.held(b)
+
+    override modifiers(*self) -> Modifiers = self.chord.keys
+
+    override grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool =
+        if b == PointerButton.Primary then self.grab(r, slot) else self.chord.claim(r, slot, b)
+
+    // **Asked only where the clip in force shows the press**, for the reason `drag` is.
+    override drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int)
+        if b == PointerButton.Primary then return self.drag(r, slot, slop_x, slop_y)
+
+        val (x, y) = self.chord.origin(b)
+
+        if self.clips.shows(Rect(x, y, 1, 1)) then self.chord.drag(r, slot, b, slop_x, slop_y) else (0, 0)
+
+    override press_origin_by(*self, b: PointerButton) -> (int, int) =
+        if b == PointerButton.Primary then self.press_origin() else self.chord.origin(b)
+
     override focus(*self) -> int = self.board.focus
 
     override take_focus(*self, id: int) = self.board.take(id)
@@ -662,7 +728,7 @@ end Recorder
 // package's own tests is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16, size: real = 16.0) -> Recorder =
     Recorder(buf(), hits(), char_w, line_h, size, buf(), -1, -1, false, dark(), buf(), clips(),
-             grabbing(), buf(), buf(), phases(), keyboard())
+             grabbing(), buf(), buf(), phases(), keyboard(), chord())
 
 // The override in force, if anything has pushed one.
 //
@@ -691,6 +757,19 @@ end override_ink
 // having on its own: it is the cost of the tree with the cost of the drawing taken out, which is the
 // difference a benchmark is trying to see.
 struct Blind end Blind
+
+// A view that hands the canvas it is painted through to a closure, which is the shape of an
+// application's own view reading the pointer: it knows nothing but the erased `*Canvas`. In this file
+// for the reason `Blind` is.
+struct PointerReader
+    read: &Fn(*Canvas, Rect) -> unit
+end PointerReader
+
+impl View for PointerReader
+    measure(&self, c: *Canvas, avail: Size) -> Size = avail
+
+    paint(&self, c: *Canvas, r: Rect) = (self.read)(c, r)
+end PointerReader
 
 impl Canvas for Blind
     fill(*self, r: Rect, color: u32, radius: int) = ()
