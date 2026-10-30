@@ -1,0 +1,637 @@
+module sh.sysl.ui
+@tests
+
+import sysl.buf.{Buf, buf}
+import sysl.seq.{Sequence, generate}
+import sysl.text.Search
+import sh.sysl.plutovg
+
+private val WINDOW: Rect = Rect(0, 0, 400, 800)
+
+private picture() -> &Image = Image(plutovg.surface(4, 2).unwrap())
+
+private shot(v: &View) -> Snapshot
+    var c = recorder()
+
+    render(v, &c, WINDOW)
+    snapshot(v, &c, WINDOW)
+end shot
+
+private assert_shows(v: &View, expected: string)
+    val got = shot(v).dump()
+
+    assert(got == expected, s"expected:\n${expected}got:\n${got}")
+end assert_shows
+
+// A click at wherever a lookup says, through the same two steps a window delivers, with a real frame
+// before it so the regions exist.
+private click(v: &View, c: *Recorder, key: string)
+    c.taps.reset()
+    render(v, c, WINDOW)
+
+    val (x, y) = snapshot(v, c, WINDOW).click_point(key).unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+end click
+
+private no_op() -> &Fn() -> unit = () -> ()
+
+private bump(n: &Signal[int]) -> &Fn() -> unit = () -> n.set(n.read() + 1)
+
+// Every control the toolkit has, each with no name given. It is also what proves the paint output has
+// not moved: `what_a_frame_paints_has_not_moved` holds its recording from before snapshots existed.
+private all_controls(open: &Signal[bool]) -> &View
+    val rows: [][]string = [["ann", "1"], ["bob", "2"]]
+
+    column([
+        text("title"),
+        button("Save", no_op()),
+        button("Later", no_op(), Role.Secondary, Variant.Soft),
+        text("plain").on_tap(no_op()),
+        switch(signal(true)),
+        switch(signal(false)),
+        checkbox(signal(true), "Grid"),
+        checkbox(signal(false), "Snap"),
+        radio_group(["One", "Two"], signal(1)),
+        slider(signal(5), 0, 10, 100),
+        slider(signal(0.5), 0.0, 2.0, 100),
+        progress(0.25, 100),
+        meter(3.0, 0.0, 10.0, 100),
+        text_field(signal("typed"), 1),
+        text_field(signal(""), 2, hint = "empty"),
+        text_area(signal("two\nlines"), 3, rows = 2),
+        selectable("pick", signal(nothing_selected())),
+        image_sized(picture(), 8, 8),
+        divider(),
+        tabs(["A", "B"], signal(1), i -> text("panel")),
+        table([col("name"), col("n", true)], rows, signal(0), 40, on_row = Some(i -> ())),
+        scroll(text("inner"), signal(0), 20),
+        button("Menu", no_op()).popover(open, button("Item", no_op()))
+    ])
+end all_controls
+
+@test
+private every_control_kind_appears_with_no_name_given()
+    assert_shows(all_controls(signal(false)),
+        raw"""
+        @1 text "title" [0,0 400x16]
+        @2 button "Save" [0,16 400x32]
+        @3 button "Later" [0,48 400x32]
+        @4 tappable "plain" [0,80 400x16]
+        @5 switch [0,96 400x24] checked
+        @6 switch [0,120 400x24]
+        @7 checkbox "Grid" [0,144 400x18] checked
+        @8 checkbox "Snap" [0,162 400x18]
+        @9 radio "One" [0,180 400x18]
+        @10 radio "Two" [0,204 400x18] checked
+        @11 slider [0,222 400x16] value="5" range=0..10
+        @12 slider [0,238 400x16] value="0.5" range=0..2
+        @13 progress [0,254 400x6] value="0.25"
+        @14 meter [0,260 400x20] value="3" range=0..10
+        @15 textfield [0,280 400x28] value="typed"
+        @16 textfield "empty" [0,308 400x28]
+        @17 textarea [0,336 400x44] value="two\nlines"
+        @18 text "pick" [0,380 400x16]
+        @19 image [0,300 400x200] shown [0,396 400x8]
+        @20 tab "A" [0,405 24x34]
+        @21 tab "B" [24,405 24x34] selected
+        @22 text "panel" [8,448 384x16]
+        @23 table [0,472 400x72]
+          @24 text "name" [8,480 32x16]
+          @25 text "n" [56,480 8x16]
+          @26 scroll [0,504 400x40] value="0"
+            @27 row "ann 1" [0,504 400x32]
+            @28 row "bob 2" [0,536 400x32] shown [0,536 400x8]
+        @29 scroll [0,544 400x20] value="0"
+          @30 text "inner" [0,544 400x16]
+        @31 button "Menu" [0,564 400x32]
+        """)
+end every_control_kind_appears_with_no_name_given
+
+// Naming every control moves nothing and draws nothing different.
+@test
+private a_name_changes_no_paint_operation()
+    val plain = column([text("a"), button("b", no_op()).flex(), spacer(), switch(signal(true))], 4)
+    val named = column([
+        text("a").named("1"),
+        button("b", no_op()).flex().named("2"),
+        spacer().named("3"),
+        switch(signal(true)).named("4")
+    ], 4).named("5")
+
+    var c = recorder()
+    var d = recorder()
+
+    render(plain, &c, WINDOW)
+    render(named, &d, WINDOW)
+
+    assert(c.dump() == d.dump(), s"${c.dump()}against\n${d.dump()}")
+end a_name_changes_no_paint_operation
+
+// A name reaches the control inside it, however much chain lies between.
+@test
+private a_name_lands_on_the_control_it_wraps()
+    assert_shows(button("Box", no_op()).padding(10).background(0).named("palette.box"),
+        raw"""
+        @1 button "Box" name=palette.box [10,10 380x780]
+        """)
+end a_name_lands_on_the_control_it_wraps
+
+@test
+private a_name_around_several_things_is_a_group_and_nests()
+    assert_shows(column([
+        text("top"),
+        column([
+            button("a", no_op()),
+            column([button("b", no_op()).named("in.b"), text("c")]).named("inner")
+        ]).named("outer")
+    ]),
+        raw"""
+        @1 text "top" [0,0 400x16]
+        @2 group name=outer [0,16 400x80]
+          @3 button "a" [0,16 400x32]
+          @4 group name=inner [0,48 400x48]
+            @5 button "b" name=in.b [0,48 400x32]
+            @6 text "c" [0,80 400x16]
+        """)
+end a_name_around_several_things_is_a_group_and_nests
+
+// A name on something the toolkit has no role for is still something to find.
+@test
+private a_name_on_a_plain_view_keeps_it_reported()
+    assert_shows(spacer().on_tap(no_op()).named("hot"),
+        raw"""
+        @1 view name=hot [0,0 400x800]
+        """)
+end a_name_on_a_plain_view_keeps_it_reported
+
+@test
+private two_names_on_one_control_keep_both()
+    val s = shot(button("x", no_op()).named("in").named("out"))
+
+    assert_eq(s.find("in").unwrap().role, "button")
+    assert_eq(s.find("out").unwrap().role, "group")
+end two_names_on_one_control_keep_both
+
+@test
+private an_empty_tree_shows_nothing_and_finds_nothing()
+    val s = shot(spacer())
+
+    assert_eq(s.len(), usize(0))
+    assert_eq(s.dump(), "")
+    assert_eq(s.find("x").unwrap_err().kind, MissKind.Unknown)
+    assert_eq(s.find("").unwrap_err().kind, MissKind.Unknown)
+end an_empty_tree_shows_nothing_and_finds_nothing
+
+@test
+private an_unknown_name_is_refused_and_says_which()
+    val miss = shot(button("x", no_op()).named("a")).click_point("b").unwrap_err()
+
+    assert_eq(miss.kind, MissKind.Unknown)
+    assert_eq(miss.message, "nothing on screen is called 'b'")
+end an_unknown_name_is_refused_and_says_which
+
+@test
+private a_duplicate_name_is_refused_and_names_both()
+    val s = shot(column([button("one", no_op()).named("d"), text("mid"), button("two", no_op()).named("d")]))
+    val miss = s.click_point("d").unwrap_err()
+
+    assert_eq(miss.kind, MissKind.Duplicate)
+    assert_eq(miss.message, "'d' names two controls: @1 button \"one\" name=d [0,0 400x32] " +
+                            "and @3 button \"two\" name=d [0,48 400x32]")
+
+    // Each is still reachable by its reference.
+    assert_eq(s.click_point("@3").unwrap(), (200, 64))
+end a_duplicate_name_is_refused_and_names_both
+
+// A duplicate only counts if both are on screen: the same name scrolled out is not a second control.
+@test
+private a_name_scrolled_out_is_no_duplicate()
+    val list = column([button("one", no_op()).named("d").frame(100, 40), spacer().frame(100, 500),
+                       button("two", no_op()).named("d").frame(100, 40)])
+
+    assert_eq(shot(scroll(list, signal(0), 100)).find("d").unwrap().label, "one")
+end a_name_scrolled_out_is_no_duplicate
+
+@test
+private a_reference_finds_its_entry_and_a_name_wins_over_one()
+    val s = shot(column([text("a"), button("b", no_op()).named("@1")]))
+
+    assert_eq(s.find("@2").unwrap().label, "b")
+    assert_eq(s.find("@1").unwrap().label, "b")
+    assert_eq(s.find("@9").unwrap_err().kind, MissKind.Unknown)
+end a_reference_finds_its_entry_and_a_name_wins_over_one
+
+private long_list() -> &View =
+    column(generate(usize(20), i -> button(s"row${i}", no_op()).named(s"row.${i}")))
+
+@test
+private what_is_scrolled_out_is_absent()
+    // Thirty-two points a row and a window of eighty: rows one and two show, and part of three.
+    val s = shot(scroll(long_list(), signal(40), 80))
+
+    assert_shows(scroll(long_list(), signal(40), 80),
+        raw"""
+        @1 scroll [0,0 400x80] value="40"
+          @2 button "row1" name=row.1 [0,-8 400x32] shown [0,0 400x24]
+          @3 button "row2" name=row.2 [0,24 400x32]
+          @4 button "row3" name=row.3 [0,56 400x32] shown [0,56 400x24]
+        """)
+    assert_eq(s.find("row.0").unwrap_err().kind, MissKind.Unknown)
+    assert_eq(s.find("row.4").unwrap_err().kind, MissKind.Unknown)
+end what_is_scrolled_out_is_absent
+
+// The middle of a partly clipped control is often clipped itself, so the click point has to be the
+// middle of what shows.
+@test
+private a_click_point_is_inside_the_visible_part()
+    val s = shot(scroll(long_list(), signal(40), 80))
+    val (x, y) = s.click_point("row.1").unwrap()
+    val e = s.find("row.1").unwrap()
+
+    assert_eq((x, y), (200, 12))
+    assert(e.shown.holds(x, y))
+    assert_eq(e.rect.y + e.rect.h / 2, 8)
+
+    assert_eq(s.click_point("row.3").unwrap(), (200, 68))
+end a_click_point_is_inside_the_visible_part
+
+// A clip from anything counts, and two nested clips count together.
+@test
+private nested_clips_both_cut_what_shows()
+    val v = scroll(scroll(column([button("deep", no_op()).named("d")]), signal(0), 20), signal(10), 15)
+    val e = shot(v).find("d").unwrap()
+
+    assert_eq(e.rect, Rect(0, -10, 400, 32))
+    assert_eq(e.shown, Rect(0, 0, 400, 10))
+end nested_clips_both_cut_what_shows
+
+// What falls outside the window is as absent as what is scrolled away.
+@test
+private what_falls_outside_the_window_is_absent()
+    val v = column([spacer().frame(10, 790), button("half", no_op()).named("h"), text("gone").named("g")])
+    val s = shot(v)
+
+    assert_eq(s.find("h").unwrap().shown, Rect(0, 790, 400, 10))
+    assert_eq(s.find("g").unwrap_err().kind, MissKind.Unknown)
+end what_falls_outside_the_window_is_absent
+
+@test
+private a_table_reports_only_its_window()
+    val rows: [][]string = [["a"], ["b"], ["c"], ["d"], ["e"], ["f"]]
+    val got = shot(table([col("t")], rows, signal(64), 32)).dump()
+
+    assert(got.contains("\"c\""), got)
+    assert(!got.contains("\"a\""), got)
+    assert(!got.contains("\"e\""), got)
+end a_table_reports_only_its_window
+
+@test
+private an_open_popover_is_an_overlay_above_what_it_covers()
+    val v = column([
+        button("Menu", no_op()).named("menu").popover(signal(true), button("Item", no_op()).named("item")),
+        text("below").named("under")
+    ])
+
+    assert_shows(v,
+        raw"""
+        @1 button "Menu" name=menu [0,0 400x32] covered
+        @2 text "below" name=under [0,32 400x16] covered
+        @3 overlay [0,36 48x32]
+          @4 button "Item" name=item [0,36 48x32]
+        """)
+
+    val s = shot(v)
+
+    assert_eq(s.click_point("item").unwrap(), (24, 52))
+    assert_eq(s.click_point("menu").unwrap_err().kind, MissKind.Covered)
+end an_open_popover_is_an_overlay_above_what_it_covers
+
+@test
+private a_closed_popover_reports_only_its_anchor()
+    assert_shows(button("Menu", no_op()).popover(signal(false), text("Item")),
+        raw"""
+        @1 button "Menu" [0,0 400x800]
+        """)
+end a_closed_popover_reports_only_its_anchor
+
+@test
+private a_modal_covers_the_tree_and_its_content_can_be_clicked()
+    val back = signal(0)
+    val ok = signal(0)
+    val v = button("back", bump(back)).named("b").modal(signal(true), button("ok", bump(ok)).named("ok"))
+    var c = recorder()
+
+    click(v, &c, "ok")
+    assert_eq(ok.read(), 1)
+    assert_eq(back.read(), 0)
+
+    render(v, &c, WINDOW)
+    assert_eq(snapshot(v, &c, WINDOW).click_point("b").unwrap_err().kind, MissKind.Covered)
+end a_modal_covers_the_tree_and_its_content_can_be_clicked
+
+// A menu raised from inside a dialog: an overlay raising an overlay, in the order they stack.
+@test
+private an_overlay_may_raise_an_overlay()
+    val inner = button("deep", no_op()).named("deep")
+    val outer = button("menu", no_op()).named("menu").popover(signal(true), inner)
+    val s = shot(text("root").modal(signal(true), outer))
+
+    assert_eq(s.click_point("deep").is_ok(), true)
+    assert_eq(s.click_point("menu").unwrap_err().kind, MissKind.Covered)
+end an_overlay_may_raise_an_overlay
+
+// An overlay with no catcher covers only where it is, so what shows beside it is still clickable.
+private struct Raiser
+    over: &View
+    at: Rect
+
+impl View for Raiser
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(1, 1)
+
+    paint(&self, c: *Canvas, r: Rect) = c.raise_above(self.over, self.at)
+
+@test
+private a_part_covered_control_is_clicked_where_it_shows()
+    val hit = signal(0)
+    val v = column([
+        button("wide", bump(hit)).named("w").frame(100, 40),
+        Raiser(text("tip").background(0), Rect(0, 0, 60, 40))
+    ])
+    var c = recorder()
+
+    render(v, &c, WINDOW)
+
+    val s = snapshot(v, &c, WINDOW)
+
+    assert_eq(s.find("w").unwrap().rect, Rect(0, 0, 400, 40))
+    assert_eq(s.find("w").unwrap().shown, Rect(60, 0, 340, 40))
+    assert_eq(s.click_point("w").unwrap(), (230, 20))
+
+    click(v, &c, "w")
+    assert_eq(hit.read(), 1)
+end a_part_covered_control_is_clicked_where_it_shows
+
+// The whole of what a name is for: the same name, in a tree built again with everything moved.
+@test
+private a_name_survives_a_rebuild_between_frames()
+    val hit = signal(0)
+    val tap = bump(hit)
+    val before = column([button("go", tap).named("go")])
+    val after = column([text("new"), text("new"), button("go", tap).named("go")])
+    var c = recorder()
+
+    click(before, &c, "go")
+    assert_eq(hit.read(), 1)
+
+    render(after, &c, WINDOW)
+
+    val s = snapshot(after, &c, WINDOW)
+
+    assert_eq(s.find("go").unwrap().rect, Rect(0, 32, 400, 32))
+    assert_eq(s.find("go").unwrap().id, 3)
+
+    click(after, &c, "go")
+    assert_eq(hit.read(), 2)
+end a_name_survives_a_rebuild_between_frames
+
+@test
+private a_click_at_the_point_activates_each_control_and_only_it()
+    val on = signal(false)
+    val choice = signal(0)
+    val tab = signal(0)
+    val saved = signal(0)
+    val other = signal(0)
+    val v = column([
+        button("other", bump(other)).named("other"),
+        button("save", bump(saved)).named("save"),
+        switch(on).named("sw"),
+        checkbox(on, "box").named("box"),
+        radio(choice, 2, "r").named("radio"),
+        tabs(["A", "B"], tab, i -> text("p")).named("tabs")
+    ])
+    var c = recorder()
+
+    click(v, &c, "save")
+    assert_eq(saved.read(), 1)
+    assert_eq(other.read(), 0)
+
+    click(v, &c, "sw")
+    assert_eq(on.read(), true)
+
+    click(v, &c, "box")
+    assert_eq(on.read(), false)
+
+    click(v, &c, "radio")
+    assert_eq(choice.read(), 2)
+
+    render(v, &c, WINDOW)
+    click(v, &c, snapshot_ref_of_tab(v, &c))
+    assert_eq(tab.read(), 1)
+end a_click_at_the_point_activates_each_control_and_only_it
+
+// The reference of the second tab, by reading the snapshot as an agent would.
+private snapshot_ref_of_tab(v: &View, c: *Recorder) -> string
+    val s = snapshot(v, c, WINDOW)
+    val all = s.entries.view()
+
+    for i in 0..<all.len
+        if all[i].role == "tab" && all[i].label == "B" then return s"@${all[i].id}"
+
+    "none"
+end snapshot_ref_of_tab
+
+@test
+private a_click_on_a_field_focuses_it_and_the_snapshot_says_so()
+    val v = column([text_field(signal("abc"), 7).named("f"), slider(signal(1), 0, 5, 50, id = 8).named("s")])
+    var c = recorder()
+
+    click(v, &c, "f")
+    render(v, &c, WINDOW)
+    assert_eq(snapshot(v, &c, WINDOW).find("f").unwrap().marks, "focused")
+    assert_eq(snapshot(v, &c, WINDOW).find("s").unwrap().marks, "range=0..5")
+
+    click(v, &c, "s")
+    render(v, &c, WINDOW)
+    assert_eq(snapshot(v, &c, WINDOW).find("f").unwrap().marks, "")
+    assert_eq(snapshot(v, &c, WINDOW).find("s").unwrap().marks, "range=0..5 focused")
+end a_click_on_a_field_focuses_it_and_the_snapshot_says_so
+
+// A value is reported as what the control holds now, and quoted so one line stays one line.
+@test
+private a_value_is_current_and_cannot_break_its_line()
+    val text_of = signal("say \"hi\"\\\nnext")
+    val v = text_field(text_of, 1).named("f")
+
+    assert_shows(v,
+        raw"""
+        @1 textfield name=f [0,0 400x800] value="say \"hi\"\\\nnext"
+        """)
+
+    text_of.set("")
+    assert_eq(shot(v).find("f").unwrap().value, "")
+end a_value_is_current_and_cannot_break_its_line
+
+// A meter with no reading has no value to report, rather than a word that looks like one.
+@test
+private a_meter_with_no_reading_reports_no_value()
+    val nan = 0.0 / 0.0
+
+    assert_eq(shot(meter(nan, 0.0, 1.0, 50).named("m")).find("m").unwrap().value, "")
+end a_meter_with_no_reading_reports_no_value
+
+// A snapshot taken twice over one frame is the same text, and the frame after it the same paint.
+@test
+private a_snapshot_is_deterministic_and_touches_nothing()
+    val value = signal(3)
+    val text_of = signal("abc")
+    val offset = signal(0)
+    val v = column([
+        slider(value, 0, 10, 100, id = 1),
+        text_field(text_of, 2),
+        scroll(long_list(), offset, 80),
+        button("m", no_op()).popover(signal(true), text("item"))
+    ])
+    var c = recorder()
+
+    // Focus in the slider and a key waiting: the survey must neither act on it nor use it up.
+    render(v, &c, WINDOW)
+    c.take_focus(1)
+    c.key(press(Key.End))
+
+    val before = c.dump()
+    val first = snapshot(v, &c, WINDOW).dump()
+    val second = snapshot(v, &c, WINDOW).dump()
+
+    assert_eq(first, second)
+    assert_eq(c.dump(), before)
+    assert_eq(value.read(), 3)
+    assert_eq(c.focus(), 1)
+    assert_eq(c.keys().len, usize(1))
+    assert_eq(c.font_size(), 16.0)
+
+    render(v, &c, WINDOW)
+    assert_eq(value.read(), 10, "the same key moves it in a real frame, or the line above proved nothing")
+
+    // A press held along the slider: the survey must not drag it, and a real frame then does.
+    c.point(60, 8, true)
+    snapshot(v, &c, WINDOW)
+    assert_eq(value.read(), 10)
+
+    render(v, &c, WINDOW)
+    assert(value.read() < 10, "the same press moves it in a real frame, or the line above proved nothing")
+
+    // Focus in the field and a key waiting: the survey must not type it either.
+    c.release(60, 8)
+    render(v, &c, WINDOW)
+    c.take_focus(2)
+    c.edit(Selection(3, 3))
+    c.key(press(Key.Backspace))
+    snapshot(v, &c, WINDOW)
+    assert_eq(text_of.read(), "abc")
+
+    render(v, &c, WINDOW)
+    assert_eq(text_of.read(), "ab")
+end a_snapshot_is_deterministic_and_touches_nothing
+
+// A subtree's size and theme are in force for the survey as they were for the paint, so a big heading
+// lands where it was drawn, and both are put back.
+@test
+private a_snapshot_measures_by_the_size_in_force()
+    val v = column([text("big").font_size(32.0).named("b"), text("after").named("a")])
+    val s = shot(v)
+
+    assert_eq(s.find("a").unwrap().rect.y, 32)
+end a_snapshot_measures_by_the_size_in_force
+
+// What it costs a frame not to be surveyed: one question per control, and text asks none.
+//
+// **The canvas below implements only what it must and counts the asking**, which holds the design to
+// its claim: no container, modifier or run of text asks, and no answer of `None` starts any work. That
+// allocation stays exactly as it was is measured from outside the suite, because the language has no
+// allocation counter; the README's section on snapshots gives the figure and how to take it.
+private struct Counting
+    asked: int
+
+impl Canvas for Counting
+    override survey(*self) -> Option[*Survey]
+        self.asked += 1
+
+        None
+    end survey
+
+    fill(*self, r: Rect, color: u32, radius: int) = ()
+
+    stroke(*self, r: Rect, color: u32, width: int, radius: int, dash: int) = ()
+
+    text(*self, r: Rect, t: string) = ()
+
+    clip(*self, r: Rect) = ()
+
+    unclip(*self) = ()
+
+    ink(*self, color: u32) = ()
+
+    unink(*self) = ()
+
+    hovered(*self, r: Rect) -> bool = false
+
+    pressed(*self, r: Rect) -> bool = false
+
+    text_size(*self, s: string) -> Size = Size(8, 16)
+
+    raise_above(*self, v: &View, at: Rect) = ()
+
+    take_overlays(*self) -> Buf[Overlay] = buf()
+
+    hit(*self, r: Rect, f: &Fn() -> unit) = ()
+end Counting
+
+@test
+private a_normal_frame_asks_once_per_control_and_never_for_text()
+    var c = Counting(0)
+
+    render(column([text("a"), row([text("b"), text("c")]), spacer(), divider()]).padding(2), &c, WINDOW)
+    assert_eq(c.asked, 0)
+
+    // A button and a named view ask once each; a switch once; a checkbox once for the tappable and
+    // once for its box.
+    render(column([button("a", no_op()).named("n"), switch(signal(true)), checkbox(signal(true), "c")]),
+           &c, WINDOW)
+    assert_eq(c.asked, 5)
+end a_normal_frame_asks_once_per_control_and_never_for_text
+
+// A canvas that was never told about snapshots answers with the trait's own body.
+@test
+private a_canvas_is_not_surveying_unless_it_is_the_survey()
+    var c = recorder()
+    var b = blind()
+
+    assert(c.survey().is_none())
+    assert(b.survey().is_none())
+end a_canvas_is_not_surveying_unless_it_is_the_survey
+
+// A recording made on the commit before snapshots existed. Nothing a view paints has moved if this
+// still holds.
+@test
+private what_a_frame_paints_has_not_moved()
+    var c = recorder()
+
+    render(all_controls(signal(true)), &c, WINDOW)
+
+    val made = fnv(c.dump())
+
+    assert(made == 12353207007764517522, s"${made}\n${c.dump()}")
+end what_a_frame_paints_has_not_moved
+
+// FNV-1a, so a recording of a hundred and fifty lines can be held as one number. A failure prints the
+// recording itself.
+private fnv(s: string) -> u64
+    var h: u64 = 14695981039346656037
+
+    for b in s.bytes
+        h = (h ^ u64(b)) *% 1099511628211
+
+    h
+end fnv

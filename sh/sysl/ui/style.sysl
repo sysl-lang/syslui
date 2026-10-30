@@ -133,7 +133,8 @@ reactive(body: &Fn(Interaction, Theme) -> &View) -> &View = Reactive(body)
 //     button("Draft", edit, .Accent, .Dashed)     // a dashed outline: provisional
 button(label: string, on_tap: &Fn() -> unit, role: Role = Role.Primary,
        variant: Variant = Variant.Filled) -> &View =
-    reactive((i, t) -> button_face(t, label, i, t.color(role), variant)).on_tap(on_tap)
+    Tappable(reactive((i, t) -> button_face(t, label, i, t.color(role), variant)), on_tap, "button",
+             false)
 
 // **One function from a theme, a label and a state to a view**, which is the shape a `ButtonStyle`
 // would have if styles became a trait -- and the reason this is not written inline in the lambda.

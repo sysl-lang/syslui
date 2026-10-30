@@ -240,7 +240,16 @@ trait View
     // saves: it says that input composes with the chain the same way drawing does, so anything is
     // tappable and a button is a composition rather than a type. `button` below is three links and
     // no new view.
-    on_tap(&self, f: &Fn() -> unit) -> &View = Tappable(self, f)
+    on_tap(&self, f: &Fn() -> unit) -> &View = Tappable(self, f, TAPPABLE, false)
+
+    // Give this view a stable name, which a `snapshot` reports and a lookup finds.
+    //
+    //     button("Box", add_box).named("palette.box")
+    //
+    // **Nothing moves and no pixel changes**: it measures, paints and places as this view does. A
+    // tree is rebuilt constantly, and the name is what stays the same across rebuilds when a
+    // rectangle and a snapshot's reference do not.
+    named(&self, name: string) -> &View = Named(self, name)
 end View
 
 // A leaf: one run of text, measured by whatever font the canvas draws with.
@@ -457,11 +466,23 @@ struct Tappable
     child: &View
     action: &Fn() -> unit
 
+    // What a snapshot calls it: `button`, `checkbox`, `tab`, or `tappable` for anything else.
+    role: string
+
+    // Whether a snapshot reports it as the chosen one of a set, which only a tab is.
+    selected: bool
+
 impl View for Tappable
     measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
 
     paint(&self, c: *Canvas, r: Rect)
-        self.child.paint(c, r)
+        c.survey() match
+            Some(s) ->
+                s.open(self.role, r, Words.Label, "", if self.selected then "selected" else "")
+                self.child.paint(c, r)
+                s.close()
+            None -> self.child.paint(c, r)
+
         c.hit(r, self.action)
 
 // The constructors, and the reason they are not the struct names.

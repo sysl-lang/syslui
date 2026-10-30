@@ -162,6 +162,12 @@ impl View for Table
         Size(avail.w, self.height + row_height(c, c.theme().table))
 
     paint(&self, c: *Canvas, r: Rect)
+        val noted = c.survey()
+
+        noted match
+            Some(n) -> n.open("table", r)
+            None -> ()
+
         val s = c.theme().table
         val h = row_height(c, s)
         val w = widths(c, s, self.columns, self.rows, r.w)
@@ -172,6 +178,10 @@ impl View for Table
 
         scroll(body(s, self, w, h), self.offset, self.height)
             .paint(c, Rect(r.x, r.y + h, r.w, self.height))
+
+        noted match
+            Some(n) -> n.close()
+            None -> ()
     end paint
 
 // The header row: the column titles on the style's own ground, over a rule.
@@ -242,7 +252,7 @@ private dressed(s: TableStyle, line: &View, ground: u32, on_row: Option[&Fn(usiz
     on_row match
         // **The index is captured, not the row**, so a handler outlives whatever the table was built
         // from and an application looks the row up in its own model -- which is where the row lives.
-        Some(f) -> v.on_tap(() -> f(at))
+        Some(f) -> Tappable(v, () -> f(at), "row", false)
         None -> v
 end dressed
 

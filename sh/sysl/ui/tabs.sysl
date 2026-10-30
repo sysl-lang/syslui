@@ -63,7 +63,7 @@ end tabs
 // The hover is the opposite and is read while painting, because it is not application state and
 // there is nothing to be out of step with.
 private tab_header(label: string, at: int, on: bool, chosen: &Signal[int]) -> &View =
-    reactive((i, t) -> header_face(t, label, on, i)).on_tap(() -> chosen.set(at))
+    Tappable(reactive((i, t) -> header_face(t, label, on, i)), () -> chosen.set(at), "tab", on)
 
 private header_face(t: Theme, label: string, on: bool, i: Interaction) -> &View
     // The chosen one is full strength; the others are mixed toward the panel and come back toward

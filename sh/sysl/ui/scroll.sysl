@@ -148,9 +148,19 @@ impl View for Scroll
         // window rather than squeezed into it.
         val inner = self.child.measure(c, Size(r.w, 1_000_000))
 
+        val noted = c.survey()
+
+        noted match
+            Some(n) -> n.open("scroll", window, Words.Own, number(real(self.offset.read())))
+            None -> ()
+
         c.clip(window)
         self.child.paint(c, Rect(r.x, r.y - self.offset.read(), r.w, inner.h))
         c.unclip()
+
+        noted match
+            Some(n) -> n.close()
+            None -> ()
 
         // **Only when there is something to scroll.** A bar on a list that fits is an interface
         // element that says nothing, and it would be drawn full-height over content that has no

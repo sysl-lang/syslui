@@ -1,0 +1,548 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// What is on screen, as text, and where to click to reach any of it.
+//
+// **The half of driving an application that a window system cannot know.** Pixels and coordinates
+// belong to whatever owns the window; that the thing at those coordinates is the "Box" button of the
+// palette is known only to the tree. So a program, a test or an agent asks for a `Snapshot` after a
+// frame, reads it the way it would read a browser's accessibility tree, and says `palette.box` rather
+// than a position that changes whenever anything is laid out differently.
+//
+//     render(tree, c, window)
+//     val on_screen = snapshot(tree, c, window)
+//     print(on_screen.dump())
+//     val (x, y) = on_screen.click_point("palette.box")?
+//
+// **A snapshot is a second paint pass, through a canvas that draws nothing.** Layout is decided during
+// `paint` and a `Reactive`'s subtree does not exist at any other time, so paint is the only walk that
+// knows what is there and where it landed. `Survey` is that canvas: it borrows the real canvas's font
+// and theme, so everything lands where it did, and it refuses to pass on anything that would change
+// the application or the real canvas. It answers that no key arrived, nothing was tapped and nothing
+// is held, so a slider writes nothing and a field types nothing; nothing it draws reaches the backend.
+//
+// **It costs nothing unless it is asked for.** A control asks its canvas `survey()` as it paints, and
+// every other canvas answers `None` from the trait's own body, so a normal frame makes an indirect call
+// or two per control, builds no string and allocates nothing.
+
+// Why a lookup found no point to click.
+enum MissKind
+    // Nothing on screen has that name or reference, which includes a control scrolled out of view.
+    Unknown
+
+    // Two things on screen answer to the name. The first one found would be a guess, and a click that
+    // lands on the wrong control does damage a refusal does not.
+    Duplicate
+
+    // It is on screen, but something raised above it would take the click.
+    Covered
+end MissKind
+
+struct Missed
+    kind: MissKind
+
+    // A sentence naming what was asked for and, for a duplicate, both of the controls.
+    message: string
+
+// One thing on screen.
+struct Entry
+    // Its reference in this snapshot, in reading order from 1, and written `@1`. It means nothing in
+    // any other frame; a name is what survives.
+    id: int
+
+    // What kind of thing it is: `button`, `checkbox`, `text`, `slider`, `overlay`.
+    role: string
+
+    // What it says: a button's caption, or the words of a run of text.
+    label: string
+
+    // The name given by `.named`, empty where there is none.
+    name: string
+
+    // What it currently holds: a field's text, a slider's reading. Empty where it holds nothing.
+    value: string
+
+    // Its state, as words separated by spaces: `checked`, `selected`, `focused`, `covered`.
+    marks: string
+
+    // Where layout put it, in points, whatever of that can be seen.
+    rect: Rect
+
+    // The part that can be seen, once clips and anything raised above it are taken away.
+    shown: Rect
+
+    // How many entries it is nested inside.
+    depth: int
+
+    // Something raised above it would take a click anywhere on it.
+    covered: bool
+
+    // The middle of the part that can be seen, which a click at this point is inside.
+    centre(self) -> (int, int) = (self.shown.x + self.shown.w / 2, self.shown.y + self.shown.h / 2)
+
+    // One line, without its indentation.
+    line(self) -> string
+        val said = if self.label.len > 0 then s" ${quoted(self.label)}" else ""
+        val called = if self.name.len > 0 then s" name=${self.name}" else ""
+        val cut = if self.shown == self.rect then "" else s" shown ${at_text(self.shown)}"
+        val holds = if self.value.len > 0 then s" value=${quoted(self.value)}" else ""
+        val state = if self.marks.len > 0 then s" ${self.marks}" else ""
+
+        s"@${self.id} ${self.role}${said}${called} ${at_text(self.rect)}${cut}${holds}${state}"
+    end line
+end Entry
+
+// Everything on screen in one frame, in reading order: a parent before what it contains, and things
+// raised above the tree after the tree.
+struct Snapshot
+    entries: Buf[Entry]
+
+    // How many things are on screen.
+    len(self) -> usize = self.entries.view().len
+
+    // The readable form: one line an entry, indented two spaces a level. The same tree and the same
+    // state always give the same text, byte for byte.
+    dump(self) -> string
+        var out = ""
+        val v = self.entries.view()
+
+        for i in 0..<v.len
+            for _ in 0..<v[i].depth
+                out = out + "  "
+
+            out = out + v[i].line() + "\n"
+
+        out
+    end dump
+
+    // The entry a name or a reference (`@3`) means. A name wins if somebody has named a control `@3`.
+    find(self, key: string) -> Result[Entry, Missed]
+        val v = self.entries.view()
+        var found: Option[Entry] = None
+
+        for i in 0..<v.len
+            if key.len > 0 && v[i].name == key
+                found match
+                    Some(first) ->
+                        return Err(Missed(MissKind.Duplicate,
+                                          s"'${key}' names two controls: ${first.line()} and ${v[i].line()}"))
+                    None -> found = Some(v[i])
+
+        found match
+            Some(e) -> return Ok(e)
+            None -> ()
+
+        for i in 0..<v.len
+            if s"@${v[i].id}" == key then return Ok(v[i])
+
+        Err(Missed(MissKind.Unknown, s"nothing on screen is called '${key}'"))
+    end find
+
+    // Where to click to reach a name or a reference: the centre of its visible part.
+    click_point(self, key: string) -> Result[(int, int), Missed]
+        val e = self.find(key)?
+
+        if e.covered
+            return Err(Missed(MissKind.Covered, s"'${key}' is under something raised above it: ${e.line()}"))
+
+        Ok(e.centre())
+    end click_point
+end Snapshot
+
+// Take a snapshot of `v` painted at `at`, reading fonts and focus from `c`. Call it after `render`, so
+// the answer describes the frame that was just drawn.
+snapshot(v: &View, c: *Canvas, at: Rect) -> Snapshot
+    var s = Survey(c, buf(), buf(), clips(), buf(), buf(), 0)
+
+    s.clips.push(at)
+    render(v, &s, at)
+    s.finished()
+end snapshot
+
+// What a run of text painted inside a node becomes.
+enum Words
+    // Part of this control's label, as a button's caption is.
+    Label
+
+    // An entry of its own, as the text inside a group or a scrolling list is.
+    Own
+
+    // Nothing, because the control already reports it: a field's text is its value.
+    Ignored
+end Words
+
+// An entry while it is still being worked out.
+struct Node
+    role: string
+    label: string
+    name: string
+    value: string
+    marks: string
+    rect: Rect
+    shown: Rect
+    words: Words
+
+    // The enclosing node, or -1. Always earlier in the list.
+    parent: int
+
+    // Whether this is reported. A node that is dropped stays in the list so that indices hold still.
+    kept: bool
+
+    // The survey's count of drawing operations when this was opened.
+    drew_from: int
+end Node
+
+// Something raised above the tree, and how many nodes were opened before it, which it is above.
+struct Cover
+    before: usize
+    r: Rect
+
+// A view raised while surveying: the view itself, inside an `overlay` entry.
+private struct Raised
+    child: &View
+
+impl View for Raised
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(s) ->
+                s.cover(r)
+                s.open("overlay", r)
+                self.child.paint(c, r)
+                s.close()
+            None -> self.child.paint(c, r)
+    end paint
+
+// A view with a stable name, for a snapshot to report and a lookup to find.
+//
+// **It measures, paints and places exactly as its child does**, so naming a view moves nothing and
+// changes no pixel. Being the last link of a chain is therefore not required: it answers `weight` and
+// `place` for its child, so `.flex().named("x")` still flexes.
+struct Named
+    child: &View
+    name: string
+
+impl View for Named
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    override weight(&self) -> int = self.child.weight()
+
+    override place(&self) -> (int, int) = self.child.place()
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(s) ->
+                s.open_named(self.name, r)
+                self.child.paint(c, r)
+                s.close()
+            None -> self.child.paint(c, r)
+    end paint
+
+// The canvas a snapshot is painted through.
+struct Survey
+    inner: *Canvas
+    nodes: Buf[Node]
+
+    // The nodes still open, innermost last.
+    opened: Buf[usize]
+
+    clips: Clips
+    raised: Buf[Overlay]
+    covers: Buf[Cover]
+
+    // How many drawing operations have happened, which tells a tappable that drew nothing from one
+    // that drew something.
+    drew: int
+
+    // Open an entry. Everything painted before the matching `close` is inside it.
+    open(*self, role: string, r: Rect, words: Words = Words.Own, value: string = "", marks: string = "")
+        self.opened.push(self.add(role, r, words, value, marks))
+
+    // Open the entry a `.named` view stands for. `close` decides what it turns out to be.
+    open_named(*self, name: string, r: Rect)
+        val i = self.add(NAMED, r, Words.Own, "", "")
+
+        self.nodes.set(i, self.nodes.view()[i] with { name = name })
+        self.opened.push(i)
+    end open_named
+
+    // An entry with nothing inside it.
+    leaf(*self, role: string, r: Rect, value: string = "", marks: string = "")
+        self.open(role, r, Words.Ignored, value, marks)
+        self.close()
+
+    // Add a state to the innermost open entry: the checkbox's box saying that the checkbox is checked.
+    mark(*self, word: string)
+        val o = self.opened.view()
+
+        if o.len == 0 then return
+
+        val n = self.nodes.view()[o[o.len - 1]]
+
+        self.nodes.set(o[o.len - 1], n with { marks = joined(n.marks, word) })
+    end mark
+
+    // Give the innermost open entry a label that is not painted as one: a field's hint.
+    label(*self, word: string)
+        val o = self.opened.view()
+
+        if o.len == 0 then return
+
+        self.nodes.set(o[o.len - 1], self.nodes.view()[o[o.len - 1]] with { label = word })
+    end label
+
+    // Say that something raised at `r` is above every node opened so far.
+    cover(*self, r: Rect) = self.covers.push(Cover(self.nodes.view().len, r))
+
+    // Finish the innermost entry and decide whether it is reported, and as what.
+    close(*self)
+        val at = self.opened.pop() match
+            Some(i) -> i
+            None -> return
+
+        val v = self.nodes.view()
+        val n = v[at]
+        var kids = 0
+        var only = at
+
+        // Everything after a node that is about to close is inside it, so this walks only its subtree.
+        for i in at + 1..<v.len
+            if v[i].kept && v[i].parent == int(at)
+                kids += 1
+                only = i
+
+        val out_of_sight = n.shown.w <= 0 || n.shown.h <= 0
+
+        if out_of_sight
+            self.drop(at, n.parent)
+        elif n.role == NAMED
+            if kids == 1 && v[only].name.len == 0
+                self.nodes.set(only, v[only] with { name = n.name })
+                self.drop(at, n.parent)
+            else
+                self.nodes.set(at, n with { role = if kids == 0 then "view" else "group" })
+        elif kids == 0 && n.label.len == 0 && n.value.len == 0 && n.marks.len == 0 &&
+             (n.role == "overlay" || n.role == TAPPABLE) && n.drew_from == self.drew
+            // What takes a click outside a menu is a tappable that draws nothing, and an overlay
+            // holding only that has nothing to show either. Neither is something on screen; each is
+            // still a `Cover`, so what it blocks is still reported as blocked.
+            self.drop(at, n.parent)
+    end close
+
+    // Stop reporting a node, handing whatever is inside it to its parent.
+    private drop(*self, at: usize, parent: int)
+        val v = self.nodes.view()
+
+        self.nodes.set(at, v[at] with { kept = false })
+
+        for i in at + 1..<v.len
+            if v[i].parent == int(at) then self.nodes.set(i, v[i] with { parent = parent })
+    end drop
+
+    private add(*self, role: string, r: Rect, words: Words, value: string, marks: string) -> usize
+        val o = self.opened.view()
+        val parent = if o.len == 0 then -1 else int(o[o.len - 1])
+        val top = self.clips.stack.view()
+        val shown = if top.len == 0 then r else meet(top[top.len - 1], r)
+
+        self.nodes.push(Node(role, "", "", value, marks, r, shown, words, parent, true, self.drew))
+        self.nodes.view().len - 1
+    end add
+
+    // Turn what was gathered into the finished list.
+    private finished(*self) -> Snapshot
+        val v = self.nodes.view()
+        var out: Buf[Entry] = buf()
+        var depths: Buf[int] = buf()
+        var id = 0
+
+        for i in 0..<v.len
+            val p = v[i].parent
+            val depth = if p < 0 then 0 else depths.view()[usize(p)] + 1
+
+            depths.push(depth)
+
+            if v[i].kept
+                id += 1
+
+                val (shown, covered) = self.exposed(v[i].shown, i)
+                val marks = if covered then joined(v[i].marks, "covered") else v[i].marks
+
+                out.push(Entry(id, v[i].role, v[i].label, v[i].name, v[i].value, marks, v[i].rect,
+                               shown, depth, covered))
+
+        Snapshot(out)
+    end finished
+
+    // What is left of `shown` after everything raised later than node `i`.
+    private exposed(*self, shown: Rect, i: usize) -> (Rect, bool)
+        val raised = self.covers.view()
+        var left = shown
+
+        for k in 0..<raised.len
+            if i < raised[k].before
+                beside(left, raised[k].r) match
+                    Some(rest) -> left = rest
+                    None -> return (shown, true)
+
+        (left, false)
+    end exposed
+
+    // A run of text as an entry of its own.
+    private add_words(*self, r: Rect, t: string)
+        if !self.clips.shows(r) then return
+
+        val i = self.add("text", r, Words.Ignored, "", "")
+
+        self.nodes.set(i, self.nodes.view()[i] with { label = t })
+    end add_words
+end Survey
+
+impl Canvas for Survey
+    override survey(*self) -> Option[*Survey] = Some(self)
+
+    fill(*self, r: Rect, color: u32, radius: int)
+        self.drew += 1
+
+    stroke(*self, r: Rect, color: u32, width: int, radius: int, dash: int)
+        self.drew += 1
+
+    // Words become a label, an entry or nothing, according to what they are painted inside.
+    text(*self, r: Rect, t: string)
+        self.drew += 1
+
+        if t.len == 0 then return
+
+        val o = self.opened.view()
+
+        if o.len == 0
+            self.add_words(r, t)
+            return
+
+        val n = self.nodes.view()[o[o.len - 1]]
+
+        // A label is what the control is called, so it is kept however little of the control shows.
+        n.words match
+            Label -> self.nodes.set(o[o.len - 1], n with { label = joined(n.label, t) })
+            Own -> self.add_words(r, t)
+            Ignored -> ()
+    end text
+
+    override draw_image(*self, r: Rect, img: &Image, radius: int)
+        self.drew += 1
+
+        if self.clips.shows(r) then self.leaf("image", r)
+
+    clip(*self, r: Rect) = self.clips.push(r)
+
+    unclip(*self) = self.clips.pop()
+
+    override visible(*self, r: Rect) -> bool = self.clips.shows(r)
+
+    // The theme and the size in force go to the real canvas, because measuring a run depends on them
+    // and every push is popped again before this pass is over.
+    override theme(*self) -> Theme = self.inner.theme()
+
+    override push_theme(*self, t: Theme) = self.inner.push_theme(t)
+
+    override pop_theme(*self) = self.inner.pop_theme()
+
+    override base_font_size(*self) -> real = self.inner.base_font_size()
+
+    override font_size(*self) -> real = self.inner.font_size()
+
+    override push_font_size(*self, pt: real) = self.inner.push_font_size(pt)
+
+    override pop_font_size(*self) = self.inner.pop_font_size()
+
+    // No colour changes where anything lands, and a real canvas's ink stack is its own.
+    ink(*self, color: u32) = ()
+
+    unink(*self) = ()
+
+    // What the pointer is over may change what a view says, so it is answered truthfully. Everything
+    // that could act on the pointer sees it at rest, and the keyboard has nothing to say.
+    hovered(*self, r: Rect) -> bool = self.inner.hovered(r)
+
+    pressed(*self, r: Rect) -> bool = false
+
+    override pointer(*self) -> (int, int) = self.inner.pointer()
+
+    override focus(*self) -> int = self.inner.focus()
+
+    override editing(*self) -> Selection = self.inner.editing()
+
+    override text_at(*self, s: string, x: int) -> usize =self.inner.text_at(s, x)
+
+    override text_x(*self, s: string, at: usize) -> int = self.inner.text_x(s, at)
+
+    text_size(*self, s: string) -> Size = self.inner.text_size(s)
+
+    override pixel_scale(*self) -> real = self.inner.pixel_scale()
+
+    // An overlay's own entry is opened by the wrapper. The theme and size travel with it, and the ink
+    // does not because this canvas has none.
+    raise_above(*self, v: &View, at: Rect) =
+        self.raised.push(Overlay(Raised(v), at, self.inner.theme(), None, self.inner.font_size()))
+
+    take_overlays(*self) -> Buf[Overlay]
+        val out = self.raised
+
+        self.raised = buf()
+        out
+    end take_overlays
+
+    hit(*self, r: Rect, f: &Fn() -> unit) = ()
+end Survey
+
+// The word an entry from `.named` has until `close` knows what it contains.
+private const NAMED: string = "named"
+
+// The role of `.on_tap` on an arbitrary view, as opposed to a control the toolkit made.
+const TAPPABLE: string = "tappable"
+
+// A number as a person would write it: `50`, not `50.0`.
+number(x: real) -> string =
+    if x != x then "" elif x == real(int(x)) then s"${int(x)}" else s"${x}"
+
+private joined(a: string, b: string) -> string = if a.len == 0 then b else a + " " + b
+
+private at_text(r: Rect) -> string = s"[${r.x},${r.y} ${r.w}x${r.h}]"
+
+// A string in double quotes, with what would break the line or the quoting escaped.
+private quoted(s: string) -> string
+    var out = "\""
+
+    for i in 0..<s.len
+        val b = s[i]
+
+        if b == u8('"') then out = out + "\\\""
+        elif b == u8('\\') then out = out + "\\\\"
+        elif b == u8('\n') then out = out + "\\n"
+        else out = out + s[i..<i + 1]
+
+    out + "\""
+end quoted
+
+// What is left of `s` beside `o`: the largest strip of it `o` does not touch, or nothing.
+private beside(s: Rect, o: Rect) -> Option[Rect]
+    if !s.overlaps(o) then return Some(s)
+
+    val strips = [
+        Rect(s.x, s.y, o.x - s.x, s.h),
+        Rect(o.right(), s.y, s.right() - o.right(), s.h),
+        Rect(s.x, s.y, s.w, o.y - s.y),
+        Rect(s.x, o.bottom(), s.w, s.bottom() - o.bottom())
+    ]
+    var best: Option[Rect] = None
+    var area = 0
+
+    for k in strips
+        if k.w > 0 && k.h > 0 && k.w * k.h > area
+            area = k.w * k.h
+            best = Some(k)
+
+    best
+end beside

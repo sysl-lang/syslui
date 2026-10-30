@@ -101,6 +101,10 @@ impl View for Switch
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(SWITCH_W, SWITCH_H)
 
     paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(n) -> n.leaf("switch", r, "", if self.on.read() then "checked" else "")
+            None -> ()
+
         // **The knob's position and the track's colour are one number**, so the two cannot disagree
         // half way through: a switch caught mid-slide has its knob exactly as far across as its
         // track is coloured, because both read the same phase.
@@ -146,6 +150,10 @@ impl View for Box
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(BOX_SIDE, BOX_SIDE)
 
     paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(n) -> if self.on.read() then n.mark("checked")
+            None -> ()
+
         val look = c.theme()
         val color = look.color(self.role)
         val b = inside(r, BOX_SIDE, BOX_SIDE)
@@ -172,7 +180,7 @@ impl View for Box
 checkbox(on: &Signal[bool], label: string, role: Role = Role.Primary) -> &View
     val flip: &Fn() -> unit = () -> on.set(!on.read())
 
-    reactive((i, t) -> row([Box(on, role, i), text(label)], 8)).on_tap(flip)
+    Tappable(reactive((i, t) -> row([Box(on, role, i), text(label)], 8)), flip, "checkbox", false)
 
 // ## The radio button
 
@@ -199,6 +207,10 @@ impl View for Dot
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(BOX_SIDE, BOX_SIDE)
 
     paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(n) -> if self.chosen.read() == self.at then n.mark("checked")
+            None -> ()
+
         val look = c.theme()
         val color = look.color(self.role)
         val b = inside(r, BOX_SIDE, BOX_SIDE)
@@ -230,7 +242,7 @@ impl View for Dot
 radio(chosen: &Signal[int], at: int, label: string, role: Role = Role.Primary) -> &View
     val pick: &Fn() -> unit = () -> if chosen.read() != at then chosen.set(at)
 
-    reactive((i, t) -> row([Dot(chosen, at, role, i), text(label)], 8)).on_tap(pick)
+    Tappable(reactive((i, t) -> row([Dot(chosen, at, role, i), text(label)], 8)), pick, "radio", false)
 end radio
 
 // A column of options over one signal, one of them chosen.
@@ -338,6 +350,14 @@ impl[T: Eq + Ord] View for Slider[T]
 
         val mine = self.id != NOBODY && c.focus() == self.id
 
+        c.survey() match
+            Some(n) ->
+                val range = s"range=${number(real(self.lo))}..${number(real(self.hi))}"
+
+                n.leaf("slider", r, number(real(self.value.read())),
+                       if mine then range + " focused" else range)
+            None -> ()
+
         if c.grab(r, DRAG_SLOT) && travel > 0 && span > 0.0
             val (px, _) = c.pointer()
             val at = px - r.x - KNOB / 2
@@ -409,6 +429,11 @@ impl View for Progress
 
     paint(&self, c: *Canvas, r: Rect)
         val f = if self.fraction < 0.0 then 0.0 elif self.fraction > 1.0 then 1.0 else self.fraction
+
+        c.survey() match
+            Some(n) -> n.leaf("progress", r, number(f))
+            None -> ()
+
         val t = c.phase(r, FILL_SLOT, f, PROGRESS_RATE)
         val look = c.theme()
         val b = inside(r, r.w, TRACK_H)
@@ -463,6 +488,11 @@ impl View for Meter
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.width, METER_H)
 
     paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(n) -> n.leaf("meter", r, number(self.value),
+                              s"range=${number(self.lo)}..${number(self.hi)}")
+            None -> ()
+
         val look = c.theme()
         val b = inside(r, r.w, METER_H)
         val track = Rect(b.x, b.y + (b.h - TRACK_H) / 2, b.w, TRACK_H)

@@ -413,6 +413,12 @@ trait Canvas
     // paint order, and the backend matches a click against the last one that contains it -- last
     // being topmost, since a later fill covers an earlier one.
     hit(*self, r: Rect, f: &Fn() -> unit)
+
+    // The snapshot being taken, if this paint is one.
+    //
+    // **`None` from the trait's own body is the whole of what a normal frame pays**: a control asks as
+    // it paints, and only the canvas `snapshot.sysl` paints through answers anything else.
+    survey(*self) -> Option[*Survey] = None
 end Canvas
 
 // A backend that draws nothing and remembers everything.

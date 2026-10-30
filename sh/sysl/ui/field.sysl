@@ -80,6 +80,15 @@ impl View for Field
         if mine && e.text != was then self.text.set(e.text)
         if mine && e.sel != c.editing() then c.edit(e.sel)
 
+        val noted = c.survey()
+
+        noted match
+            Some(n) ->
+                n.open(if self.multiline then "textarea" else "textfield", r, Words.Ignored, e.text,
+                       if mine then "focused" else "")
+                n.label(self.hint)
+            None -> ()
+
         val look = c.theme()
 
         c.fill(r, look.ground, look.radius)
@@ -94,6 +103,10 @@ impl View for Field
 
         c.unclip()
         c.hit(r, self.grab)
+
+        noted match
+            Some(n) -> n.close()
+            None -> ()
     end paint
 
 // One line of text somebody can type into.

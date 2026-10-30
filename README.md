@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.11" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.12" }
 }
 ```
 
@@ -719,6 +719,68 @@ paint(&self, c: *Canvas, r: Rect)
 **What a frame loop owes** (`Pointing`, implemented by `PlutoCanvas` and the recorder): `press(x, y, b)`
 and `let_go(x, y, b)` for a button, where `Primary` means `point(x, y, true)` and `release(x, y)`; and
 `chord.keys`, set each frame. The recorder takes the same calls, which is how the tests drive it.
+
+## Named controls, and a snapshot of what is on screen
+
+A window system knows coordinates; only the tree knows that the thing at those coordinates is the
+palette's Box button. So a test or an agent can ask for what is on screen and say what to click by
+name:
+
+```
+val tree = column([
+    button("Box", add_box).named("palette.box"),
+    checkbox(grid, "Grid"),
+    scroll(rows, offset, 80)
+])
+
+render(tree, c, window)
+
+val on_screen = snapshot(tree, c, window)
+print(on_screen.dump())
+
+val (x, y) = on_screen.click_point("palette.box")?
+```
+
+```
+@1 button "Box" name=palette.box [0,0 400x32]
+@2 checkbox "Grid" [0,32 400x18] checked
+@3 scroll [0,50 400x80] value="40"
+  @4 button "row1" [0,42 400x32] shown [0,50 400x24]
+  @5 button "row2" [0,74 400x32]
+  @6 button "row3" [0,106 400x32] shown [0,106 400x24]
+```
+
+Each line is a reference, a role, its label, its name, its rectangle in points, the part that shows if
+that is less, its value, and its state: `checked`, `selected`, `focused`, `covered`, and a slider's or
+meter's `range=lo..hi`. Children are indented under what contains them, and overlays follow the tree in
+the order they stack. The same tree in the same state gives the same text, byte for byte.
+
+- **Every standard control is there without a name**, by role and label: `button`, `tappable`, `switch`,
+  `checkbox`, `radio`, `slider`, `progress`, `meter`, `textfield`, `textarea`, `tab`, `table`, `row`,
+  `scroll`, `image`, `text`, `overlay`. A name around one control lands on that control, a name around
+  several is a `group`, and a name on a view with no role is a `view`.
+- **What cannot be seen is absent**: scrolled out, clipped away or off the window. A tappable that draws
+  nothing, such as what catches a click outside a menu, is not an entry either, but what it blocks is
+  marked `covered`.
+- **`find(key)` and `click_point(key)` take a name or a reference.** A reference such as `@3` holds for
+  that snapshot only; a name holds across rebuilds. The point is the centre of the visible part, and a
+  click there reaches that control through the ordinary hit list. A lookup answers an error with a
+  `kind` and a `message`: `Unknown`; `Duplicate`, naming both controls, since guessing would click the
+  wrong one; or `Covered`, when something raised above would take the click.
+- **`.named` changes no pixel**, moves nothing, and forwards `weight` and `place`, so `.flex().named("x")`
+  still flexes.
+
+**A snapshot is a second paint pass through a canvas that draws nothing**, because paint is the only walk
+that knows where anything landed. That pass acts on nothing: it sees no key, no tap and no press, so a
+slider does not move and a field does not type. Take it right after `render`.
+
+**It costs a normal frame no allocation.** A control asks `c.survey()`, which answers `None` from the
+trait's own body, and everything else is behind that answer. Measured against the previous release with
+a counting `malloc` interposer over a tree of every kind of control: 218 allocations a frame on both,
+exactly equal over 1,000 and 2,000 frames. Over 300,000 frames the time stayed within run-to-run noise
+(1.23 to 1.26 s against 1.25 to 1.33 s). A backend owes nothing for any of this.
+
+syslUI has no disabled control, so no entry says `disabled`.
 
 ## The backend
 
