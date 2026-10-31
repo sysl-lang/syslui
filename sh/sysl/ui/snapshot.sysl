@@ -156,7 +156,17 @@ snapshot(v: &View, c: *Canvas, at: Rect) -> Snapshot
     var s = Survey(c, buf(), buf(), clips(), buf(), buf(), buf(), 0)
 
     s.clips.push(at)
-    render(v, &s, at)
+
+    // **It paints in the frame's layers and leaves that frame's covers behind**, so what it reports as
+    // hovered is what the frame showed, and it changes nothing the next frame reads.
+    c.covering() match
+        Some(k) ->
+            val kept = k.last
+
+            render(v, &s, at)
+            k.last = kept
+        None -> render(v, &s, at)
+
     s.finished()
 end snapshot
 
@@ -504,6 +514,8 @@ impl Canvas for Survey
     pressed(*self, r: Rect) -> bool = false
 
     override pointer(*self) -> (int, int) = self.inner.pointer()
+
+    override covering(*self) -> Option[*Covers] = self.inner.covering()
 
     override focus(*self) -> int = self.inner.focus()
 

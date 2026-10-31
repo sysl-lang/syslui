@@ -403,6 +403,11 @@ Use **`render(tree, c, rect)`** rather than `measure` and `paint` by hand — an
 painted the tree itself would silently never draw a dialog, which is the same class of failure as
 forgetting to subscribe a signal, designed out the same way.
 
+**An overlay blocks taps, hover, presses, drags and the wheel for everything under its rectangle or
+its catcher, and an overlay with no catcher covers only its own rectangle.** The tree reads its input
+before anything is raised, so blocking starts one frame after an overlay opens, ends on the frame a
+popover, modal or menu closes, and a drag it opened over stays ended until the button is released.
+
 `raise_above` is the only member on `Canvas` with **no default body**. Elsewhere the rule is that not
 implementing something costs the feature and never the frame — a backend ignoring `visible` is merely
 slower. A backend ignoring this would draw a frame with the dialog *missing*, which is a wrong

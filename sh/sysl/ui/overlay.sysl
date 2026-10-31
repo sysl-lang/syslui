@@ -60,6 +60,107 @@ struct Overlay
     size: real
 end Overlay
 
+// One overlay as input sees it: where it was, and the view that can say whether it is still up.
+struct Veil
+    view: &View
+    at: Rect
+end Veil
+
+// What is above the view being painted, so that nothing under an overlay hears the pointer.
+//
+// **The tree reads its input before anything is raised**, because a view asks about the pointer as it
+// paints and overlays are painted after the tree. So what a view is asked to give way to is what the
+// LAST frame raised, numbered in paint order from 1, with the tree as 0. A view painted at layer `n`
+// gets the pointer only where no cover above `n` holds it, so an overlay's own content works, and what
+// a catcher or a rectangle covers does not, with no view having to know.
+//
+// **An overlay therefore starts blocking one frame after it opens.** It stops on the very frame it
+// closes if it was raised through `up_while`, which is how a popover, a modal and a menu raise theirs.
+// One raised with plain `raise_above`, or one whose raiser has left the tree, stops a frame late.
+//
+// Empty until something is raised, so a window with no overlay has nothing to look through.
+struct Covers
+    last: Buf[Veil]
+    next: Buf[Veil]
+    layer: int
+
+    private begin(*self)
+        self.next = buf()
+        self.layer = 0
+
+    private enter(*self, o: Overlay)
+        self.next.push(Veil(o.view, o.at))
+        self.layer = int(self.next.view().len)
+
+    private finish(*self)
+        self.last = self.next
+        self.next = buf()
+        self.layer = 0
+
+    // The topmost overlay still up over this point, or 0 for the tree.
+    private top_at(*self, x: int, y: int) -> int
+        val v = self.last.view()
+        var i = v.len
+
+        while i > 0
+            i -= 1
+
+            if v[i].at.holds(x, y) && v[i].view.still_up() then return int(i) + 1
+
+        0
+    end top_at
+
+    // Does the pointer at this point belong to the layer being painted?
+    clear(*self, x: int, y: int) -> bool = self.top_at(x, y) <= self.layer
+
+    // Was this point covered, from above the layer being painted, when last frame's hit list was made?
+    //
+    // **Up or not**: a tap is decided against that list, so one on a catcher that closed the overlay
+    // landed on the catcher, and must not also land on what the closing uncovered.
+    struck(*self, x: int, y: int) -> bool
+        val v = self.last.view()
+        var i = v.len
+
+        while i > 0
+            i -= 1
+
+            if v[i].at.holds(x, y) then return int(i) + 1 > self.layer
+
+        false
+    end struck
+
+    // May the layer being painted have this press?
+    //
+    // **The answer only ever gets worse until the release**: `Grab.under` remembers the highest overlay
+    // that has covered where the press began. That ends a drag an overlay opened over, and keeps it
+    // ended when the overlay closes with the button still down, so the pointer's travel in between is
+    // never delivered as one jump.
+    admits(*self, g: *Grab) -> bool
+        val top = self.top_at(g.began_x, g.began_y)
+
+        if top > g.under then g.under = top
+
+        g.under <= self.layer
+    end admits
+end Covers
+
+covers() -> Covers = Covers(buf(), buf(), 0)
+
+// A view raised on the understanding that it is up only while `live` says so, which lets input release
+// on the very frame `live` turns false, before the raiser has been painted to say otherwise.
+private[ui] up_while(v: &View, live: &Fn() -> bool) -> &View = UpWhile(v, live)
+
+private struct UpWhile
+    view: &View
+    live: &Fn() -> bool
+
+impl View for UpWhile
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.view.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect) = self.view.paint(c, r)
+
+    override still_up(&self) -> bool = (self.live)()
+
 // Paint a whole frame: the tree, and then anything the tree raised above itself.
 //
 // **Use this rather than `measure` and `paint` by hand.** An application that painted the tree
@@ -72,6 +173,12 @@ end Overlay
 // past anything an interface has ever needed, and stopping quietly is better than a frame that never
 // returns.
 render(v: &View, c: *Canvas, at: Rect)
+    val covering = c.covering()
+
+    covering match
+        Some(k) -> k.begin()
+        None -> ()
+
     v.measure(c, Size(at.w, at.h))
     v.paint(c, at)
 
@@ -88,6 +195,10 @@ render(v: &View, c: *Canvas, at: Rect)
         if depth > MAX_DEPTH then break
 
         for i in 0..<p.len
+            covering match
+                Some(k) -> k.enter(p[i])
+                None -> ()
+
             c.push_theme(p[i].look)
             c.push_font_size(p[i].size)
 
@@ -100,6 +211,10 @@ render(v: &View, c: *Canvas, at: Rect)
 
             c.pop_font_size()
             c.pop_theme()
+
+    covering match
+        Some(k) -> k.finish()
+        None -> ()
 
     // **The frame's keys are forgotten at the end of the frame, and this is the only place that
     // knows where a frame ends.** A key arrives between two frames and is meant for exactly one of
@@ -159,8 +274,10 @@ impl View for Popover
             // content, so the content's own regions are later and win -- and it is raised after the
             // anchor was painted, so it beats the anchor's own tap too: clicking the button that
             // opened the menu closes it rather than toggling it twice.
-            c.raise_above(spacer().on_tap(() -> shut.set(false)), EVERYWHERE)
-            c.raise_above(self.content, Rect(r.x, y, s.w, s.h))
+            val up = reading(shut)
+
+            c.raise_above(up_while(spacer().on_tap(() -> shut.set(false)), up), EVERYWHERE)
+            c.raise_above(up_while(self.content, up), Rect(r.x, y, s.w, s.h))
     end paint
 
 // A view over the whole of what it wraps, with everything under it made untappable.
@@ -190,10 +307,15 @@ impl View for Modal
         if self.open.read()
             val s = self.content.measure(c, Size(r.w, r.h))
 
-            c.raise_above(catcher(self.on_dismiss), r)
-            c.raise_above(self.content,
+            val up = reading(self.open)
+
+            c.raise_above(up_while(catcher(self.on_dismiss), up), r)
+            c.raise_above(up_while(self.content, up),
                     Rect(r.x + (r.w - s.w) / 2, r.y + (r.h - s.h) / 2, s.w, s.h))
     end paint
+
+// What `up_while` asks of something opened by a signal.
+private reading(open: &Signal[bool]) -> &Fn() -> bool = () -> open.read()
 
 // A view that draws nothing and swallows a tap.
 private catcher(f: Option[&Fn() -> unit]) -> &View =

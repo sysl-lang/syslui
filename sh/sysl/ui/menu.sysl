@@ -126,8 +126,12 @@ private struct MenuBar
 
                 return NO_MENU
 
+        // **The pointer itself, not `hovered`**: the bar being painted here is in the tree, and the
+        // titles the pointer is moving between are the raised copy above this bar's own catcher.
+        val (x, y) = c.pointer()
+
         for i in 0..<n
-            if i != now && c.hovered(self.title_at(c, r, i))
+            if i != now && self.title_at(c, r, i).holds(x, y)
                 self.open.set(i)
 
                 return i
@@ -153,8 +157,10 @@ impl View for MenuBar
         val shut = self.open
         val chosen = self.menus.view()[at]
 
-        c.raise_above(spacer().on_tap(() -> shut.set(NO_MENU)), EVERYWHERE)
-        c.raise_above(self.bar(at), r)
+        val up = any_open(shut, int(self.menus.view().len))
+
+        c.raise_above(up_while(spacer().on_tap(() -> shut.set(NO_MENU)), up), EVERYWHERE)
+        c.raise_above(up_while(self.bar(at), up), r)
 
         if chosen.items.view().len == 0 then return
 
@@ -166,9 +172,13 @@ impl View for MenuBar
 
         // **A second catcher, the dropdown's own size, that does nothing**: it is what keeps a tap on a
         // disabled row, a separator or the margin from reaching the catcher that closes.
-        c.raise_above(spacer().on_tap(() -> ()), place)
-        c.raise_above(drop, place)
+        c.raise_above(up_while(spacer().on_tap(() -> ()), up), place)
+        c.raise_above(up_while(drop, up), place)
     end paint
+
+// Whether any menu is open, rather than this one: moving between titles must not uncover the page.
+private any_open(open: &Signal[int], n: int) -> &Fn() -> bool =
+    () -> open.read() >= 0 && open.read() < n
 
 // Slide a dropdown left until it ends where the bar ends, and never past where the bar starts.
 //

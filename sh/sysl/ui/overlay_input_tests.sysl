@@ -1,0 +1,565 @@
+module sh.sysl.ui
+@tests
+
+import sysl.seq.{Sequence, generate}
+import sh.sysl.plutovg
+
+// What an overlay blocks: a sensor stands for any view reading the canvas the way a viewport does, and
+// a frame is painted once to raise the overlay before the frame under test gives way to it.
+
+private val SCREEN: Rect = Rect(0, 0, 400, 300)
+
+// Inside the modal's centred 100-square content, and well outside it.
+private const IN_X: int = 200
+private const IN_Y: int = 150
+private const OUT_X: int = 10
+private const OUT_Y: int = 10
+
+private struct Seen
+    hover: &Signal[bool]
+    press: &Signal[bool]
+    wheel: &Signal[int]
+    primary: &Signal[int]
+    secondary: &Signal[int]
+end Seen
+
+private seen() -> Seen = Seen(signal(false), signal(false), signal(0), signal(0), signal(0))
+
+private sensor(s: Seen) -> &View =
+    PointerReader((c, r) ->
+        s.hover.set(c.hovered(r))
+        s.press.set(c.pressed(r))
+
+        val (_, y) = c.wheel(r)
+        val (dx, _) = c.drag_by(r, 1, PointerButton.Primary, 0, 0)
+        val (sx, _) = c.drag_by(r, 2, PointerButton.Secondary, 0, 0)
+
+        s.wheel.set(s.wheel.read() + y)
+        s.primary.set(s.primary.read() + dx)
+        s.secondary.set(s.secondary.read() + sx))
+
+private modal_over(page: Seen, inner: Seen, open: &Signal[bool]) -> &View =
+    Modal(sensor(page), sensor(inner).frame(100, 100), open, None)
+
+// `under` first and `over` after, in the same rectangle, so the raiser is painted after what it covers.
+private struct Both
+    under: &View
+    over: &View
+end Both
+
+impl View for Both
+    measure(&self, c: *Canvas, avail: Size) -> Size = avail
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.under.paint(c, r)
+        self.over.paint(c, r)
+    end paint
+end Both
+
+// An overlay with no catcher: what is beside its rectangle stays live.
+private bare(open: &Signal[bool], content: &View, at: Rect) -> &View =
+    PointerReader((c, r) -> if open.read() then c.raise_above(content, at))
+
+private draw(v: &View, c: *Recorder)
+    c.taps.reset()
+    c.ops.clear()
+    render(v, c, SCREEN)
+end draw
+
+// Wheel and drag at one point, across a frame already raised, and how much of each reached `s`.
+private assert_input(v: &View, c: *Recorder, s: Seen, x: int, y: int, live: bool, what: string)
+    s.wheel.set(0)
+    s.primary.set(0)
+    c.point(x, y)
+    draw(v, c)
+    assert_eq(s.hover.read(), live, s"${what}: hover")
+
+    c.spin(0.0, 30.0)
+    draw(v, c)
+    assert_eq(s.wheel.read(), if live then 30 else 0, s"${what}: wheel")
+
+    c.point(x, y, true)
+    draw(v, c)
+    assert_eq(s.press.read(), live, s"${what}: pressed")
+    c.point(x + 7, y, true)
+    draw(v, c)
+    assert_eq(s.primary.read(), if live then 7 else 0, s"${what}: drag")
+
+    c.point(x + 7, y, false)
+    draw(v, c)
+end assert_input
+
+private tall_list(offset: &Signal[int]) -> &View =
+    scroll(column(generate(200usize, i -> text("x")), 0), offset, 100)
+
+@test
+private under_a_modal_nothing_hears_and_inside_it_everything_does()
+    var c = recorder()
+    val page = seen()
+    val inner = seen()
+    val open = signal(true)
+    val v = modal_over(page, inner, open)
+
+    draw(v, &c)
+    assert_input(v, &c, page, OUT_X, OUT_Y, false, "beside the content")
+    assert_input(v, &c, page, IN_X, IN_Y, false, "under the content")
+    assert_input(v, &c, inner, IN_X, IN_Y, true, "inside the content")
+end under_a_modal_nothing_hears_and_inside_it_everything_does
+
+@test
+private a_real_scroll_inside_a_modal_scrolls_and_the_one_under_it_does_not()
+    var c = recorder()
+    val below = signal(0)
+    val within = signal(0)
+    val v = Modal(tall_list(below), tall_list(within).frame(100, 100), signal(true), None)
+
+    draw(v, &c)
+    c.point(IN_X, IN_Y)
+    c.spin(0.0, -30.0)
+    draw(v, &c)
+
+    assert_eq(within.read(), 30, "the list in the modal moved")
+    assert_eq(below.read(), 0, "and the page's did not")
+
+    c.point(OUT_X, OUT_Y)
+    c.spin(0.0, -30.0)
+    draw(v, &c)
+
+    assert_eq(within.read(), 30, "beside the content the catcher has it")
+    assert_eq(below.read(), 0)
+
+    // A finger, likewise: this list scrolls by a drag as well as by the wheel.
+    c.point(OUT_X, OUT_Y, true)
+    draw(v, &c)
+    c.point(OUT_X, OUT_Y - 60, true)
+    draw(v, &c)
+    assert_eq(below.read(), 0, "dragging the page from under the catcher")
+end a_real_scroll_inside_a_modal_scrolls_and_the_one_under_it_does_not
+
+// The raiser's place in paint order must not matter, so the page is painted on either side of it.
+private popover_over_a_page(page_first: bool)
+    val inner = seen()
+    val page = seen()
+    val shut = signal(true)
+    val pop: &View = Popover(spacer(), sensor(inner).frame(100, 100), shut, true, 0)
+    val v: &View = if page_first then Both(sensor(page), pop) else Both(pop, sensor(page))
+    var c = recorder()
+
+    draw(v, &c)
+
+    // The anchor was given the whole screen, so the content opens below it, at the bottom edge.
+    assert_input(v, &c, page, OUT_X, OUT_Y, false, "under the catcher")
+    assert_input(v, &c, inner, 10, 310, true, "inside the popover")
+
+    shut.set(false)
+    assert_input(v, &c, page, OUT_X, OUT_Y, true, "closed")
+end popover_over_a_page
+
+@test
+private a_page_painted_before_a_popover_is_under_its_catcher() = popover_over_a_page(true)
+
+@test
+private a_page_painted_after_a_popover_is_under_its_catcher() = popover_over_a_page(false)
+
+@test
+private an_open_menu_blocks_the_page_and_closing_it_releases_the_page()
+    var c = recorder()
+    val page = seen()
+    val open = signal(0)
+    val v = Both(sensor(page), menu_bar([menu("File", [item("New", () -> ())])], open))
+
+    draw(v, &c)
+    assert_input(v, &c, page, 300, 200, false, "open")
+
+    open.set(NO_MENU)
+    assert_input(v, &c, page, 300, 200, true, "closed")
+
+    // A value naming no menu reads as closed for input as it does for the picture.
+    open.set(0)
+    draw(v, &c)
+    open.set(7)
+    assert_input(v, &c, page, 300, 200, true, "naming no menu")
+end an_open_menu_blocks_the_page_and_closing_it_releases_the_page
+
+@test
+private moving_between_titles_never_uncovers_the_page()
+    var c = recorder()
+    val page = seen()
+    val open = signal(0)
+    val v = Both(menu_bar([menu("File", []), menu("Edit", [])], open), sensor(page))
+
+    draw(v, &c)
+    c.point(50, 8)
+    c.spin(0.0, 30.0)
+    draw(v, &c)
+
+    assert_eq(open.read(), 1, "the hover moved the menu")
+    assert_eq(page.wheel.read(), 0, "and the page painted after the switch stayed covered")
+end moving_between_titles_never_uncovers_the_page
+
+@test
+private inside_a_dropdown_the_rows_light_and_what_is_under_them_does_not()
+    var c = recorder()
+    val page = seen()
+    val open = signal(0)
+    val v = Both(sensor(page), menu_bar([menu("File", [item("New", () -> ())])], open))
+
+    draw(v, &c)
+    c.point(16, 45)
+    draw(v, &c)
+    assert(!page.hover.read(), "the page is not lit under the dropdown")
+
+    var snapped = snapshot(v, &c, SCREEN)
+
+    assert(snapped.click_point("menu.File.New").is_ok(), "and the row is reachable")
+end inside_a_dropdown_the_rows_light_and_what_is_under_them_does_not
+
+@test
+private an_overlay_with_no_catcher_covers_only_its_rectangle()
+    var c = recorder()
+    val page = seen()
+    val inner = seen()
+    val open = signal(true)
+    val v = Both(sensor(page), bare(open, sensor(inner), Rect(100, 100, 50, 50)))
+
+    draw(v, &c)
+    assert_input(v, &c, page, 110, 110, false, "under it")
+    assert_input(v, &c, page, OUT_X, OUT_Y, true, "beside it")
+    assert_input(v, &c, inner, 110, 110, true, "inside it")
+end an_overlay_with_no_catcher_covers_only_its_rectangle
+
+// Plain `raise_above` says nothing about when it comes down, so it holds for the one frame that finds out.
+@test
+private a_plainly_raised_overlay_releases_a_frame_late()
+    var c = recorder()
+    val page = seen()
+    val inner = seen()
+    val open = signal(true)
+    val v = Both(sensor(page), bare(open, sensor(inner), Rect(100, 100, 50, 50)))
+
+    c.point(110, 110)
+    draw(v, &c)
+    open.set(false)
+    draw(v, &c)
+    assert(!page.hover.read(), "the frame it closes on is still last frame's")
+    draw(v, &c)
+    assert(page.hover.read(), "and the next is free")
+end a_plainly_raised_overlay_releases_a_frame_late
+
+@test
+private an_overlay_blocks_from_the_frame_after_it_opens()
+    var c = recorder()
+    val page = seen()
+    val open = signal(false)
+    val v = modal_over(page, seen(), open)
+
+    c.point(OUT_X, OUT_Y)
+    draw(v, &c)
+    assert(page.hover.read(), "nothing is open")
+
+    open.set(true)
+    draw(v, &c)
+    assert(page.hover.read(), "the tree painted before anything was raised this frame")
+
+    draw(v, &c)
+    assert(!page.hover.read(), "and is covered from the next")
+end an_overlay_blocks_from_the_frame_after_it_opens
+
+@test
+private a_closed_modal_releases_on_the_very_frame_it_closes()
+    var c = recorder()
+    val page = seen()
+    val open = signal(true)
+    val v = modal_over(page, seen(), open)
+
+    c.point(OUT_X, OUT_Y)
+    draw(v, &c)
+    draw(v, &c)
+    assert(!page.hover.read(), "covered")
+
+    open.set(false)
+    c.spin(0.0, 30.0)
+    draw(v, &c)
+    assert(page.hover.read(), "lit on the frame it closed")
+    assert_eq(page.wheel.read(), 30, "and wheeled on it")
+end a_closed_modal_releases_on_the_very_frame_it_closes
+
+// The drag ends, whichever button it was, and closing the overlay with the button down does not hand
+// back the travel in between.
+private drag_under_an_opening_modal(b: PointerButton, read: &Fn(Seen) -> int)
+    var c = recorder()
+    val page = seen()
+    val open = signal(false)
+    val v = modal_over(page, seen(), open)
+
+    if b == PointerButton.Primary then c.point(OUT_X, OUT_Y, true) else c.press(OUT_X, OUT_Y, b)
+
+    val to = (x: int) -> if b == PointerButton.Primary then c.point(x, OUT_Y, true) else c.point(x, OUT_Y)
+
+    draw(v, &c)
+    to(OUT_X + 5)
+    draw(v, &c)
+    assert_eq(read(page), 5, "dragging")
+
+    open.set(true)
+    to(OUT_X + 8)
+    draw(v, &c)
+    assert_eq(read(page), 8, "the frame it opens on has not been told")
+
+    to(OUT_X + 50)
+    draw(v, &c)
+    assert_eq(read(page), 8, "over")
+
+    open.set(false)
+    to(OUT_X + 90)
+    draw(v, &c)
+    to(OUT_X + 95)
+    draw(v, &c)
+    assert_eq(read(page), 8, "closed with the button down: no jump, and the drag stays ended")
+
+    if b == PointerButton.Primary then c.point(OUT_X + 95, OUT_Y, false) else c.let_go(OUT_X + 95, OUT_Y, b)
+
+    draw(v, &c)
+
+    if b == PointerButton.Primary then c.point(OUT_X, OUT_Y, true) else c.press(OUT_X, OUT_Y, b)
+
+    draw(v, &c)
+    to(OUT_X + 3)
+    draw(v, &c)
+    assert_eq(read(page), 11, "the next press is a new drag, moving by what it moved")
+end drag_under_an_opening_modal
+
+@test
+private a_primary_drag_under_way_ends_when_an_overlay_opens() =
+    drag_under_an_opening_modal(PointerButton.Primary, s -> s.primary.read())
+
+@test
+private a_secondary_drag_under_way_ends_when_an_overlay_opens() =
+    drag_under_an_opening_modal(PointerButton.Secondary, s -> s.secondary.read())
+
+@test
+private a_grab_under_way_ends_when_an_overlay_opens()
+    var c = recorder()
+    val primary = signal(false)
+    val secondary = signal(false)
+    val page: &View = PointerReader((k, r) ->
+        primary.set(k.grab(r, 3))
+        secondary.set(k.grab_by(r, 4, PointerButton.Secondary)))
+    val open = signal(false)
+    val v = Modal(page, spacer(), open, None)
+
+    c.point(OUT_X, OUT_Y, true)
+    c.press(OUT_X, OUT_Y, PointerButton.Secondary)
+    draw(v, &c)
+    assert(primary.read() && secondary.read(), "held")
+
+    open.set(true)
+    draw(v, &c)
+    draw(v, &c)
+    assert(!primary.read() && !secondary.read(), "let go")
+
+    open.set(false)
+    draw(v, &c)
+    assert(!primary.read() && !secondary.read(), "and not picked up again by the same press")
+end a_grab_under_way_ends_when_an_overlay_opens
+
+@test
+private a_press_on_a_catcher_is_no_drag_when_the_overlay_goes()
+    var c = recorder()
+    val page = seen()
+    val open = signal(true)
+    val v = modal_over(page, seen(), open)
+
+    draw(v, &c)
+    c.point(OUT_X, OUT_Y, true)
+    draw(v, &c)
+
+    open.set(false)
+    c.point(OUT_X + 40, OUT_Y, true)
+    draw(v, &c)
+    assert_eq(page.primary.read(), 0, "the press was never the page's")
+end a_press_on_a_catcher_is_no_drag_when_the_overlay_goes
+
+@test
+private a_drag_begun_inside_an_overlay_keeps_going_beyond_its_edge()
+    var c = recorder()
+    val page = seen()
+    val inner = seen()
+    val v = modal_over(page, inner, signal(true))
+
+    draw(v, &c)
+    c.point(IN_X, IN_Y, true)
+    draw(v, &c)
+    c.point(IN_X + 150, IN_Y, true)
+    draw(v, &c)
+
+    assert_eq(inner.primary.read(), 150, "the press is the content's wherever it goes")
+    assert_eq(page.primary.read(), 0)
+end a_drag_begun_inside_an_overlay_keeps_going_beyond_its_edge
+
+@test
+private an_overlay_raised_by_an_overlay_covers_the_one_that_raised_it()
+    var c = recorder()
+    val page = seen()
+    val mid = seen()
+    val top = seen()
+    val inner_open = signal(true)
+    val outer_open = signal(true)
+
+    // A modal whose content holds a popover opening below the content's own hundred-square box.
+    val raiser: &View = Popover(spacer(), sensor(top).frame(40, 40), inner_open, true, 0)
+    val together: &View = Both(sensor(mid), raiser)
+    val content = together.frame(100, 100)
+    val v = Modal(sensor(page), content, outer_open, None)
+
+    draw(v, &c)
+    draw(v, &c)
+
+    assert_input(v, &c, top, 170, 210, true, "inside the inner")
+    assert_input(v, &c, mid, IN_X, IN_Y, false, "the outer's content, under the inner's catcher")
+    assert_input(v, &c, page, OUT_X, OUT_Y, false, "the page")
+
+    inner_open.set(false)
+    assert_input(v, &c, mid, IN_X, IN_Y, true, "the outer's content, the inner closed")
+    assert_input(v, &c, page, OUT_X, OUT_Y, false, "the page, under the outer still")
+
+    outer_open.set(false)
+    assert_input(v, &c, page, OUT_X, OUT_Y, true, "the page, everything closed")
+end an_overlay_raised_by_an_overlay_covers_the_one_that_raised_it
+
+// **A tap decided against the last frame's list landed on the catcher**, even though closing it has
+// uncovered what is below by the frame a field asks.
+@test
+private a_tap_on_a_catcher_does_not_land_on_what_it_uncovers()
+    var c = recorder()
+    val under = signal(false)
+    val above = signal(false)
+    val open = signal(true)
+    val page = PointerReader((k, r) -> if k.tapped(r) then under.set(true))
+    val listening: &View = PointerReader((k, r) -> if k.tapped(r) then above.set(true))
+    val inner = listening.on_tap(() -> ()).frame(100, 100)
+    val v = Modal(page, inner, open, Some(() -> open.set(false)))
+
+    draw(v, &c)
+    c.point(IN_X, IN_Y, true)
+    c.release(IN_X, IN_Y)
+    draw(v, &c)
+    assert(above.read(), "the content heard its tap")
+    assert(!under.read(), "and nothing under it did")
+
+    c.point(OUT_X, OUT_Y, true)
+    c.release(OUT_X, OUT_Y)
+    assert(!open.read(), "the catcher closed it")
+    draw(v, &c)
+    assert(!under.read(), "and the tap that closed it stayed on the catcher")
+
+    c.point(OUT_X, OUT_Y, true)
+    c.release(OUT_X, OUT_Y)
+    draw(v, &c)
+    assert(under.read(), "the next tap is the page's")
+end a_tap_on_a_catcher_does_not_land_on_what_it_uncovers
+
+// A snapshot paints the frame again, so it answers from the frame's layers and leaves its covers alone.
+@test
+private a_snapshot_reports_the_frame_and_disturbs_nothing()
+    var c = recorder()
+    val page = seen()
+    val hover_read = signal(false)
+    val listening: &View = PointerReader((k, r) -> hover_read.set(k.hovered(r)))
+    val inner = listening.frame(100, 100)
+    val open = signal(true)
+    val v = Modal(sensor(page), inner, open, None)
+
+    c.point(IN_X, IN_Y)
+    draw(v, &c)
+    draw(v, &c)
+    hover_read.set(false)
+    snapshot(v, &c, SCREEN)
+    assert(hover_read.read(), "the content is hovered in the snapshot as in the frame")
+
+    // Had the snapshot's own raises replaced them, closing would not be seen until a frame later.
+    open.set(false)
+    draw(v, &c)
+    assert(page.hover.read(), "the frame's own covers are still what the next frame reads")
+end a_snapshot_reports_the_frame_and_disturbs_nothing
+
+// With nothing raised there is nothing to give way to, and every reading is what it always was.
+@test
+private no_overlay_leaves_the_pointer_alone()
+    var c = recorder()
+    val page = seen()
+    val v = sensor(page)
+
+    assert_input(v, &c, page, OUT_X, OUT_Y, true, "no overlay at all")
+end no_overlay_leaves_the_pointer_alone
+
+// The real backend runs the same rules through its own members, so it is asked as well.
+@test
+private the_pluto_canvas_blocks_what_the_recorder_blocks()
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+
+    var c = pluto_canvas(plutovg.canvas(plutovg.surface(400, 300).unwrap()).unwrap(), face.unwrap(), 15.0)
+    val page = seen()
+    val inner = seen()
+    val open = signal(true)
+    val v = modal_over(page, inner, open)
+
+    // Grabs and taps, which `sensor` leaves out because a grab would take the press from a drag.
+    val gripped = signal(false)
+    val named = signal(false)
+    val landed = signal(false)
+    val holder: &View = PointerReader((k, r) ->
+        gripped.set(k.grab(r, 3))
+        named.set(k.grab_by(r, 4, PointerButton.Secondary))
+
+        if k.tapped(r) then landed.set(true))
+    val w = Modal(holder, spacer(), signal(true), None)
+
+    render(w, &c, SCREEN)
+    c.point(OUT_X, OUT_Y, true)
+    c.press(OUT_X, OUT_Y, PointerButton.Secondary)
+    render(w, &c, SCREEN)
+    assert(!gripped.read(), "a grab")
+    assert(!named.read(), "a grab by a named button")
+    assert(!landed.read(), "a tap")
+    c.let_go(OUT_X, OUT_Y, PointerButton.Secondary)
+    c.point(OUT_X, OUT_Y, false)
+
+    render(v, &c, SCREEN)
+
+    c.point(OUT_X, OUT_Y, true)
+    c.spin(0.0, 30.0)
+    render(v, &c, SCREEN)
+    c.point(OUT_X + 9, OUT_Y, true)
+    render(v, &c, SCREEN)
+
+    assert(!page.hover.read(), "hover")
+    assert(!page.press.read(), "press")
+    assert_eq(page.wheel.read(), 0, "wheel")
+    assert_eq(page.primary.read(), 0, "drag")
+
+    c.point(OUT_X, OUT_Y, false)
+    c.press(OUT_X, OUT_Y, PointerButton.Secondary)
+    c.point(OUT_X + 4, OUT_Y, false)
+    render(v, &c, SCREEN)
+    assert_eq(page.secondary.read(), 0, "a named button")
+
+    c.let_go(OUT_X + 4, OUT_Y, PointerButton.Secondary)
+    c.point(IN_X, IN_Y, false)
+    c.spin(0.0, 30.0)
+    render(v, &c, SCREEN)
+    assert(inner.hover.read(), "the content hears")
+    assert_eq(inner.wheel.read(), 30)
+
+    open.set(false)
+    c.point(OUT_X, OUT_Y, false)
+    render(v, &c, SCREEN)
+    assert(page.hover.read(), "and closing it releases the page on that frame")
+end the_pluto_canvas_blocks_what_the_recorder_blocks

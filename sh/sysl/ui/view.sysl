@@ -74,6 +74,9 @@ trait View
     // must not draw outside `r`.
     paint(&self, c: *Canvas, r: Rect)
 
+    // Raised last frame, is this still up? Only `up_while` answers anything but yes; see `Covers`.
+    still_up(&self) -> bool = true
+
     // Inset this view by `n` on every side.
     //
     // The wrapper stores `self` -- the receiver's own box, erased -- so a chain of modifiers is a

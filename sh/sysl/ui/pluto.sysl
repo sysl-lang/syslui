@@ -79,6 +79,9 @@ struct PlutoCanvas
     // The buttons beyond the primary, and the modifiers. The frame loop sets `chord.keys`.
     chord: Chord
 
+    // What the pointer gives way to. See `Covers`.
+    covers: Covers
+
     // Where the pointer is, which the frame loop sets once a frame before painting.
     point(*self, x: int, y: int, down: bool)
         self.px = x
@@ -220,23 +223,26 @@ impl Canvas for PlutoCanvas
         self.tints.pop()
         ()
 
-    hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py)
+    hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py) && self.covers.clear(self.px, self.py)
 
-    pressed(*self, r: Rect) -> bool = self.down && r.holds(self.px, self.py)
+    pressed(*self, r: Rect) -> bool = self.down && self.hovered(r)
 
     override pointer(*self) -> (int, int) = (self.px, self.py)
 
-    override grab(*self, r: Rect, slot: int) -> bool = self.hold.claim(r, slot)
+    override grab(*self, r: Rect, slot: int) -> bool =
+        self.covers.admits(&self.hold) && self.hold.claim(r, slot)
 
     override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
 
     override drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)
         val shown = self.clips.shows(Rect(self.hold.began_x, self.hold.began_y, 1, 1))
 
-        if shown then self.hold.drag(r, slot, slop_x, slop_y) else (0, 0)
+        if shown && self.covers.admits(&self.hold) then self.hold.drag(r, slot, slop_x, slop_y) else (0, 0)
 
-    override wheel(*self, r: Rect) -> (int, int) =
-        if self.clips.shows(Rect(self.px, self.py, 1, 1)) then self.hold.turned(r) else (0, 0)
+    override wheel(*self, r: Rect) -> (int, int)
+        val shown = self.clips.shows(Rect(self.px, self.py, 1, 1))
+
+        if shown && self.covers.clear(self.px, self.py) then self.hold.turned(r) else (0, 0)
 
     override held(*self, b: PointerButton) -> bool =
         if b == PointerButton.Primary then self.down else self.chord.held(b)
@@ -244,14 +250,17 @@ impl Canvas for PlutoCanvas
     override modifiers(*self) -> Modifiers = self.chord.keys
 
     override grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool =
-        if b == PointerButton.Primary then self.grab(r, slot) else self.chord.claim(r, slot, b)
+        if b == PointerButton.Primary then self.grab(r, slot)
+        else self.chord.admitted(&self.covers, b) && self.chord.claim(r, slot, b)
 
     override drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int)
         if b == PointerButton.Primary then return self.drag(r, slot, slop_x, slop_y)
 
         val (x, y) = self.chord.origin(b)
 
-        if self.clips.shows(Rect(x, y, 1, 1)) then self.chord.drag(r, slot, b, slop_x, slop_y) else (0, 0)
+        val free = self.clips.shows(Rect(x, y, 1, 1)) && self.chord.admitted(&self.covers, b)
+
+        if free then self.chord.drag(r, slot, b, slop_x, slop_y) else (0, 0)
 
     override press_origin_by(*self, b: PointerButton) -> (int, int) =
         if b == PointerButton.Primary then self.press_origin() else self.chord.origin(b)
@@ -262,7 +271,10 @@ impl Canvas for PlutoCanvas
 
     override keys(*self) -> []Press = self.board.keys()
 
-    override tapped(*self, r: Rect) -> bool = self.board.landed(r)
+    override tapped(*self, r: Rect) -> bool =
+        self.board.landed(r) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
+
+    override covering(*self) -> Option[*Covers] = Some(&self.covers)
 
     override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
 
@@ -439,7 +451,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     sizings.push(sizing(face, size))
 
     PlutoCanvas(vg, face, sizings, buf(), -1, -1, false, hits(), clips(), grabbing(), buf(),
-                phases(), buf(), dark(), buf(), keyboard(), chord())
+                phases(), buf(), dark(), buf(), keyboard(), chord(), covers())
 end pluto_canvas
 
 // One size of the face: where a run's baseline sits below the top of its line, how tall a line is,

@@ -132,6 +132,9 @@ struct Grab
     wheel_x: real
     wheel_y: real
 
+    // The highest overlay that has covered where this press began. See `Covers.admits`.
+    under: int
+
     // Told by the frame loop, through the canvas's `point`, once a frame.
     //
     // **The release is what ends a grab**, not the pointer leaving anything -- which is the entire
@@ -141,6 +144,7 @@ struct Grab
             self.began_x = x
             self.began_y = y
             self.dragging = false
+            self.under = 0
 
         if !down then self.held = false
 
@@ -233,7 +237,7 @@ struct Grab
         self.wheel_y -= real(int(self.wheel_y))
 end Grab
 
-grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0, -1, -1, false, 0, 0, 0.0, 0.0)
+grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0, -1, -1, false, 0, 0, 0.0, 0.0, 0)
 
 // Which button of the pointer. A finger is `Primary`, and a button past these three is not reported.
 enum PointerButton
@@ -284,6 +288,9 @@ struct Chord
     let_go(*self, x: int, y: int, b: PointerButton) = self.of(b).moved(x, y, false)
 
     held(*self, b: PointerButton) -> bool = self.of(b).down
+
+    // May the layer `k` is painting have this button's press?
+    admitted(*self, k: *Covers, b: PointerButton) -> bool = k.admits(self.of(b))
 
     claim(*self, r: Rect, slot: int, b: PointerButton) -> bool = self.of(b).claim(r, slot)
 
