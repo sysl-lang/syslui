@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.13" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.14" }
 }
 ```
 
@@ -413,6 +413,40 @@ picture rather than a plainer one.
 must do regardless is stop what's behind being clicked, and a full-size region that swallows taps
 does that on its own.
 
+## Menu bar
+
+`menu_bar(menus, open)` — a row of titles, each opening a dropdown of actions. Which menu is open is
+the application's, like which tab is chosen, so it survives a rebuild.
+
+```
+val open = signal(NO_MENU)
+
+menu_bar([
+    menu("File", [
+        item("New", new_file, "Ctrl+N"),
+        item("Save", save, "Ctrl+S", enabled = dirty.read()),
+        separator(),
+        item("Quit", quit)
+    ]),
+    menu("Edit", [item("Undo", undo, "Ctrl+Z")])
+], open)
+```
+
+Clicking a title opens its menu and clicking it again closes it; while one is open, moving onto another
+title switches to it. Choosing an enabled item closes the menu and runs the action. A disabled item is
+dimmed and does nothing, leaving the menu open. A click outside or Escape closes it.
+
+**A shortcut is only a label**: the keys are the application's. The dropdown is as wide as its widest
+row and never narrower than its title, and slides left to stay inside the bar, which stands in for the
+window because a canvas does not know its surface's size. Nothing keeps a tall menu inside the window's
+height.
+
+A snapshot reports each title as `menu.<title>` with role `menu`, and each row as
+`menu.<title>.<label>` with role `menu_item`, marked `disabled` where it is. While a menu is open the bar
+is raised above the catcher, so its titles stay clickable and are not reported as covered.
+
+**Absent on purpose:** submenus, check marks, keyboard navigation of the bar, and native macOS menus.
+
 ## Tabs
 
 `tabs(labels, chosen, i -> panel(i))` — **and there is no `Tabs` view.** A tab bar is a `Row` of
@@ -756,8 +790,8 @@ meter's `range=lo..hi`. Children are indented under what contains them, and over
 the order they stack. The same tree in the same state gives the same text, byte for byte.
 
 - **Every standard control is there without a name**, by role and label: `button`, `tappable`, `switch`,
-  `checkbox`, `radio`, `slider`, `progress`, `meter`, `textfield`, `textarea`, `tab`, `table`, `row`,
-  `scroll`, `image`, `text`, `overlay`. A name around one control lands on that control, a name around
+  `checkbox`, `radio`, `slider`, `progress`, `meter`, `textfield`, `textarea`, `tab`, `menu`, `menu_item`, `table`,
+  `row`, `scroll`, `image`, `text`, `overlay`. A name around one control lands on that control, a name around
   several is a `group`, and a name on a view with no role is a `view`.
 - **What cannot be seen is absent**: scrolled out, clipped away or off the window. A tappable that draws
   nothing, such as what catches a click outside a menu, is not an entry either, but what it blocks is
@@ -831,6 +865,7 @@ catches it is a `sysl build-c` of something that uses the toolkit, which is what
 - `sh/sysl/ui/table.sysl` — a scrollable table, built entirely out of the files above it
 - `sh/sysl/ui/tabs.sysl` — a tab bar, built entirely out of the files above it
 - `sh/sysl/ui/overlay.sysl` — `render`, popovers and modals: the second paint pass
+- `sh/sysl/ui/menu.sysl` — a menu bar and its dropdowns, built on the second paint pass
 - `sh/sysl/ui/atom.sysl` — application state a module declares, and values derived from it
 - `sh/sysl/ui/select.sysl` — selecting a run of text with the pointer
 - `sh/sysl/ui/image.sysl` — `Image`, the three fits, and the one drawing operation that is not a rectangle

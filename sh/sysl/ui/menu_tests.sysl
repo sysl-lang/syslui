@@ -1,0 +1,541 @@
+module sh.sysl.ui
+@tests
+
+import sysl.text.Search
+
+private val SCREEN: Rect = Rect(0, 0, 400, 300)
+
+// The geometry the two fixtures come to in the recorder's eight-by-sixteen font under the dark theme:
+// a title is its text plus a pad of eight a side, the bar is a title and a one-pixel rule, and a row is
+// its text plus half a pad above and below, starting 37 down.
+private const BAR_H: int = 33
+
+private nothing() -> &Fn() -> unit = () -> ()
+
+private counter(n: &Signal[int]) -> &Fn() -> unit = () -> n.set(n.read() + 1)
+
+private two_menus(open: &Signal[int], ran: &Signal[int]) -> &View =
+    menu_bar([
+        menu("File", [
+            item("New", counter(ran), "Ctrl+N"),
+            item("Dim", counter(ran), "Ctrl+D", enabled = false),
+            separator(),
+            item("Quit", counter(ran))
+        ]),
+        menu("Edit", [item("Undo", counter(ran), "Ctrl+Z")])
+    ], open)
+
+private draw(v: &View, c: *Recorder, at: Rect = SCREEN)
+    c.taps.reset()
+    c.ops.clear()
+    render(v, c, at)
+end draw
+
+private tap(v: &View, c: *Recorder, x: int, y: int)
+    draw(v, c)
+    c.taps.tap(x, y)
+end tap
+
+private tap_name(v: &View, c: *Recorder, key: string)
+    draw(v, c)
+
+    val (x, y) = snapshot(v, c, SCREEN).click_point(key).unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+end tap_name
+
+private shows(c: *Recorder, op: string) -> bool = c.dump().contains(op)
+
+private row_ink(t: Theme) -> u32 = mix(t.ink, t.panel, 55)
+
+@test
+private a_closed_bar_raises_nothing_and_reserves_only_itself()
+    var c = recorder()
+    val v = two_menus(signal(NO_MENU), signal(0))
+
+    draw(v, &c)
+
+    assert(!shows(&c, "raise"), "nothing raised")
+    assert_eq(v.measure(&c, Size(400, 300)), Size(96, BAR_H))
+end a_closed_bar_raises_nothing_and_reserves_only_itself
+
+@test
+private clicking_a_title_opens_it_and_clicking_again_closes_it()
+    val open = signal(NO_MENU)
+    val v = two_menus(open, signal(0))
+    var c = recorder()
+
+    tap(v, &c, 60, 10)
+    assert_eq(open.read(), 1)
+
+    c.point(60, 10)
+    tap(v, &c, 60, 10)
+    assert_eq(open.read(), NO_MENU)
+end clicking_a_title_opens_it_and_clicking_again_closes_it
+
+@test
+private an_open_menu_is_raised_under_its_title()
+    val open = signal(1)
+    var c = recorder()
+
+    draw(two_menus(open, signal(0)), &c)
+
+    // "Undo" + two gaps + "Ctrl+Z" + two pads is 112; a catcher, the bar, then the dropdown twice.
+    assert(shows(&c, "raise -1000000,-1000000 2000000x2000000"), "the catcher")
+    assert(shows(&c, s"raise 0,0 400x${BAR_H}"), "the bar")
+    assert(shows(&c, s"raise 48,${BAR_H} 112x32"), c.dump())
+end an_open_menu_is_raised_under_its_title
+
+@test
+private choosing_an_enabled_item_runs_it_and_closes()
+    val open = signal(0)
+    val ran = signal(0)
+    val v = two_menus(open, ran)
+    var c = recorder()
+
+    tap(v, &c, 20, 45)
+
+    assert_eq(ran.read(), 1)
+    assert_eq(open.read(), NO_MENU)
+end choosing_an_enabled_item_runs_it_and_closes
+
+@test
+private a_tap_on_a_disabled_item_does_nothing_and_leaves_it_open()
+    val open = signal(0)
+    val ran = signal(0)
+    val v = two_menus(open, ran)
+    var c = recorder()
+
+    tap(v, &c, 20, 37 + 24 + 12)
+
+    assert_eq(ran.read(), 0)
+    assert_eq(open.read(), 0)
+end a_tap_on_a_disabled_item_does_nothing_and_leaves_it_open
+
+@test
+private a_disabled_item_is_drawn_dimmed_and_an_enabled_one_is_not()
+    var c = recorder()
+    val t = dark()
+
+    draw(two_menus(signal(0), signal(0)), &c)
+
+    assert(shows(&c, s"ink #${row_ink(t)}"), "the disabled row's ink")
+
+    var other = recorder()
+
+    draw(menu_bar([menu("File", [item("New", nothing())])], signal(0)), &other)
+
+    assert(!shows(&other, s"ink #${row_ink(t)}"), "no dim ink with nothing disabled")
+end a_disabled_item_is_drawn_dimmed_and_an_enabled_one_is_not
+
+@test
+private a_tap_on_a_separator_or_the_margin_leaves_it_open()
+    val open = signal(0)
+    val ran = signal(0)
+    val v = two_menus(open, ran)
+    var c = recorder()
+
+    tap(v, &c, 20, 37 + 48 + 4)
+    assert_eq(open.read(), 0)
+
+    tap(v, &c, 20, BAR_H + 1)
+    assert_eq(open.read(), 0)
+    assert_eq(ran.read(), 0)
+end a_tap_on_a_separator_or_the_margin_leaves_it_open
+
+@test
+private a_tap_outside_closes_and_reaches_nothing_under_it()
+    val open = signal(0)
+    val under = signal(0)
+    val v = column([two_menus(open, signal(0)), text("page").on_tap(counter(under)).flex()])
+    var c = recorder()
+
+    tap(v, &c, 300, 200)
+
+    assert_eq(open.read(), NO_MENU)
+    assert_eq(under.read(), 0)
+end a_tap_outside_closes_and_reaches_nothing_under_it
+
+@test
+private escape_closes_and_another_key_does_not()
+    val open = signal(0)
+    val v = two_menus(open, signal(0))
+    var c = recorder()
+
+    c.key(press(Key.Enter))
+    draw(v, &c)
+    assert_eq(open.read(), 0)
+
+    c.key(press(Key.Escape))
+    draw(v, &c)
+    assert_eq(open.read(), NO_MENU)
+    assert(!shows(&c, "raise"), "and closed on the same frame")
+end escape_closes_and_another_key_does_not
+
+@test
+private escape_with_nothing_open_writes_nothing()
+    val open = signal(5)
+    var c = recorder()
+
+    c.key(press(Key.Escape))
+    draw(two_menus(open, signal(0)), &c)
+
+    assert_eq(open.read(), 5)
+end escape_with_nothing_open_writes_nothing
+
+@test
+private moving_onto_another_title_switches_on_the_same_frame()
+    val open = signal(0)
+    var c = recorder()
+
+    c.point(60, 10)
+    draw(two_menus(open, signal(0)), &c)
+
+    assert_eq(open.read(), 1)
+    assert(shows(&c, s"raise 48,${BAR_H} 112x32"), c.dump())
+end moving_onto_another_title_switches_on_the_same_frame
+
+@test
+private the_pointer_moves_nothing_unless_it_is_on_another_title()
+    val open = signal(0)
+    val v = two_menus(open, signal(0))
+    var c = recorder()
+
+    c.point(20, 10)
+    draw(v, &c)
+    assert_eq(open.read(), 0)
+
+    c.point(300, 10)
+    draw(v, &c)
+    assert_eq(open.read(), 0)
+
+    c.point(60, 200)
+    draw(v, &c)
+    assert_eq(open.read(), 0)
+end the_pointer_moves_nothing_unless_it_is_on_another_title
+
+@test
+private hovering_a_title_with_nothing_open_opens_nothing()
+    val open = signal(NO_MENU)
+    var c = recorder()
+
+    c.point(60, 10)
+    draw(two_menus(open, signal(0)), &c)
+
+    assert_eq(open.read(), NO_MENU)
+end hovering_a_title_with_nothing_open_opens_nothing
+
+// Without a pointer to have moved first, which is a touch screen: the tap itself has to switch.
+@test
+private tapping_another_title_switches_to_it()
+    val open = signal(0)
+    val v = two_menus(open, signal(0))
+    var c = recorder()
+
+    tap(v, &c, 60, 10)
+
+    assert_eq(open.read(), 1)
+end tapping_another_title_switches_to_it
+
+@test
+private a_hovered_item_is_highlighted_from_the_theme()
+    val t = dark()
+    val row_fill = s"fill 1,37 110x24 #${t.table.hover}"
+    val at = s"fill 0,37 112x24 #${t.table.hover}"
+    var c = recorder()
+    val v = menu_bar([menu("Edit", [item("Undo", nothing(), "Ctrl+Z")])], signal(0))
+
+    draw(v, &c)
+    assert(!shows(&c, at) && !shows(&c, row_fill), c.dump())
+
+    c.point(20, 45)
+    draw(v, &c)
+    assert(shows(&c, at), c.dump())
+end a_hovered_item_is_highlighted_from_the_theme
+
+@test
+private a_hovered_disabled_item_is_not_highlighted()
+    val t = dark()
+    var c = recorder()
+    val v = menu_bar([menu("Edit", [item("Undo", nothing(), enabled = false)])], signal(0))
+
+    c.point(20, 45)
+    draw(v, &c)
+
+    assert(!shows(&c, s"fill 0,37 48x24 #${t.table.hover}"), c.dump())
+end a_hovered_disabled_item_is_not_highlighted
+
+@test
+private the_open_title_is_lit_and_the_others_are_not()
+    val t = dark()
+    var c = recorder()
+
+    draw(two_menus(signal(1), signal(0)), &c)
+
+    assert(shows(&c, s"fill 48,0 48x32 #${t.table.hover}"), c.dump())
+    assert(!shows(&c, s"fill 0,0 48x32 #${t.table.hover}"), c.dump())
+end the_open_title_is_lit_and_the_others_are_not
+
+@test
+private the_dropdown_is_as_wide_as_its_widest_row_and_shortcuts_end_together()
+    var c = recorder()
+    val v = menu_bar([menu("M", [
+        item("A", nothing(), "Ctrl+Shift+X"),
+        item("Longer", nothing(), "Y"),
+        item("A label wider than either", nothing())
+    ])], signal(0))
+
+    draw(v, &c)
+
+    // "A label wider than either" is 200 and two pads 16; the shortcuts' right edges are 216 - 8.
+    assert(shows(&c, s"raise 0,${BAR_H} 216x80"), c.dump())
+    assert(shows(&c, "'Ctrl+Shift+X'"), c.dump())
+    assert(shows(&c, s"text ${208 - 12 * 8},41 96x16 'Ctrl+Shift+X'"), c.dump())
+    assert(shows(&c, s"text ${208 - 8},65 8x16 'Y'"), c.dump())
+end the_dropdown_is_as_wide_as_its_widest_row_and_shortcuts_end_together
+
+@test
+private a_label_and_its_shortcut_keep_a_gap_on_the_widest_row()
+    var c = recorder()
+
+    draw(menu_bar([menu("M", [item("Undo", nothing(), "Z")])], signal(0)), &c)
+
+    // "Undo" 32, two gaps of 8, "Z" 8, two pads of 8.
+    assert(shows(&c, s"raise 0,${BAR_H} 72x32"), c.dump())
+end a_label_and_its_shortcut_keep_a_gap_on_the_widest_row
+
+@test
+private a_dropdown_is_never_narrower_than_its_title()
+    var c = recorder()
+
+    draw(menu_bar([menu("A long title", [item("x", nothing())])], signal(0)), &c)
+
+    assert(shows(&c, s"raise 0,${BAR_H} 112x32"), c.dump())
+end a_dropdown_is_never_narrower_than_its_title
+
+@test
+private an_empty_menu_lights_its_title_shows_no_dropdown_and_still_closes()
+    val t = dark()
+    val open = signal(0)
+    val v = menu_bar([menu("Empty", [])], open)
+    var c = recorder()
+
+    draw(v, &c)
+
+    assert(shows(&c, s"fill 0,0 56x32 #${t.table.hover}"), c.dump())
+    assert(!shows(&c, s"raise 0,${BAR_H}"), c.dump())
+
+    tap(v, &c, 200, 200)
+    assert_eq(open.read(), NO_MENU)
+
+    tap(v, &c, 20, 10)
+    assert_eq(open.read(), 0)
+
+    tap(v, &c, 20, 10)
+    assert_eq(open.read(), NO_MENU)
+end an_empty_menu_lights_its_title_shows_no_dropdown_and_still_closes
+
+@test
+private a_bar_with_no_menus_is_only_its_rule_and_never_opens()
+    val open = signal(0)
+    var c = recorder()
+
+    draw(menu_bar(buf_of_no_menus(), open), &c)
+
+    assert(!shows(&c, "raise"), "the index names nothing, so it is closed")
+    assert(!shows(&c, "hit"), "and there is nothing to tap")
+end a_bar_with_no_menus_is_only_its_rule_and_never_opens
+
+private buf_of_no_menus() -> []Menu = []
+
+@test
+private an_index_naming_no_menu_reads_as_closed()
+    for at in [2, 99, -7]
+        var c = recorder()
+
+        draw(two_menus(signal(at), signal(0)), &c)
+
+        assert(!shows(&c, "raise"), s"index ${at} raised something")
+end an_index_naming_no_menu_reads_as_closed
+
+@test
+private a_menu_with_every_item_disabled_opens_and_chooses_nothing()
+    val open = signal(0)
+    val ran = signal(0)
+    val v = menu_bar([menu("M", [
+        item("One", counter(ran), enabled = false),
+        item("Two", counter(ran), enabled = false)
+    ])], open)
+    var c = recorder()
+
+    tap(v, &c, 20, 45)
+    tap(v, &c, 20, 69)
+
+    assert_eq(ran.read(), 0)
+    assert_eq(open.read(), 0)
+
+    tap(v, &c, 200, 200)
+    assert_eq(open.read(), NO_MENU)
+end a_menu_with_every_item_disabled_opens_and_chooses_nothing
+
+@test
+private a_separator_first_or_last_is_drawn_where_it_was_written()
+    val open = signal(0)
+    val ran = signal(0)
+    val v = menu_bar([menu("M", [separator(), item("One", counter(ran)), separator()])], open)
+    var c = recorder()
+
+    draw(v, &c)
+
+    // Margin 4, then a rule of 1 + 8, a row of 24, a rule of 1 + 8, and the margin again.
+    assert(shows(&c, s"raise 0,${BAR_H} 40x50"), c.dump())
+
+    tap(v, &c, 20, BAR_H + 8)
+    assert_eq(open.read(), 0)
+
+    tap(v, &c, 20, BAR_H + 4 + 9 + 24 + 4)
+    assert_eq(open.read(), 0)
+    assert_eq(ran.read(), 0)
+
+    tap(v, &c, 20, BAR_H + 4 + 9 + 12)
+    assert_eq(ran.read(), 1)
+end a_separator_first_or_last_is_drawn_where_it_was_written
+
+@test
+private a_menu_near_the_right_edge_slides_left_to_stay_inside()
+    var c = recorder()
+
+    // "Far" sits at x = 80..120 in a bar 140 wide, and its dropdown is 16 + 8 * 20 = 176 wide in a
+    // 400-wide bar, which runs past the edge only once the bar is narrowed.
+    val v = menu_bar([
+        menu("One", []),
+        menu("Two", []),
+        menu("Far", [item("twenty chars of text", nothing())])
+    ], signal(2))
+
+    draw(v, &c, Rect(0, 0, 400, 33))
+    assert(shows(&c, s"raise 80,${BAR_H} 176x32"), "room to the right stays under its title: " + c.dump())
+
+    draw(v, &c, Rect(0, 0, 200, 33))
+    assert(shows(&c, s"raise 24,${BAR_H} 176x32"), c.dump())
+end a_menu_near_the_right_edge_slides_left_to_stay_inside
+
+@test
+private a_dropdown_wider_than_the_bar_starts_where_the_bar_starts()
+    var c = recorder()
+    val v = menu_bar([menu("M", [item("twenty chars of text", nothing())])], signal(0))
+
+    draw(v, &c, Rect(30, 0, 100, 33))
+
+    assert(shows(&c, s"raise 30,${BAR_H} 176x32"), c.dump())
+end a_dropdown_wider_than_the_bar_starts_where_the_bar_starts
+
+@test
+private a_menu_paints_in_the_theme_it_was_raised_under()
+    val t = light()
+    val v = menu_bar([menu("M", [item("One", nothing())])], signal(0)).restyle(_ -> light())
+    var c = recorder()
+
+    c.point(10, 45)
+    draw(v, &c)
+
+    assert(shows(&c, s"fill 0,37 40x24 #${t.table.hover}"), c.dump())
+    assert(shows(&c, s"fill 0,${BAR_H} 40x32 #${t.panel} r${t.radius}"), c.dump())
+    assert(shows(&c, s"stroke 0,${BAR_H} 40x32 #${t.edge}"), c.dump())
+    assert(shows(&c, s"fill 0,0 24x32 #${t.table.hover}"), "the title too: " + c.dump())
+    assert(!shows(&c, s"#${dark().table.hover}"), c.dump())
+end a_menu_paints_in_the_theme_it_was_raised_under
+
+@test
+private a_snapshot_reports_titles_and_rows_as_controls()
+    val v = column([
+        two_menus(signal(0), signal(0)),
+        text("page").named("page")
+    ])
+    var c = recorder()
+
+    render(v, &c, SCREEN)
+
+    val got = snapshot(v, &c, SCREEN).dump()
+    val want = raw"""
+        @1 text "page" name=page [0,33 400x16] covered
+        @2 overlay [0,0 400x33]
+          @3 menu "File" name=menu.File [0,0 48x32] selected
+          @4 menu "Edit" name=menu.Edit [48,0 48x32]
+        @5 overlay [0,33 104x89]
+          @6 menu_item "New Ctrl+N" name=menu.File.New [0,37 104x24]
+          @7 menu_item "Dim Ctrl+D" name=menu.File.Dim [0,61 104x24] disabled
+          @8 menu_item "Quit" name=menu.File.Quit [0,94 104x24]
+        """
+
+    assert(got == want, s"expected:\n${want}got:\n${got}")
+end a_snapshot_reports_titles_and_rows_as_controls
+
+@test
+private a_closed_bar_reports_its_titles_and_none_of_its_rows()
+    var c = recorder()
+    val v = two_menus(signal(NO_MENU), signal(0))
+
+    render(v, &c, SCREEN)
+
+    val s = snapshot(v, &c, SCREEN)
+
+    assert(s.find("menu.File").is_ok(), s.dump())
+    assert(s.find("menu.File.New").is_err(), s.dump())
+end a_closed_bar_reports_its_titles_and_none_of_its_rows
+
+@test
+private a_title_and_an_item_are_clicked_by_name()
+    val open = signal(NO_MENU)
+    val ran = signal(0)
+    val v = two_menus(open, ran)
+    var c = recorder()
+
+    tap_name(v, &c, "menu.Edit")
+    assert_eq(open.read(), 1)
+
+    tap_name(v, &c, "menu.Edit.Undo")
+    assert_eq(ran.read(), 1)
+    assert_eq(open.read(), NO_MENU)
+end a_title_and_an_item_are_clicked_by_name
+
+@test
+private another_title_is_clickable_by_name_while_a_menu_is_open()
+    val open = signal(0)
+    val v = two_menus(open, signal(0))
+    var c = recorder()
+
+    tap_name(v, &c, "menu.File")
+    assert_eq(open.read(), NO_MENU)
+
+    open.set(0)
+    c.point(-1, -1)
+
+    tap_name(v, &c, "menu.Edit")
+    assert_eq(open.read(), 1)
+end another_title_is_clickable_by_name_while_a_menu_is_open
+
+@test
+private a_snapshot_changes_nothing_about_which_menu_is_open()
+    val open = signal(0)
+    val v = two_menus(open, signal(0))
+    var c = recorder()
+
+    c.point(60, 10)
+    c.key(press(Key.Escape))
+
+    val s = snapshot(v, &c, SCREEN)
+
+    assert_eq(open.read(), 0)
+    assert(s.find("menu.File.New").is_ok(), s.dump())
+end a_snapshot_changes_nothing_about_which_menu_is_open
+
+@test
+private a_menu_is_drawn_at_the_text_size_it_was_raised_under()
+    var c = recorder()
+
+    draw(menu_bar([menu("M", [item("One", nothing())])], signal(0)).font_size(32.0), &c)
+
+    assert(shows(&c, "text 8,57 48x32 'One' @32"), c.dump())
+end a_menu_is_drawn_at_the_text_size_it_was_raised_under

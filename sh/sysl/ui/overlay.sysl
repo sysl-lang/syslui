@@ -123,7 +123,7 @@ private const MAX_DEPTH: int = 8
 // that an invisible thing can be given a number it does not use.
 // **A module-level `val`, not a `const`.** `const` is compile-time folding and there is no literal
 // for a struct to fold to; a named struct value wants storage, which is what a `val` is.
-private val EVERYWHERE: Rect = Rect(-1_000_000, -1_000_000, 2_000_000, 2_000_000)
+private[ui] val EVERYWHERE: Rect = Rect(-1_000_000, -1_000_000, 2_000_000, 2_000_000)
 
 // A view attached to another, appearing below it when a signal says so.
 //

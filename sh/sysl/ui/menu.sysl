@@ -1,0 +1,261 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// A row of titles along the top of something, each opening a dropdown of actions.
+//
+//     val open = signal(NO_MENU)
+//
+//     menu_bar([
+//         menu("File", [
+//             item("New", new_file, "Ctrl+N"),
+//             item("Save", save, "Ctrl+S", enabled = dirty.read()),
+//             separator(),
+//             item("Quit", quit)
+//         ]),
+//         menu("Edit", [item("Undo", undo, "Ctrl+Z")])
+//     ], open)
+//
+// **Which menu is open is the application's**, like which tab is chosen: a bar keeping its own would
+// lose it the first time anything else was written. The rest is decided while painting, because only
+// then is it known where a title landed.
+//
+// **The bar goes above the catcher, and that one ordering is the whole of how a menu bar differs from
+// a row of popovers.** A popover's catcher has to beat its anchor, so that a click on the anchor closes
+// it once rather than toggling it twice; a bar wants the opposite, because its titles stay live while a
+// menu is open. So while one is open the bar is raised rather than painted: the catcher goes up first,
+// then the bar, then the dropdown, and last-wins does the rest. An agent reading a snapshot sees the
+// titles as uncovered for the same reason a click reaches them.
+//
+// **Moving onto another title is read from the pointer rather than from a hit region**, because
+// `Canvas.hovered` is geometry: a catcher takes taps and has no say over where the pointer is.
+
+// No menu is open: what the application's signal starts at.
+const NO_MENU: int = -1
+
+// One row of a menu.
+enum MenuItem
+    Action(label: string, run: &Fn() -> unit, shortcut: string, enabled: bool)
+    Separator
+end MenuItem
+
+// A row that does something when chosen.
+//
+// **`shortcut` is only a label.** Which keys do what is the application's, for the reason ⌘C is not in
+// `key.sysl`: only the application knows what its shortcuts are.
+item(label: string, run: &Fn() -> unit, shortcut: string = "", enabled: bool = true) -> MenuItem =
+    MenuItem.Action(label, run, shortcut, enabled)
+
+// A rule between two groups of rows. It is drawn where it is written, first or last included.
+separator() -> MenuItem = MenuItem.Separator
+
+// A title and what it opens.
+struct Menu
+    title: string
+    items: Buf[MenuItem]
+
+menu(title: string, items: []MenuItem) -> Menu
+    var b: Buf[MenuItem] = buf()
+
+    b.extend(items)
+    Menu(title, b)
+end menu
+
+// The bar. `open` holds the index of the open menu, or `NO_MENU`; a value naming no menu reads as
+// closed. A snapshot reports each title as `menu.<title>` and each row as `menu.<title>.<label>`.
+menu_bar(menus: []Menu, open: &Signal[int]) -> &View
+    var b: Buf[Menu] = buf()
+
+    b.extend(menus)
+    MenuBar(b, open)
+end menu_bar
+
+private struct MenuBar
+    menus: Buf[Menu]
+    open: &Signal[int]
+
+    // The titles and the rule under them, with the title at `at` lit and reported as chosen.
+    //
+    // **Square whatever the theme rounds by**, since a bar runs edge to edge. The flexible gap keeps
+    // the titles at the left, as it does for `tabs`.
+    private bar(&self, at: int) -> &View
+        var titles: Buf[&View] = buf()
+        val v = self.menus.view()
+
+        for i in 0..<v.len
+            titles.push(menu_title(v[i].title, int(i), at == int(i), self.open))
+
+        titles.push(spacer())
+
+        column([row(titles.view(), 0), divider()], 0)
+            .panel()
+            .restyle(t -> t with { radius = 0 })
+    end bar
+
+    // Where the title at `at` lands in a bar painted at `r`.
+    private title_at(&self, c: *Canvas, r: Rect, at: int) -> Rect
+        val v = self.menus.view()
+        var x = r.x
+        var w = 0
+
+        for i in 0..at
+            w = menu_title(v[i].title, i, false, self.open).measure(c, Size(r.w, r.h)).w
+
+            if i < at then x += w
+
+        Rect(x, r.y, w, r.h)
+    end title_at
+
+    // Which menu is showing this frame, having let Escape and the pointer move it.
+    //
+    // **The signal is written only when the answer changes**, as the slider's is, and the frame paints
+    // the new answer rather than waiting for the next one. A snapshot only reports, so it moves nothing.
+    private showing(&self, c: *Canvas, r: Rect) -> int
+        val now = self.open.read()
+        val n = int(self.menus.view().len)
+
+        if now < 0 || now >= n then return NO_MENU
+
+        c.survey() match
+            Some(_) -> return now
+            None -> ()
+
+        for p in c.keys()
+            if p.key == Key.Escape
+                self.open.set(NO_MENU)
+
+                return NO_MENU
+
+        for i in 0..<n
+            if i != now && c.hovered(self.title_at(c, r, i))
+                self.open.set(i)
+
+                return i
+
+        now
+    end showing
+
+impl View for MenuBar
+    // **The bar's own size and never a dropdown's**, as a popover measures to its anchor.
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.bar(NO_MENU).measure(c, avail)
+
+    // **As tall as it measures, whatever it was given**: a bar handed the whole window as the root of a
+    // tree must not paint a panel over all of it, and its dropdowns open under the rule, not the window.
+    paint(&self, c: *Canvas, given: Rect)
+        val r = given with { h = self.bar(NO_MENU).measure(c, Size(given.w, given.h)).h }
+        val at = self.showing(c, r)
+
+        if at == NO_MENU
+            self.bar(NO_MENU).paint(c, r)
+
+            return
+
+        val shut = self.open
+        val chosen = self.menus.view()[at]
+
+        c.raise_above(spacer().on_tap(() -> shut.set(NO_MENU)), EVERYWHERE)
+        c.raise_above(self.bar(at), r)
+
+        if chosen.items.view().len == 0 then return
+
+        val title = self.title_at(c, r, at)
+        val drop = dropdown(chosen, shut, c.theme())
+        val s = drop.measure(c, Size(1_000_000, 1_000_000))
+        val w = if s.w > title.w then s.w else title.w
+        val place = Rect(kept_inside(title.x, w, r), r.bottom(), w, s.h)
+
+        // **A second catcher, the dropdown's own size, that does nothing**: it is what keeps a tap on a
+        // disabled row, a separator or the margin from reaching the catcher that closes.
+        c.raise_above(spacer().on_tap(() -> ()), place)
+        c.raise_above(drop, place)
+    end paint
+
+// Slide a dropdown left until it ends where the bar ends, and never past where the bar starts.
+//
+// **The bar stands in for the window**, because a canvas does not know how big its surface is and a
+// bar runs edge to edge. One narrower than its window keeps its dropdowns over itself.
+private kept_inside(x: int, w: int, r: Rect) -> int
+    val over = x + w - r.right()
+    val moved = if over > 0 then x - over else x
+
+    if moved < r.x then r.x else moved
+end kept_inside
+
+private menu_title(title: string, at: int, on: bool, open: &Signal[int]) -> &View =
+    Named(Tappable(reactive((i, t) -> title_face(t, title, on, i)),
+                   () -> open.set(if open.read() == at then NO_MENU else at), MENU_TITLE, on),
+          s"menu.${title}")
+
+private title_face(t: Theme, title: string, on: bool, i: Interaction) -> &View =
+    text(title)
+        .foreground(t.ink)
+        .padding(t.pad)
+        .background(mix(t.panel, t.table.hover, if on then 100 else int(i.hover * 100.0)))
+
+private dropdown(m: Menu, shut: &Signal[int], t: Theme) -> &View
+    var rows: Buf[&View] = buf()
+
+    for it in m.items.view()
+        rows.push(menu_row(m.title, it, shut, t))
+
+    column(rows.view(), 0)
+        .pad(top = t.pad / 2, bottom = t.pad / 2)
+        .panel()
+        .border(t.edge, 1, t.radius)
+end dropdown
+
+private menu_row(title: string, it: MenuItem, shut: &Signal[int], t: Theme) -> &View =
+    it match
+        Separator -> divider().pad(top = t.pad / 2, bottom = t.pad / 2)
+        Action(label, run, shortcut, enabled) ->
+            val face = reactive((i, th) -> row_face(th, label, shortcut, enabled, i))
+            val name = s"menu.${title}.${label}"
+
+            // Closed first, so an action that opens something else is not undone by the closing.
+            val pick: &Fn() -> unit = () ->
+                shut.set(NO_MENU)
+                run()
+
+            if enabled then Named(Tappable(face, pick, MENU_ROW, false), name)
+            else Named(DisabledRow(face), name)
+
+private row_face(t: Theme, label: string, shortcut: string, enabled: bool, i: Interaction) -> &View
+    val ink = if enabled then t.ink else mix(t.ink, t.panel, MENU_DIM)
+    val words = text(label).foreground(ink)
+
+    // **Two gaps of `pad` between a label and its shortcut**, one each side of the flexible one, so
+    // the widest row still separates them and every shortcut ends at the same right edge.
+    val inside = if shortcut.len == 0 then words else row([
+        words,
+        spacer(),
+        text(shortcut).foreground(if enabled then mix(t.ink, t.panel, MENU_QUIET) else ink)
+    ], t.pad)
+
+    inside
+        .pad(top = t.pad / 2, right = t.pad, bottom = t.pad / 2, left = t.pad)
+        .background(mix(t.panel, t.table.hover, if enabled then int(i.hover * 100.0) else 0))
+end row_face
+
+// A row that is reported and takes no tap of its own, so the tap falls to the dropdown's catcher.
+private struct DisabledRow
+    child: &View
+
+impl View for DisabledRow
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(s) ->
+                s.open(MENU_ROW, r, Words.Label, "", "disabled")
+                self.child.paint(c, r)
+                s.close()
+            None -> self.child.paint(c, r)
+    end paint
+
+// What a snapshot calls a title and a row.
+private const MENU_TITLE: string = "menu"
+private const MENU_ROW: string = "menu_item"
+
+// How far a disabled row's text and an enabled row's shortcut are mixed toward the panel.
+private const MENU_DIM: int = 55
+private const MENU_QUIET: int = 30
