@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.14" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.15" }
 }
 ```
 
@@ -795,8 +795,8 @@ meter's `range=lo..hi`. Children are indented under what contains them, and over
 the order they stack. The same tree in the same state gives the same text, byte for byte.
 
 - **Every standard control is there without a name**, by role and label: `button`, `tappable`, `switch`,
-  `checkbox`, `radio`, `slider`, `progress`, `meter`, `textfield`, `textarea`, `tab`, `menu`, `menu_item`, `table`,
-  `row`, `scroll`, `image`, `text`, `overlay`. A name around one control lands on that control, a name around
+  `checkbox`, `radio`, `slider`, `progress`, `meter`, `textfield`, `textarea`, `selectable` (whose value is
+  what is selected), `tab`, `menu`, `menu_item`, `table`, `row`, `scroll`, `image`, `text`, `overlay`. A name around one control lands on that control, a name around
   several is a `group`, and a name on a view with no role is a `view`.
 - **What cannot be seen is absent**: scrolled out, clipped away or off the window. A tappable that draws
   nothing, such as what catches a click outside a menu, is not an entry either, but what it blocks is
@@ -819,7 +819,45 @@ a counting `malloc` interposer over a tree of every kind of control: 218 allocat
 exactly equal over 1,000 and 2,000 frames. Over 300,000 frames the time stayed within run-to-run noise
 (1.23 to 1.26 s against 1.25 to 1.33 s). A backend owes nothing for any of this.
 
-syslUI has no disabled control, so no entry says `disabled`.
+The one control that can be disabled is a menu item (`item(..., enabled = false)`), and its entry says
+`disabled`.
+
+### The same snapshot as JSON, for a remote controller
+
+A program driven from outside, over HTTP or anything else, hands the controller `to_json()`: one pure
+function, no sockets. Carrying it is the backend's business (`syslui-sdl`'s), not this package's.
+
+```
+val on_screen = snapshot(tree, c, window)
+reply(on_screen.to_json())
+
+val (x, y) = on_screen.click_point(asked_for)?
+```
+
+```
+{"window":[0,0,400,800],"entries":[
+{"ref":"back","id":1,"role":"button","label":"back","name":"back","value":"","rect":[0,0,400,800],"shown":[0,0,400,800],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+{"ref":"@2","id":2,"role":"overlay","label":"","name":"","value":"","rect":[184,384,32,32],"shown":[184,384,32,32],"click":[200,400],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+{"ref":"ok","id":3,"role":"button","label":"ok","name":"ok","value":"","rect":[184,384,32,32],"shown":[184,384,32,32],"click":[200,400],"parent":2,"depth":1,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null}
+]}
+```
+
+That is a modal over a button. Every entry has the same members in the same order, one entry to a line:
+
+- **`ref` is what `find` and `click_point` take back**: the entry's name where no other entry has that
+  name, otherwise its reference `@id`. Use `.named` for anything a controller must find again after
+  the tree changes shape.
+- **`rect` and `shown` are `[x, y, w, h]` in the window's points**, the same coordinates the backend
+  delivers a press in; `window` is the rectangle the tree was painted into.
+- **`click` is the point `click_point(ref)` answers**, the centre of what shows, or `null` when something
+  raised above it would take the press. `covered` says the same thing, so what a modal or an open
+  menu hides is the list of entries with `"covered":true`; the overlay and what it holds follow the tree.
+- **`parent` is the enclosing entry's `id`** (or `null`), with `depth` beside it.
+- **`enabled`, `focused` and `covered` are on every entry; `marks` holds every state word** (`checked`,
+  `selected`, `focused`, `disabled`, `covered`); `range` is a slider's or meter's `"lo..hi"`, else `null`.
+- **Strings are escaped as JSON requires**: a quote, a backslash and every control character (`\n`, `\t`,
+  `\u0001` and so on); other characters pass through as UTF-8. The text is byte-for-byte the same for
+  the same tree in the same state.
 
 ## The backend
 
