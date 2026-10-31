@@ -487,11 +487,12 @@ private a_snapshot_is_deterministic_and_touches_nothing()
     val value = signal(3)
     val text_of = signal("abc")
     val offset = signal(0)
+    val pop = signal(true)
     val v = column([
         slider(value, 0, 10, 100, id = 1),
         text_field(text_of, 2),
         scroll(long_list(), offset, 80),
-        button("m", no_op()).popover(signal(true), text("item"))
+        button("m", no_op()).popover(pop, text("item"))
     ])
     var c = recorder()
 
@@ -514,7 +515,9 @@ private a_snapshot_is_deterministic_and_touches_nothing()
     render(v, &c, WINDOW)
     assert_eq(value.read(), 10, "the same key moves it in a real frame, or the line above proved nothing")
 
-    // A press held along the slider: the survey must not drag it, and a real frame then does.
+    // A press held along the slider: the survey must not drag it, and a real frame then does. The
+    // popover closes first, because an open one takes the press.
+    pop.set(false)
     c.point(60, 8, true)
     snapshot(v, &c, WINDOW)
     assert_eq(value.read(), 10)
