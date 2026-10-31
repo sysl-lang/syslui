@@ -52,6 +52,11 @@ struct Field
     // a slider's does. Focus itself is taken while painting, because that is where the geometry is.
     grab: &Fn() -> unit
 
+    // What Enter and Escape mean while this field has the keyboard: submitting and abandoning. An
+    // area's Enter is a newline, so only its Escape is ever called.
+    on_enter: &Fn() -> unit
+    on_escape: &Fn() -> unit
+
 impl View for Field
     measure(&self, c: *Canvas, avail: Size) -> Size =
         Size(self.width, self.rows * c.text_size("").h + 2 * FIELD_PAD)
@@ -73,12 +78,17 @@ impl View for Field
         // **The keys are applied before anything is drawn, so a frame shows what was just typed.**
         // Waiting for the rebuild the signal write causes would draw the previous text with the new
         // caret in it, which is one frame of the caret being visibly ahead of the letters.
-        val e =
+        val (e, keyed) =
             if mine then typing(c, was, inner, self.multiline)
-            else Edited(was, nothing_selected())
+            else (Edited(was, nothing_selected()), false)
 
         if mine && e.text != was then self.text.set(e.text)
         if mine && e.sel != c.editing() then c.edit(e.sel)
+
+        // **After the text is written**, so a submit reads what was typed in the same frame as the
+        // Enter -- a person who types the last digit and presses Enter quickly enough lands both in one.
+        // Only when the keys were applied at all: a frame that was a drag or a tap ignored them.
+        if keyed then answer(self, c.keys())
 
         val noted = c.survey()
 
@@ -108,31 +118,48 @@ impl View for Field
             Some(n) -> n.close()
             None -> ()
     end paint
+end Field
+
+// The two keys a field hands back to the application, in the order they arrived.
+private answer(f: &Field, ps: []Press)
+    for p in ps
+        if p.key == Key.Enter && !f.multiline then (f.on_enter)()
+        elif p.key == Key.Escape then (f.on_escape)()
 
 // One line of text somebody can type into.
 //
 // **`id` is not optional and there is no default**, because the one thing that must not happen is
 // two fields sharing it: they would take each other's keys, and the failure looks like a field that
 // types into the wrong box rather than like a missing argument.
-text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "") -> &View =
-    Field(text, id, width, 1, false, hint, () -> ())
+//
+// **Enter calls `on_enter` and Escape calls `on_escape`**, after any text typed in the same frame has
+// been written -- the submit and the cancel of a form, or of a spreadsheet's cell. The field keeps the
+// keyboard either way: whether a submitted field stays focused, or a cancelled one puts its old text
+// back, is the application's to decide, and both are a line in the handler. Neither key changes the
+// text. Both do nothing by default, as they did before the two were here (since 0.1.16).
+text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "",
+           on_enter: &Fn() -> unit = () -> (), on_escape: &Fn() -> unit = () -> ()) -> &View =
+    Field(text, id, width, 1, false, hint, () -> (), on_enter, on_escape)
 
 // Several lines of it. **Lines are the ones in the text**: nothing wraps, so a long paragraph is one
 // line that scrolls sideways. Wrapping needs the canvas to measure candidate breaks, which is a
 // second measuring pass over the whole run on every frame, and it is worth having only once
 // something wants it.
+//
+// **Escape calls `on_escape`, and Enter is a newline** rather than a submit, which is what it is in an
+// area; a form submits an area with a button.
 text_area(text: &Signal[string], id: int, width: int = 320, rows: int = 5,
-          hint: string = "") -> &View =
-    Field(text, id, width, rows, true, hint, () -> ())
+          hint: string = "", on_escape: &Fn() -> unit = () -> ()) -> &View =
+    Field(text, id, width, rows, true, hint, () -> (), () -> (), on_escape)
 
 // ## The three things a paint has to work out
 
-// What this frame's pointer and keys did to the text.
+// What this frame's pointer and keys did to the text, and whether the keys were what did it.
 //
 // **A drag and a key are exclusive on purpose**: while the pointer is down the selection is a
 // function of where the press began and where the pointer is now, which is `select.sysl`'s stateless
 // rule, and a key arriving mid-drag would be moving a caret that is about to be recomputed anyway.
-private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> Edited
+private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> (Edited, bool)
     val sel = clamped(c.editing(), s)
 
     // **The grab is claimed on the inside rather than on the whole field**, because the coordinates
@@ -142,7 +169,7 @@ private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> Edited
         val (ox, oy) = c.press_origin()
         val (px, py) = c.pointer()
 
-        return Edited(s, Selection(offset_at(c, s, inner, ox, oy), offset_at(c, s, inner, px, py)))
+        return (Edited(s, Selection(offset_at(c, s, inner, ox, oy), offset_at(c, s, inner, px, py))), false)
 
     // **A tap places the caret where it landed**, which a drag would otherwise have done: the grab
     // above answers only while the pointer is still down, and a finger's is not.
@@ -150,9 +177,9 @@ private typing(c: *Canvas, s: string, inner: Rect, multiline: bool) -> Edited
         val (tx, ty) = c.tap_point()
         val at = offset_at(c, s, inner, tx, ty)
 
-        return Edited(s, Selection(at, at))
+        return (Edited(s, Selection(at, at)), false)
 
-    apply_all(s, sel, c.keys(), multiline)
+    (apply_all(s, sel, c.keys(), multiline), true)
 end typing
 
 // The height of a line to divide by. A canvas that cannot measure answers zero, and a field drawn on

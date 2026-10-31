@@ -4270,11 +4270,11 @@ end an_arrow_over_a_selection_collapses_it
 // Shift keeps the anchor, which is the whole of what makes a selection out of a motion.
 @test
 private shift_extends_rather_than_moves()
-    val e = apply("hello", caret(2), Press(Key.Right, true, false))
+    val e = apply("hello", caret(2), press(Key.Right, shift = true))
 
     assert(e.sel == Selection(2, 3), s"anchor ${e.sel.anchor} head ${e.sel.head}")
 
-    val f = apply("hello", e.sel, Press(Key.Right, true, false))
+    val f = apply("hello", e.sel, press(Key.Right, shift = true))
 
     assert(f.sel == Selection(2, 4), "and the anchor stayed where the selection began")
 end shift_extends_rather_than_moves
@@ -4284,12 +4284,83 @@ end shift_extends_rather_than_moves
 private control_moves_by_words()
     val s = "one two  three"
 
-    assert(apply(s, caret(14), Press(Key.Left, false, true)).sel == caret(9), "to 'three'")
-    assert(apply(s, caret(9), Press(Key.Left, false, true)).sel == caret(4), "over two spaces to 'two'")
-    assert(apply(s, caret(0), Press(Key.Right, false, true)).sel == caret(3), "to the end of 'one'")
-    assert(apply(s, caret(3), Press(Key.Right, false, true)).sel == caret(7), "and of 'two'")
-    assert(apply(s, caret(0), Press(Key.Left, false, true)).sel == caret(0), "the start still stops it")
+    assert(apply(s, caret(14), press(Key.Left, ctrl = true)).sel == caret(9), "to 'three'")
+    assert(apply(s, caret(9), press(Key.Left, ctrl = true)).sel == caret(4), "over two spaces to 'two'")
+    assert(apply(s, caret(0), press(Key.Right, ctrl = true)).sel == caret(3), "to the end of 'one'")
+    assert(apply(s, caret(3), press(Key.Right, ctrl = true)).sel == caret(7), "and of 'two'")
+    assert(apply(s, caret(0), press(Key.Left, ctrl = true)).sel == caret(0), "the start still stops it")
 end control_moves_by_words
+
+// **Alt moves by words exactly as control does**, which is what a Mac's ⌥→ means, and what a driver
+// folding alt into control used to arrange before the two keys were told apart.
+@test
+private alt_moves_by_words_as_control_does()
+    val s = "one two  three"
+
+    assert(apply(s, caret(14), press(Key.Left, alt = true)).sel == caret(9), "alt: to 'three'")
+    assert(apply(s, caret(0), press(Key.Right, alt = true)).sel == caret(3), "alt: to the end of 'one'")
+    assert(apply(s, caret(0), press(Key.Right, ctrl = true, alt = true)).sel == caret(3), "both at once")
+    assert(apply(s, caret(0), press(Key.Right, shift = true, alt = true)).sel == Selection(0, 3),
+           "shift and alt select a word")
+    assert(apply("ab\ncdef", caret(5), press(Key.Home, alt = true), true).sel == caret(0),
+           "alt widens home as control does")
+end alt_moves_by_words_as_control_does
+
+// **Command is not a word motion**: ⌘→ is a shortcut an application may take, so a field moves one
+// character for it, as it did when the driver dropped the key entirely.
+@test
+private command_is_not_a_word_motion()
+    val s = "one two"
+
+    assert(apply(s, caret(0), press(Key.Right, cmd = true)).sel == caret(1), "one character")
+    assert(!press(Key.Right, cmd = true).by_word)
+    assert(press(Key.Right, ctrl = true).by_word && press(Key.Right, alt = true).by_word)
+    assert(!press(Key.Right, shift = true).by_word)
+end command_is_not_a_word_motion
+
+// **The four modifiers are four facts**: a press with one held says that one and no other, so a
+// spreadsheet can tell ⌘→ from ⌥→ from ⌃→.
+@test
+private each_modifier_is_its_own_key()
+    val all = press(Key.Down, true, true, true, true)
+
+    assert(all.shift && all.ctrl && all.alt && all.cmd, "all four held")
+    assert(press(Key.Down, cmd = true) != press(Key.Down, ctrl = true), "command is not control")
+    assert(press(Key.Down, alt = true) != press(Key.Down, ctrl = true), "alt is not control")
+    assert(press(Key.Down) == Press(Key.Down, false, false, false, false), "none by default")
+    assert(typed("x") == Press(Key.Typed("x"), false, false, false, false), "typed text carries none")
+end each_modifier_is_its_own_key
+
+// **`command` is ⌘ on a Mac and Ctrl elsewhere**, and the build target decides which -- so the same
+// shortcut test asks a different key on each machine and the other one must not answer.
+@test
+private command_is_the_platforms_shortcut_key()
+    val cmd = press(Key.Typed("c"), cmd = true)
+    val ctrl = press(Key.Typed("c"), ctrl = true)
+
+#if macos
+    assert(cmd.command && !ctrl.command, "a Mac's shortcut key is Command")
+    assert(Modifiers(false, false, false, true).command && !Modifiers(false, true, false, false).command)
+#else
+    assert(ctrl.command && !cmd.command, "everywhere else it is Control")
+    assert(Modifiers(false, true, false, false).command && !Modifiers(false, false, false, true).command)
+#endif
+    assert(!press(Key.Typed("c")).command && !press(Key.Typed("c"), alt = true).command, "alt is never it")
+    assert(!no_modifiers().command)
+end command_is_the_platforms_shortcut_key
+
+// The keys a spreadsheet or a list moves by pages and the function row with are keys like any other:
+// distinct from each other, and nothing a field does anything with.
+@test
+private paging_and_function_keys_are_keys()
+    assert(Key.PageUp != Key.PageDown && Key.F(1) != Key.F(2) && Key.F(12) == Key.F(12))
+    assert(Key.Insert != Key.Delete)
+
+    for k in [Key.PageUp, Key.PageDown, Key.Insert, Key.F(1), Key.F(12)]
+        val e = apply("hello", Selection(1, 3), press(k), true)
+
+        assert(e.text == "hello" && e.sel == Selection(1, 3), "a field leaves the text and selection alone")
+end paging_and_function_keys_are_keys
 
 // In one line, home and end are the whole run; in several, they are the line -- and control widens
 // them back out to the whole run again.
@@ -4301,7 +4372,7 @@ private home_and_end_mean_the_line_or_the_run()
     assert(apply(s, caret(5), press(Key.Home), true).sel == caret(3), "several: the start of the line")
     assert(apply(s, caret(1), press(Key.End), true).sel == caret(2), "up to the newline, not past it")
     assert(apply(s, caret(1), press(Key.End)).sel == caret(7), "and the end of the run in one line")
-    assert(apply(s, caret(5), Press(Key.Home, false, true), true).sel == caret(0), "control widens it")
+    assert(apply(s, caret(5), press(Key.Home, ctrl = true), true).sel == caret(0), "control widens it")
 end home_and_end_mean_the_line_or_the_run
 
 // **`Enter` is the one key whose meaning is the difference between the two views**, which is why
@@ -4485,6 +4556,228 @@ private typing_into_a_focused_field_writes_the_signal()
                        "hit 0,0 200x28\n",
            s"the frame that typed it shows it, with the caret after it:\n${c.dump()}")
 end typing_into_a_focused_field_writes_the_signal
+
+// Press in the field and end that frame, so the next paint is one the keys belong to.
+private focus_field(v: &View, c: *Recorder)
+    c.point(20, 14, true)
+    v.paint(c, FIELD)
+    c.keys_done()
+    c.point(20, 14, false)
+end focus_field
+
+// A field whose Enter and Escape write down what they saw, so a test can read the order back.
+private reporting(t: &Signal[string], log: &Signal[string]) -> &View =
+    text_field(t, 1, on_enter = () -> log.set(log.read() + s"enter:${t.read()} "),
+               on_escape = () -> log.set(log.read() + s"escape:${t.read()} "))
+
+// **Enter submits after the text typed with it has been written**, so a handler reading the signal
+// sees the last character too -- and it changes nothing, and the field keeps the keyboard.
+@test
+private enter_submits_what_was_typed_in_the_same_frame()
+    val t = signal("")
+    val log = signal("")
+    val v = reporting(t, log)
+    var c = recorder()
+
+    focus_field(v, &c)
+    c.key(typed("42"))
+    c.key(press(Key.Enter))
+    v.paint(&c, FIELD)
+
+    assert_eq(log.read(), "enter:42 ", "one submit, after the text")
+    assert_eq(t.read(), "42", "Enter wrote nothing into a single line")
+    assert(c.focus() == 1, "and the field still has the keyboard")
+end enter_submits_what_was_typed_in_the_same_frame
+
+// Escape is the cancel, and the two arrive in the order they were pressed.
+@test
+private escape_cancels_and_the_two_keep_their_order()
+    val t = signal("old")
+    val log = signal("")
+    val v = reporting(t, log)
+    var c = recorder()
+
+    focus_field(v, &c)
+    c.key(press(Key.Escape))
+    v.paint(&c, FIELD)
+
+    assert_eq(log.read(), "escape:old ", "one cancel")
+    assert_eq(t.read(), "old", "Escape changes nothing either")
+
+    c.keys_done()
+    log.set("")
+    c.key(press(Key.Escape))
+    c.key(press(Key.Enter))
+    c.key(press(Key.Enter, shift = true))
+    v.paint(&c, FIELD)
+
+    assert_eq(log.read(), "escape:old enter:old enter:old ", "in arrival order, modifiers or not")
+
+    c.keys_done()
+    log.set("")
+    v.paint(&c, FIELD)
+
+    assert_eq(log.read(), "", "a frame's keys are its own: the next frame calls nothing")
+end escape_cancels_and_the_two_keep_their_order
+
+// **Only the focused field hears them**, as only it hears letters -- and a field with no handlers
+// takes the keys as it always did.
+@test
+private an_unfocused_field_submits_nothing()
+    val t = signal("x")
+    val log = signal("")
+    val v = reporting(t, log)
+    var c = recorder()
+
+    c.key(press(Key.Enter))
+    c.key(press(Key.Escape))
+    v.paint(&c, FIELD)
+
+    assert_eq(log.read(), "", "nobody has the keyboard")
+
+    val plain = signal("")
+    val w = text_field(plain, 1)
+
+    focus_field(w, &c)
+    c.key(typed("a"))
+    c.key(press(Key.Enter))
+    c.key(press(Key.Escape))
+    w.paint(&c, FIELD)
+
+    assert_eq(plain.read(), "a", "the defaults do nothing and the text is typed")
+end an_unfocused_field_submits_nothing
+
+// **A frame that was a press ignores its keys, Enter among them**: the tap placed the caret, and a
+// submit on the same frame would be answering keys the text never saw.
+@test
+private the_frame_of_a_press_submits_nothing()
+    val t = signal("")
+    val log = signal("")
+    val v = reporting(t, log)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    c.key(press(Key.Enter))
+    v.paint(&c, FIELD)
+
+    assert(c.focus() == 1, "the press took the keyboard")
+    assert_eq(log.read(), "", "and the Enter that came with it was not a submit")
+end the_frame_of_a_press_submits_nothing
+
+// **In an area Enter is a newline and never a submit**; Escape is still the cancel.
+@test
+private an_area_keeps_enter_as_a_newline_and_hears_escape()
+    val t = signal("ab")
+    val cancels = signal(0)
+    val v = text_area(t, 1, 320, 3, on_escape = () -> cancels.set(cancels.read() + 1))
+    var c = recorder()
+
+    c.point(30, 14, true)
+    v.paint(&c, AREA)
+    c.keys_done()
+    c.point(30, 14, false)
+
+    c.key(press(Key.Enter))
+    v.paint(&c, AREA)
+
+    assert_eq(t.read(), "ab\n", "a newline at the caret")
+    assert_eq(cancels.read(), 0, "and no cancel")
+
+    c.keys_done()
+    c.key(press(Key.Escape))
+    v.paint(&c, AREA)
+
+    assert_eq(cancels.read(), 1, "Escape is the cancel")
+    assert_eq(t.read(), "ab\n", "and it typed nothing")
+end an_area_keeps_enter_as_a_newline_and_hears_escape
+
+// ## How many presses a tap was
+
+// **The count belongs to the frame the press was in, and a press nobody counted is a single.**
+@test
+private a_press_is_a_single_until_the_platform_counts_it()
+    var c = recorder()
+
+    assert_eq(c.tap_count(), 0, "no press, no count")
+
+    c.press(20, 20, PointerButton.Primary)
+
+    assert_eq(c.tap_count(), 1, "an uncounted press is a single")
+
+    c.counted(2)
+
+    assert_eq(c.tap_count(), 2, "the platform said it was the second")
+
+    c.keys_done()
+
+    assert_eq(c.tap_count(), 0, "the next frame follows no press")
+end a_press_is_a_single_until_the_platform_counts_it
+
+// **Each press starts its own count**: one following a double is a single unless the platform says
+// otherwise -- which is how a press elsewhere, or one after the double-click time, comes out, since
+// the platform decides both and says 1.
+@test
+private every_press_starts_its_own_count()
+    var c = recorder()
+
+    c.press(20, 20, PointerButton.Primary)
+    c.counted(2)
+    c.let_go(20, 20, PointerButton.Primary)
+    c.keys_done()
+    c.press(90, 20, PointerButton.Primary)
+
+    assert_eq(c.tap_count(), 1, "the press after a double is a single")
+
+    c.counted(3)
+    assert_eq(c.tap_count(), 3, "and a triple is a triple")
+
+    c.counted(0)
+    assert_eq(c.tap_count(), 3, "a count below one is no count")
+
+    c.counted(-4)
+    assert_eq(c.tap_count(), 3, "nor is a negative one")
+end every_press_starts_its_own_count
+
+// A count arriving with no press, or with a press of another button, is nobody's.
+@test
+private a_count_without_a_primary_press_is_ignored()
+    var c = recorder()
+
+    c.counted(2)
+    assert_eq(c.tap_count(), 0, "no press to count")
+
+    c.press(20, 20, PointerButton.Secondary)
+    c.counted(2)
+    assert_eq(c.tap_count(), 0, "a right-click is not a tap")
+
+    c.press(20, 20, PointerButton.Primary)
+    c.keys_done()
+    c.counted(2)
+    assert_eq(c.tap_count(), 0, "nor is a count after the press's frame has ended")
+end a_count_without_a_primary_press_is_ignored
+
+// **A view hears a double as a tap that says 2**, on the frame `tapped` says so -- the same frame a
+// single would have been heard in, so the first press of the pair was already a single tap.
+@test
+private a_view_reads_the_count_with_the_tap()
+    val heard = signal("")
+    val v = PointerReader((c, r) -> if c.tapped(r) then heard.set(heard.read() + s"${c.tap_count()} "))
+    var c = recorder()
+    val at = Rect(0, 0, 100, 100)
+
+    c.press(20, 20, PointerButton.Primary)
+    render(v, &c, at)
+    c.let_go(20, 20, PointerButton.Primary)
+    render(v, &c, at)
+
+    c.press(20, 20, PointerButton.Primary)
+    c.counted(2)
+    render(v, &c, at)
+    c.let_go(20, 20, PointerButton.Primary)
+    render(v, &c, at)
+
+    assert_eq(heard.read(), "1 2 ", "a single, then the double it became")
+end a_view_reads_the_count_with_the_tap
 
 // **A field that is not the focused one consumes nothing**, however many keys are waiting -- which
 // is the whole point of routing them by an id rather than by geometry.

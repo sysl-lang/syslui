@@ -58,26 +58,66 @@ enum Key derives Eq
     Enter
     Tab
     Escape
+    Insert
+    PageUp
+    PageDown
+
+    // A function key, `F(1)` to `F(12)` on most keyboards. **One variant carrying its number rather
+    // than twelve**, because nothing the toolkit does differs between them, and a keyboard with
+    // twenty-four of them reports the other twelve without the enum having to grow again.
+    F(n: int)
 end Key
 
-// A key with the two modifiers that change what it means.
+// A key with the modifiers that were held when it went down.
 //
-// **Shift extends a selection and control moves by words**, and those are the only two an editing
-// surface has to know about -- everything else a modifier does is a shortcut, which belongs to the
-// application because only the application knows what its shortcuts are. ⌘C is not in this file for
-// the same reason the clipboard is not: the toolkit says what is selected and the program decides
-// what that is worth.
+// **Shift extends a selection and a word modifier moves by words**, and those are the only two an
+// editing surface has to know about -- everything else a modifier does is a shortcut, which belongs
+// to the application because only the application knows what its shortcuts are. ⌘C is not in this
+// file for the same reason the clipboard is not: the toolkit says what is selected and the program
+// decides what that is worth.
+//
+// **Each of the four is the key it names and nothing else**, so a spreadsheet can tell ⌘→ from ⌥→
+// from ⌃→. Which of them *means* something is a platform convention, and that is answered by the two
+// properties below rather than by a driver folding one key into another -- which is what happened
+// until 0.1.16, when Alt arrived as `ctrl` and Command did not arrive at all.
 struct Press derives Eq
     key: Key
     shift: bool
     ctrl: bool
+    alt: bool
+
+    // The platform's own key: Command on a Mac, the Windows key elsewhere. The name is `Modifiers`'.
+    cmd: bool
+
+    // Does this press ask for a motion by words?
+    //
+    // **Either control or alt**, because a Mac moves by word with ⌥ and everything else with Ctrl, and
+    // a field that honoured only one would be wrong on half the machines. This is what the driver's
+    // fold used to decide, kept as it was: an editor's arrows behave exactly as they did before the
+    // two keys were told apart.
+    by_word -> bool = self.ctrl || self.alt
+
+    // Is the shortcut key held -- ⌘ on a Mac, Ctrl everywhere else?
+    //
+    // **This is the one an application's shortcuts should ask**, so that ⌘C on a Mac and Ctrl+C on
+    // Linux are one line of the program rather than two. It is decided by the target the program was
+    // built for, which is the platform the person is sitting at.
+    command -> bool = if COMMAND_IS_CMD then self.cmd else self.ctrl
 end Press
 
-// A key with no modifiers, which is most of them.
-press(k: Key) -> Press = Press(k, false, false)
+// Whether the shortcut key is Command, for `Press.command` and `Modifiers.command`.
+#if macos
+private[ui] const COMMAND_IS_CMD: bool = true
+#else
+private[ui] const COMMAND_IS_CMD: bool = false
+#endif
+
+// A key and whichever modifiers are held -- none, unless named, which is most of them.
+press(k: Key, shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: bool = false) -> Press =
+    Press(k, shift, ctrl, alt, cmd)
 
 // Text arriving from the window system.
-typed(t: string) -> Press = Press(Key.Typed(t), false, false)
+typed(t: string) -> Press = Press(Key.Typed(t), false, false, false, false)
 
 // No keys at all -- what a backend with no keyboard answers, so that a field on one still draws.
 no_keys() -> []Press = buf[Press]().view()
@@ -110,6 +150,13 @@ struct Keyboard
     tap_y: int
     fresh: bool
 
+    // Which press of a run that one was: 1 for a single, 2 for the second of a double, and so on.
+    //
+    // **The platform counts, not the toolkit**, because how far apart in time and space two presses
+    // may be and still make a double is a setting the person chose in their system preferences, and
+    // only the window system can read it. A press nobody counted is a single.
+    count: int
+
     // The window reported a key.
     press(*self, p: Press) = self.presses.push(p)
 
@@ -131,12 +178,21 @@ struct Keyboard
             self.tap_x = x
             self.tap_y = y
             self.fresh = true
+            self.count = 1
 
         self.was_down = down
     end moved
 
+    // The platform says the press just recorded was the `n`th of a run. A count below one is no
+    // count at all, and leaves the press a single.
+    counted(*self, n: int)
+        if self.fresh && n > 0 then self.count = n
+
     // Did the press this frame follows land in `r`?
     landed(*self, r: Rect) -> bool = self.fresh && r.holds(self.tap_x, self.tap_y)
+
+    // Which press of a run the one this frame follows was, or 0 when no press was.
+    taps(*self) -> int = if self.fresh then self.count else 0
 
     // Give the keyboard to `id`, and start it with an empty caret if it did not have it before.
     take(*self, id: int)
@@ -148,4 +204,4 @@ struct Keyboard
     edit(*self, sel: Selection) = self.sel = sel
 end Keyboard
 
-keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false, -1, -1, false)
+keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false, -1, -1, false, 0)

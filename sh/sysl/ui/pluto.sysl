@@ -82,6 +82,13 @@ struct PlutoCanvas
     // What the pointer gives way to. See `Covers`.
     covers: Covers
 
+    // The pointer shape the frame being painted asked for, and the one the last frame settled on.
+    shapes: Shaping
+
+    // The shape the frame `render` last finished asked for under the pointer -- what a frame loop
+    // shows. See `Canvas.cursor`.
+    shape(*self) -> Cursor = self.shapes.now
+
     // Where the pointer is, which the frame loop sets once a frame before painting.
     point(*self, x: int, y: int, down: bool)
         self.px = x
@@ -278,6 +285,8 @@ impl Canvas for PlutoCanvas
 
     override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
 
+    override tap_count(*self) -> int = self.board.taps()
+
     override editing(*self) -> Selection = self.board.sel
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
@@ -285,6 +294,12 @@ impl Canvas for PlutoCanvas
     override keys_done(*self)
         self.board.reset()
         self.hold.settle()
+        self.shapes.settle()
+
+    override cursor(*self, r: Rect, shape: Cursor)
+        if r.holds(self.px, self.py) && self.clips.shows(Rect(self.px, self.py, 1, 1)) &&
+           self.covers.clear(self.px, self.py)
+            self.shapes.want(shape)
 
     // **PlutoVG is asked rather than a clip stack being kept beside it**, which is one fewer thing
     // to get out of step: the canvas already tracks its own clip through `save` and `restore`, and a
@@ -429,6 +444,8 @@ impl Pointing for PlutoCanvas
             self.point(x, y, self.down)
             self.chord.let_go(x, y, b)
     end let_go
+
+    override counted(*self, n: int) = self.board.counted(n)
 end PlutoCanvas
 
 // A canvas over a plutovg canvas and a face, at a size in pixels.
@@ -451,7 +468,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     sizings.push(sizing(face, size))
 
     PlutoCanvas(vg, face, sizings, buf(), -1, -1, false, hits(), clips(), grabbing(), buf(),
-                phases(), buf(), dark(), buf(), keyboard(), chord(), covers())
+                phases(), buf(), dark(), buf(), keyboard(), chord(), covers(), shaping())
 end pluto_canvas
 
 // One size of the face: where a run's baseline sits below the top of its line, how tall a line is,

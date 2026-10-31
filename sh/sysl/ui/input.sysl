@@ -253,6 +253,9 @@ struct Modifiers derives Eq
     alt: bool
     cmd: bool
 
+    // Is the shortcut key held -- ⌘ on a Mac, Ctrl elsewhere? `Press.command`'s answer, for a click.
+    command -> bool = if COMMAND_IS_CMD then self.cmd else self.ctrl
+
 no_modifiers() -> Modifiers = Modifiers(false, false, false, false)
 
 // What a frame loop tells a canvas about a button going down or coming up.
@@ -264,6 +267,11 @@ no_modifiers() -> Modifiers = Modifiers(false, false, false, false)
 trait Pointing
     press(*self, x: int, y: int, b: PointerButton)
     let_go(*self, x: int, y: int, b: PointerButton)
+
+    // The primary press just reported was the `n`th of a run, as the window system counts them --
+    // what `Canvas.tap_count` answers on the frame that follows. Told after `press`, and only by a
+    // frame loop that knows; a press nobody counts is a single, which is the default.
+    counted(*self, n: int) = ()
 
 // The buttons beyond the primary, and the modifiers.
 //
@@ -304,3 +312,58 @@ struct Chord
 end Chord
 
 chord() -> Chord = Chord(grabbing(), grabbing(), no_modifiers())
+
+// The shape of the pointer, which is how a window says what a press would do before it happens.
+//
+// **The platform draws them and the names are the platform's**, so there are only as many here as
+// every window system has: a backend maps each onto its own, and a shape a backend has no picture for
+// is drawn as the arrow.
+enum Cursor
+    // The ordinary pointer, and what is shown wherever nothing asked.
+    Arrow
+
+    // Text can be selected here -- the I-beam.
+    Text
+
+    // Something here is a link or a button -- the hand.
+    Pointer
+
+    // A border here can be dragged sideways, or up and down: a column's edge, a splitter.
+    EwResize
+    NsResize
+
+    // What is here can be picked up and moved.
+    Move
+
+    // A point is being chosen precisely.
+    Crosshair
+
+    // A press here will be refused.
+    NotAllowed
+
+    // The program is busy.
+    Wait
+end Cursor
+
+// Which shape a frame asked for under the pointer, and which the last finished frame did.
+//
+// **A request is a rectangle and a shape, decided while painting, and the last one wins** -- the
+// rule `Hits` follows and for the same reason: paint order is depth order, so a view drawn over
+// another decides the pointer over itself. A view asks only where it draws, which is why there is no
+// way to *set* the pointer: one that could be set would stay set after the view that set it was gone.
+//
+// **Two shapes rather than one, because the frame loop reads it after `render` has ended the
+// frame.** What is being painted accumulates in `wanted`; `settle` moves it to `now` at the end of
+// the frame and starts the next with the arrow, so a frame that asks for nothing gets the arrow back.
+struct Shaping
+    wanted: Cursor
+    now: Cursor
+
+    want(*self, shape: Cursor) = self.wanted = shape
+
+    settle(*self)
+        self.now = self.wanted
+        self.wanted = Cursor.Arrow
+end Shaping
+
+shaping() -> Shaping = Shaping(Cursor.Arrow, Cursor.Arrow)

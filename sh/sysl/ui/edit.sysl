@@ -59,20 +59,20 @@ apply(s: string, sel: Selection, p: Press, multiline: bool = false) -> Edited
         // means "put me before it", and moving as well would leave the caret one character short of
         // where every other editor puts it.
         Key.Left ->
-            if p.ctrl then moved(s, sel, word_left(s, v, sel.head), p.shift)
+            if p.by_word then moved(s, sel, word_left(s, v, sel.head), p.shift)
             elif !sel.empty() && !p.shift then moved(s, sel, sel.lo(), false)
             else moved(s, sel, step_left(s, v, sel.head), p.shift)
 
         Key.Right ->
-            if p.ctrl then moved(s, sel, word_right(s, v, sel.head), p.shift)
+            if p.by_word then moved(s, sel, word_right(s, v, sel.head), p.shift)
             elif !sel.empty() && !p.shift then moved(s, sel, sel.hi(), false)
             else moved(s, sel, step_right(s, v, sel.head), p.shift)
 
         Key.Home ->
-            moved(s, sel, if multiline && !p.ctrl then line_start(s, sel.head) else 0usize, p.shift)
+            moved(s, sel, if multiline && !p.by_word then line_start(s, sel.head) else 0usize, p.shift)
 
         Key.End ->
-            moved(s, sel, if multiline && !p.ctrl then line_end(s, sel.head) else s.len, p.shift)
+            moved(s, sel, if multiline && !p.by_word then line_end(s, sel.head) else s.len, p.shift)
 
         Key.Up ->
             if multiline then moved(s, sel, up(s, v, sel.head), p.shift) else unchanged(s, sel)

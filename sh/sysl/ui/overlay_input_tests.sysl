@@ -563,3 +563,124 @@ private the_pluto_canvas_blocks_what_the_recorder_blocks()
     render(v, &c, SCREEN)
     assert(page.hover.read(), "and closing it releases the page on that frame")
 end the_pluto_canvas_blocks_what_the_recorder_blocks
+
+// ## The pointer's shape, which is input running the other way and so obeys the same covers
+
+// A view asking for `shape` over the whole of what it paints.
+private shaped(shape: Cursor) -> &View = PointerReader((c, r) -> c.cursor(r, shape))
+
+// **The arrow is what nothing asking means**: before any frame, with the pointer outside the
+// request, and on the frame after a request stops being made.
+@test
+private the_pointer_is_the_arrow_wherever_nothing_asked()
+    var c = recorder()
+    val edge = PointerReader((c, r) -> c.cursor(Rect(0, 0, 50, 50), Cursor.EwResize))
+
+    assert(c.shape() == Cursor.Arrow, "before any frame")
+
+    render(edge, &c, SCREEN)
+    assert(c.shape() == Cursor.Arrow, "the pointer starts off the surface")
+
+    c.point(20, 20)
+    render(edge, &c, SCREEN)
+    assert(c.shape() == Cursor.EwResize, "over the request")
+
+    c.point(50, 20)
+    render(edge, &c, SCREEN)
+    assert(c.shape() == Cursor.Arrow, "one past its right edge")
+
+    c.point(20, 20)
+    render(edge, &c, SCREEN)
+    c.point(200, 200)
+    assert(c.shape() == Cursor.EwResize, "the shape is the last finished frame's until the next one")
+    render(edge, &c, SCREEN)
+    assert(c.shape() == Cursor.Arrow, "beside it")
+
+    c.point(20, 20)
+    render(text("x"), &c, SCREEN)
+    assert(c.shape() == Cursor.Arrow, "a frame that asks for nothing gets the arrow back")
+end the_pointer_is_the_arrow_wherever_nothing_asked
+
+// **Last wins, as a tap does**: the view painted later is the one on top -- and a later request that
+// does not hold the pointer does not take it from an earlier one that does.
+@test
+private of_two_requests_the_later_wins()
+    var c = recorder()
+
+    c.point(5, 5)
+    render(Both(shaped(Cursor.EwResize), shaped(Cursor.Text)), &c, SCREEN)
+    assert(c.shape() == Cursor.Text, "the later of two")
+
+    render(Both(shaped(Cursor.Text), shaped(Cursor.EwResize)), &c, SCREEN)
+    assert(c.shape() == Cursor.EwResize, "either way round")
+
+    val elsewhere = PointerReader((c, r) -> c.cursor(Rect(300, 200, 10, 10), Cursor.Wait))
+
+    render(Both(shaped(Cursor.Pointer), elsewhere), &c, SCREEN)
+    assert(c.shape() == Cursor.Pointer, "a later request somewhere else is not heard here")
+
+    c.point(305, 205)
+    render(Both(shaped(Cursor.Pointer), elsewhere), &c, SCREEN)
+    assert(c.shape() == Cursor.Wait, "but is where it is")
+end of_two_requests_the_later_wins
+
+// **A request outside the clip is not heard**, because the part of the view under the pointer is not
+// on screen: a column border scrolled out of its pane must not change the pointer over the next pane.
+@test
+private a_clipped_request_is_not_heard()
+    var c = recorder()
+    val clipped = PointerReader((c, r) ->
+        c.clip(Rect(0, 0, 50, 50))
+        c.cursor(r, Cursor.Move)
+        c.unclip())
+
+    c.point(100, 100)
+    render(clipped, &c, SCREEN)
+    assert(c.shape() == Cursor.Arrow, "outside the clip")
+
+    c.point(10, 10)
+    render(clipped, &c, SCREEN)
+    assert(c.shape() == Cursor.Move, "inside it")
+end a_clipped_request_is_not_heard
+
+// What a modal page asks for and what its content does, across a frame already raised. `at` puts the
+// pointer somewhere, paints a frame and answers the shape it settled on.
+private assert_shapes_under_a_modal(open: &Signal[bool], at: &Fn(int, int) -> Cursor)
+    at(OUT_X, OUT_Y)
+    assert(at(OUT_X, OUT_Y) == Cursor.Arrow, "the page under the catcher is not heard")
+    assert(at(IN_X, IN_Y) == Cursor.Crosshair, "the content is")
+
+    open.set(false)
+    assert(at(OUT_X, OUT_Y) == Cursor.EwResize, "and closing it gives the page its shape back on that frame")
+end assert_shapes_under_a_modal
+
+// **Under an overlay a request is not heard**, by the rule that keeps a hover off the page under a
+// modal -- on the recorder and on the real backend alike.
+@test
+private under_a_modal_only_the_content_shapes_the_pointer()
+    val open = signal(true)
+    val v = Modal(shaped(Cursor.EwResize), shaped(Cursor.Crosshair).frame(100, 100), open, None)
+    var c = recorder()
+    val rc = &c
+
+    assert_shapes_under_a_modal(open, (x, y) ->
+        rc.point(x, y)
+        render(v, rc, SCREEN)
+        rc.shape())
+
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    var p = pluto_canvas(plutovg.canvas(plutovg.surface(400, 300).unwrap()).unwrap(), face.unwrap(), 15.0)
+    val pc = &p
+
+    open.set(true)
+    assert_shapes_under_a_modal(open, (x, y) ->
+        pc.point(x, y, false)
+        render(v, pc, SCREEN)
+        pc.shape())
+end under_a_modal_only_the_content_shapes_the_pointer

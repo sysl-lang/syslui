@@ -275,6 +275,16 @@ trait Canvas
     // A canvas with no wheel answers that it did not turn.
     wheel(*self, r: Rect) -> (int, int) = (0, 0)
 
+    // Show the pointer as `shape` while it is over `r` -- a column's edge asking for `EwResize`, a
+    // link for `Pointer`.
+    //
+    // **Last wins, as a tap does**, and only where the pointer would reach the view at all: outside
+    // the clip, or under an overlay raised above the layer being painted, a request is not heard. A
+    // drag that wants its shape kept after the pointer leaves its handle asks with a rectangle that
+    // still holds the pointer -- the one it is dragging across. Wherever nothing asked, the frame
+    // shows the arrow. A canvas with no pointer has no shape to show and ignores this.
+    cursor(*self, r: Rect, shape: Cursor) = ()
+
     // ## The keyboard, which is the one thing a rectangle cannot key
     //
     // **A click carries a position and a key carries nothing**, so where a key goes is decided by
@@ -305,6 +315,15 @@ trait Canvas
 
     // Where that press was, in the coordinates a view is painted in.
     tap_point(*self) -> (int, int) = (-1, -1)
+
+    // Which press of a run that one was -- 1 for a single, 2 for a double, 3 for a triple -- or 0 on
+    // a frame no press came before.
+    //
+    // **It is asked beside `tapped` rather than being a second kind of tap**, because a double-click
+    // is a single-click first: the cell that a double opens for editing was selected by the press
+    // before it, and a view that heard only the double would have to guess what the first one did.
+    // The default is a canvas with no pointer, which never saw a press.
+    tap_count(*self) -> int = 0
 
     // Where the focused view's caret is, and what it has selected.
     editing(*self) -> Selection = nothing_selected()
@@ -502,6 +521,12 @@ struct Recorder
     // What the pointer gives way to. See `Covers`.
     covers: Covers
 
+    // The pointer shape the frame being painted asked for, and the one the last frame settled on.
+    shapes: Shaping
+
+    // The shape the last frame `render` finished asked for under the pointer.
+    shape(*self) -> Cursor = self.shapes.now
+
     // Put the pointer somewhere, so a test can hover and press without a window.
     point(*self, x: int, y: int, down: bool = false)
         self.px = x
@@ -570,6 +595,8 @@ impl Pointing for Recorder
             self.point(x, y, self.down)
             self.chord.let_go(x, y, b)
     end let_go
+
+    override counted(*self, n: int) = self.board.counted(n)
 end Recorder
 
 // A radius, written only when there is one.
@@ -702,6 +729,8 @@ impl Canvas for Recorder
 
     override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
 
+    override tap_count(*self) -> int = self.board.taps()
+
     override editing(*self) -> Selection = self.board.sel
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
@@ -709,6 +738,12 @@ impl Canvas for Recorder
     override keys_done(*self)
         self.board.reset()
         self.hold.settle()
+        self.shapes.settle()
+
+    override cursor(*self, r: Rect, shape: Cursor)
+        if r.holds(self.px, self.py) && self.clips.shows(Rect(self.px, self.py, 1, 1)) &&
+           self.covers.clear(self.px, self.py)
+            self.shapes.want(shape)
 
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
     // and a clock a test can drive, so it replaces it.
@@ -748,7 +783,7 @@ end Recorder
 // package's own tests is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16, size: real = 16.0) -> Recorder =
     Recorder(buf(), hits(), char_w, line_h, size, buf(), -1, -1, false, dark(), buf(), clips(),
-             grabbing(), buf(), buf(), phases(), keyboard(), chord(), covers())
+             grabbing(), buf(), buf(), phases(), keyboard(), chord(), covers(), shaping())
 
 // The override in force, if anything has pushed one.
 //

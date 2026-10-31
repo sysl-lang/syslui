@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.15" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.16" }
 }
 ```
 
@@ -605,6 +605,39 @@ the caret is, every frame, so text replaced from underneath cannot leave a field
 end of what it now holds. Nothing wraps: a long paragraph in an area is one line that scrolls
 sideways, because wrapping means measuring candidate breaks over the whole run on every frame.
 
+### Submit and cancel (since 0.1.16)
+
+```
+text_field(cell, id = 1, on_enter = () -> commit(), on_escape = () -> revert())
+text_area(notes, id = 2, on_escape = () -> close())
+```
+
+**Enter calls `on_enter` and Escape `on_escape`, after the frame's typing has been written**, so a
+handler reading the signal sees the digit typed in the same frame as the Enter. Neither key changes
+the text and the field keeps the keyboard: staying focused after a submit, or putting the old text
+back after a cancel, is the application's line to write. In an area Enter stays a newline, so it has
+only `on_escape`. Both default to doing nothing, which is what the keys did before. A frame that was a
+press in the field ignores its keys, Enter among them, as it always ignored the letters.
+
+### The keys and the four modifiers (since 0.1.16)
+
+`Key` has `Insert`, `PageUp`, `PageDown` and `F(n)` for the function row beside the editing keys; a
+field does nothing with any of them. **`Press` carries `shift`, `ctrl`, `alt` and `cmd`**, each the key
+it names — `cmd` is Command on a Mac and the Windows key elsewhere, as in `Modifiers` — so ⌘→, ⌥→ and
+⌃→ are three different presses. `press(Key.Right, shift = true, cmd = true)` builds one.
+
+Two properties answer what a platform *means* by them:
+
+- **`p.by_word`** is ctrl or alt — a word motion on every platform at once, because a Mac moves by
+  word with ⌥ and everything else with Ctrl. The editor asks this, so its arrows are what they were.
+- **`p.command`** is ⌘ on a Mac and Ctrl elsewhere, decided by the build target: the key an
+  application's shortcuts should ask for, so `⌘C`/`Ctrl+C` is one line. `Modifiers` has it too.
+
+**Behaviour change:** until 0.1.16 the SDL driver folded Alt into `ctrl` and dropped Command. A
+program that read `p.ctrl` to mean "by word" should read `p.by_word`; one that meant a shortcut should
+read `p.command`. A `Press(k, shift, ctrl)` written out positionally needs the two new fields, or
+`press(k, shift = …, ctrl = …)`.
+
 ## Pictures
 
 ```
@@ -758,6 +791,35 @@ paint(&self, c: *Canvas, r: Rect)
 **What a frame loop owes** (`Pointing`, implemented by `PlutoCanvas` and the recorder): `press(x, y, b)`
 and `let_go(x, y, b)` for a button, where `Primary` means `point(x, y, true)` and `release(x, y)`; and
 `chord.keys`, set each frame. The recorder takes the same calls, which is how the tests drive it.
+
+### A double-click (since 0.1.16)
+
+```
+if c.tapped(r)
+    select(cell)
+    if c.tap_count() == 2 then edit(cell)
+```
+
+**`tap_count()` is which press of a run the tap was** — 1, 2 for a double, 3 for a triple — on the
+frame `tapped` reports it, and 0 on a frame no press came before. A double is a single first, so the
+first press of the pair has already been heard as a 1. **The platform counts**, since how close in
+time and place two presses must be is the person's setting: a frame loop calls `counted(n)` after
+`press` (SDL's `clicks`, which it also synthesises for a finger), and a press nobody counted is a
+single. A count below one, or one with no primary press in its frame, is ignored.
+
+### The pointer's shape (since 0.1.16)
+
+```
+c.cursor(border, Cursor.EwResize)
+```
+
+**A view asks for a shape over a rectangle while it paints, and the last request holding the pointer
+wins** — paint order, as for a tap. A request outside the clip, or under an overlay raised above the
+layer being painted, is not heard; wherever nothing asked the pointer is `Arrow`, so a view that stops
+asking gives the arrow back on its next frame. `Cursor` is `Arrow`, `Text`, `Pointer`, `EwResize`,
+`NsResize`, `Move`, `Crosshair`, `NotAllowed` and `Wait`. The frame loop reads `shape()` from the canvas
+after `render`, which settles each frame's answer; a drag that should keep its shape once the pointer
+leaves its handle asks over the rectangle it drags across.
 
 ## Named controls, and a snapshot of what is on screen
 
