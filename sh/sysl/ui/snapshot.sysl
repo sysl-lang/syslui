@@ -1,6 +1,7 @@
 module sh.sysl.ui
 
 import sysl.buf.{Buf, buf}
+import sysl.text.{Search, StrBuilder, fields, str_builder}
 
 // What is on screen, as text, and where to click to reach any of it.
 //
@@ -98,6 +99,9 @@ end Entry
 struct Snapshot
     entries: Buf[Entry]
 
+    // The rectangle the tree was painted into, in the window's points.
+    window: Rect
+
     // How many things are on screen.
     len(self) -> usize = self.entries.view().len
 
@@ -148,6 +152,97 @@ struct Snapshot
 
         Ok(e.centre())
     end click_point
+
+    // The key that reaches `e` through `find` and `click_point`: its name where that name is its
+    // alone, and its reference otherwise. A name survives a rebuild; a reference is only good for a
+    // tree that has not changed shape since.
+    key(self, e: Entry) -> string
+        if e.name.len > 0
+            val v = self.entries.view()
+            var same = 0
+
+            for i in 0..<v.len
+                if v[i].name == e.name then same += 1
+
+            if same == 1 then return e.name
+
+        s"@${e.id}"
+    end key
+
+    // The same snapshot as JSON text, for a program that drives this one from outside and has no way
+    // to read a `Buf[Entry]`: an object with the `window` and the `entries` in reading order, one
+    // entry to a line. A rectangle is `[x, y, w, h]` in the window's points.
+    //
+    // Each entry carries `ref` (what `find` and `click_point` take), `id`, `role`, `label`, `name`,
+    // `value`, `rect`, `shown`, `click` (the point `click_point` would answer, or `null` when
+    // something raised above takes the click), `parent` (the enclosing entry's `id`, or `null`),
+    // `depth`, `enabled`, `focused`, `covered`, every state word as `marks`, and a control's `range`
+    // as `"lo..hi"` or `null`.
+    //
+    // The same tree and the same state give the same text, byte for byte, and it opens nothing:
+    // carrying it is somebody else's.
+    to_json(self) -> string
+        val v = self.entries.view()
+        var out = str_builder()
+
+        // The id of the latest entry at each depth, which is the parent of the next one a level in.
+        var chain: Buf[int] = buf()
+
+        out.push("{\"window\":")
+        json_rect(&out, self.window)
+        out.push(",\"entries\":[")
+
+        for i in 0..<v.len
+            val e = v[i]
+
+            while chain.len() > usize(e.depth)
+                chain.pop()
+
+            out.push(if i == 0 then "\n{\"ref\":" else ",\n{\"ref\":")
+            json_string(&out, self.key(e))
+            out.push(",\"id\":")
+            out.push_int(e.id)
+            out.push(",\"role\":")
+            json_string(&out, e.role)
+            out.push(",\"label\":")
+            json_string(&out, e.label)
+            out.push(",\"name\":")
+            json_string(&out, e.name)
+            out.push(",\"value\":")
+            json_string(&out, e.value)
+            out.push(",\"rect\":")
+            json_rect(&out, e.rect)
+            out.push(",\"shown\":")
+            json_rect(&out, e.shown)
+            out.push(",\"click\":")
+
+            if e.covered
+                out.push("null")
+            else
+                val (x, y) = e.centre()
+
+                out.push("[")
+                out.push_int(x)
+                out.push(",")
+                out.push_int(y)
+                out.push("]")
+
+            out.push(",\"parent\":")
+
+            if e.depth == 0 || chain.len() == 0
+                out.push("null")
+            else
+                out.push_int(chain.view()[chain.len() - 1])
+
+            out.push(",\"depth\":")
+            out.push_int(e.depth)
+            json_marks(&out, e)
+            out.push("}")
+            chain.push(e.id)
+
+        out.push(if v.len == 0 then "]}" else "\n]}")
+        out.finish()
+    end to_json
 end Snapshot
 
 // Take a snapshot of `v` painted at `at`, reading fonts and focus from `c`. Call it after `render`, so
@@ -167,7 +262,7 @@ snapshot(v: &View, c: *Canvas, at: Rect) -> Snapshot
             k.last = kept
         None -> render(v, &s, at)
 
-    s.finished()
+    s.finished(at)
 end snapshot
 
 // What a run of text painted inside a node becomes.
@@ -386,7 +481,7 @@ struct Survey
     end add
 
     // Turn what was gathered into the finished list.
-    private finished(*self) -> Snapshot
+    private finished(*self, at: Rect) -> Snapshot
         val v = self.nodes.view()
         var out: Buf[Entry] = buf()
         var depths: Buf[int] = buf()
@@ -407,7 +502,7 @@ struct Survey
                 out.push(Entry(id, v[i].role, v[i].label, v[i].name, v[i].value, marks, v[i].rect,
                                shown, depth, covered))
 
-        Snapshot(out)
+        Snapshot(out, at)
     end finished
 
     // What is left of `shown` after everything raised later than node `i`.
@@ -572,6 +667,84 @@ private quoted(s: string) -> string
 
     out + "\""
 end quoted
+
+// A rectangle as JSON: `[x,y,w,h]`.
+private json_rect(out: *StrBuilder, r: Rect)
+    out.push("[")
+    out.push_int(r.x)
+    out.push(",")
+    out.push_int(r.y)
+    out.push(",")
+    out.push_int(r.w)
+    out.push(",")
+    out.push_int(r.h)
+    out.push("]")
+end json_rect
+
+// A string as JSON, in double quotes. A quote, a backslash and every control character are escaped,
+// by their short form where JSON has one; everything else, the bytes of any other character
+// included, is copied as it is, which is legal JSON because a `string` is UTF-8.
+private json_string(out: *StrBuilder, s: string)
+    val b = s.bytes
+
+    out.push("\"")
+
+    for i in 0..<b.len
+        val c = b[i]
+
+        if c == u8('"') then out.push("\\\"")
+        elif c == u8('\\') then out.push("\\\\")
+        elif c == u8('\n') then out.push("\\n")
+        elif c == u8('\r') then out.push("\\r")
+        elif c == u8('\t') then out.push("\\t")
+        elif c == 8 then out.push("\\b")
+        elif c == 12 then out.push("\\f")
+        elif c < 32
+            out.push("\\u00")
+            out.bytes.push(HEX[c >> 4])
+            out.bytes.push(HEX[c & 15])
+        else out.bytes.push(c)
+
+    out.push("\"")
+end json_string
+
+private val HEX: string = "0123456789abcdef"
+
+// The state of an entry as JSON members: the three every entry has, the words as they were gathered,
+// and a range where a control reported one.
+private json_marks(out: *StrBuilder, e: Entry)
+    var range = ""
+    var words: Buf[string] = buf()
+    var enabled = true
+    var focused = false
+
+    for w in fields(e.marks)
+        if w.starts_with("range=")
+            range = w[6..<w.len]
+        else
+            words.push(w)
+
+            if w == "disabled" then enabled = false
+            if w == "focused" then focused = true
+
+    out.push(",\"enabled\":")
+    out.push_bool(enabled)
+    out.push(",\"focused\":")
+    out.push_bool(focused)
+    out.push(",\"covered\":")
+    out.push_bool(e.covered)
+    out.push(",\"marks\":[")
+
+    val ws = words.view()
+
+    for i in 0..<ws.len
+        if i > 0 then out.push(",")
+        json_string(out, ws[i])
+
+    out.push("],\"range\":")
+
+    if range.len == 0 then out.push("null") else json_string(out, range)
+end json_marks
 
 // What is left of `s` beside `o`: the largest strip of it `o` does not touch, or nothing.
 private beside(s: Rect, o: Rect) -> Option[Rect]

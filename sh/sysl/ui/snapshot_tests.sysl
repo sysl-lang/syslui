@@ -92,7 +92,7 @@ private every_control_kind_appears_with_no_name_given()
         @15 textfield [0,280 400x28] value="typed"
         @16 textfield "empty" [0,308 400x28]
         @17 textarea [0,336 400x44] value="two\nlines"
-        @18 text "pick" [0,380 400x16]
+        @18 selectable "pick" [0,380 400x16]
         @19 image [0,300 400x200] shown [0,396 400x8]
         @20 tab "A" [0,405 24x34]
         @21 tab "B" [24,405 24x34] selected

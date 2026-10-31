@@ -1,0 +1,287 @@
+module sh.sysl.ui
+@tests
+
+import sysl.text.Search
+import sh.sysl.plutovg
+
+private val SIZE: Rect = Rect(0, 0, 400, 800)
+
+private json_of(v: &View) -> string
+    var c = recorder()
+
+    render(v, &c, SIZE)
+    snapshot(v, &c, SIZE).to_json()
+end json_of
+
+// The JSON against a block of expected text, which ends in the newline the block's last line has.
+private assert_json(got: string, want: string)
+    assert(got + "\n" == want, s"expected:\n${want}got:\n${got}\n")
+
+private idle() -> &Fn() -> unit = () -> ()
+
+private count(n: &Signal[int]) -> &Fn() -> unit = () -> n.set(n.read() + 1)
+
+private tiny_picture() -> &Image = Image(plutovg.surface(4, 2).unwrap())
+
+// Every kind of control, unnamed, with the popover open over the rest.
+private every_kind(open: &Signal[bool]) -> &View
+    val rows: [][]string = [["ann", "1"], ["bob", "2"]]
+
+    column([
+        text("title"),
+        button("Save", idle()),
+        text("plain").on_tap(idle()),
+        switch(signal(true)),
+        checkbox(signal(false), "Snap"),
+        radio_group(["One", "Two"], signal(1)),
+        slider(signal(5), 0, 10, 100),
+        progress(0.25, 100),
+        meter(3.0, 0.0, 10.0, 100),
+        text_field(signal("typed"), 1),
+        text_area(signal("two\nlines"), 3, rows = 2),
+        selectable("pick", signal(Selection(1, 3))),
+        image_sized(tiny_picture(), 8, 8),
+        tabs(["A", "B"], signal(1), i -> text("panel")),
+        table([col("name"), col("n", true)], rows, signal(0), 40, on_row = Some(i -> ())),
+        button("Menu", idle()).popover(open, button("Item", idle()))
+    ])
+end every_kind
+
+@test
+private json_of_an_empty_screen_is_an_empty_list()
+    assert_eq(json_of(spacer()), "{\"window\":[0,0,400,800],\"entries\":[]}")
+
+    // The window is whatever rectangle the tree was painted into, not the origin.
+    var c = recorder()
+    val at = Rect(10, 20, 200, 100)
+
+    render(spacer(), &c, at)
+    assert_eq(snapshot(spacer(), &c, at).to_json(), "{\"window\":[10,20,200,100],\"entries\":[]}")
+end json_of_an_empty_screen_is_an_empty_list
+
+@test
+private json_of_a_small_tree_is_exact()
+    val v = column([
+        text("title"),
+        button("Save", idle()).named("save"),
+        switch(signal(true)),
+        slider(signal(5), 0, 10, 100, id = 1)
+    ])
+    var c = recorder()
+
+    render(v, &c, SIZE)
+    c.take_focus(1)
+    render(v, &c, SIZE)
+
+    assert_json(snapshot(v, &c, SIZE).to_json(),
+        raw"""
+        {"window":[0,0,400,800],"entries":[
+        {"ref":"@1","id":1,"role":"text","label":"title","name":"","value":"","rect":[0,0,400,16],"shown":[0,0,400,16],"click":[200,8],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"save","id":2,"role":"button","label":"Save","name":"save","value":"","rect":[0,16,400,32],"shown":[0,16,400,32],"click":[200,32],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"@3","id":3,"role":"switch","label":"","name":"","value":"","rect":[0,48,400,24],"shown":[0,48,400,24],"click":[200,60],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":["checked"],"range":null},
+        {"ref":"@4","id":4,"role":"slider","label":"","name":"","value":"5","rect":[0,72,400,16],"shown":[0,72,400,16],"click":[200,80],"parent":null,"depth":0,"enabled":true,"focused":true,"covered":false,"marks":["focused"],"range":"0..10"}
+        ]}
+        """)
+end json_of_a_small_tree_is_exact
+
+// Every byte JSON cannot hold as it is gets its escape; the bytes of any other character, however
+// far from ASCII, pass through untouched.
+@test
+private json_escapes_what_would_break_a_string()
+    val awkward = "q\"b\\s\n\r\t\u{8}\u{c}\u{0}\u{1}\u{1f} \u{7f}é→😀"
+    val quoted = "\"q\\\"b\\\\s\\n\\r\\t\\b\\f\\u0000\\u0001\\u001f \u{7f}é→😀\""
+    val got = json_of(column([text("x").named(awkward), text_field(signal(awkward), 1)]))
+
+    assert(got.contains("{\"ref\":" + quoted + ",\"id\":1,"), got)
+    assert(got.contains(",\"name\":" + quoted + ","), got)
+    assert(got.contains(",\"value\":" + quoted + ","), got)
+end json_escapes_what_would_break_a_string
+
+@test
+private json_reports_every_control_kind()
+    // **The popover is open, so everything beneath it is covered**: what it raises takes a press
+    // anywhere outside it too, to close it. Only the overlay and its button can be clicked.
+    assert_json(json_of(every_kind(signal(true))),
+        raw"""
+        {"window":[0,0,400,800],"entries":[
+        {"ref":"@1","id":1,"role":"text","label":"title","name":"","value":"","rect":[0,0,400,16],"shown":[0,0,400,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@2","id":2,"role":"button","label":"Save","name":"","value":"","rect":[0,16,400,32],"shown":[0,16,400,32],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@3","id":3,"role":"tappable","label":"plain","name":"","value":"","rect":[0,48,400,16],"shown":[0,48,400,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@4","id":4,"role":"switch","label":"","name":"","value":"","rect":[0,64,400,24],"shown":[0,64,400,24],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["checked","covered"],"range":null},
+        {"ref":"@5","id":5,"role":"checkbox","label":"Snap","name":"","value":"","rect":[0,88,400,18],"shown":[0,88,400,18],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@6","id":6,"role":"radio","label":"One","name":"","value":"","rect":[0,106,400,18],"shown":[0,106,400,18],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@7","id":7,"role":"radio","label":"Two","name":"","value":"","rect":[0,130,400,18],"shown":[0,130,400,18],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["checked","covered"],"range":null},
+        {"ref":"@8","id":8,"role":"slider","label":"","name":"","value":"5","rect":[0,148,400,16],"shown":[0,148,400,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":"0..10"},
+        {"ref":"@9","id":9,"role":"progress","label":"","name":"","value":"0.25","rect":[0,164,400,6],"shown":[0,164,400,6],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@10","id":10,"role":"meter","label":"","name":"","value":"3","rect":[0,170,400,20],"shown":[0,170,400,20],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":"0..10"},
+        {"ref":"@11","id":11,"role":"textfield","label":"","name":"","value":"typed","rect":[0,190,400,28],"shown":[0,190,400,28],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@12","id":12,"role":"textarea","label":"","name":"","value":"two\nlines","rect":[0,218,400,44],"shown":[0,218,400,44],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@13","id":13,"role":"selectable","label":"pick","name":"","value":"ic","rect":[0,262,400,16],"shown":[0,262,400,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@14","id":14,"role":"image","label":"","name":"","value":"","rect":[0,182,400,200],"shown":[0,278,400,8],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@15","id":15,"role":"tab","label":"A","name":"","value":"","rect":[0,286,24,34],"shown":[0,286,24,34],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@16","id":16,"role":"tab","label":"B","name":"","value":"","rect":[24,286,24,34],"shown":[24,286,24,34],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["selected","covered"],"range":null},
+        {"ref":"@17","id":17,"role":"text","label":"panel","name":"","value":"","rect":[8,329,384,16],"shown":[8,329,384,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@18","id":18,"role":"table","label":"","name":"","value":"","rect":[0,353,400,72],"shown":[0,353,400,72],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@19","id":19,"role":"text","label":"name","name":"","value":"","rect":[8,361,32,16],"shown":[8,361,32,16],"click":null,"parent":18,"depth":1,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@20","id":20,"role":"text","label":"n","name":"","value":"","rect":[56,361,8,16],"shown":[56,361,8,16],"click":null,"parent":18,"depth":1,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@21","id":21,"role":"scroll","label":"","name":"","value":"0","rect":[0,385,400,40],"shown":[0,385,400,40],"click":null,"parent":18,"depth":1,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@22","id":22,"role":"row","label":"ann 1","name":"","value":"","rect":[0,385,400,32],"shown":[0,385,400,32],"click":null,"parent":21,"depth":2,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@23","id":23,"role":"row","label":"bob 2","name":"","value":"","rect":[0,417,400,32],"shown":[0,417,400,8],"click":null,"parent":21,"depth":2,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@24","id":24,"role":"button","label":"Menu","name":"","value":"","rect":[0,425,400,32],"shown":[0,425,400,32],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@25","id":25,"role":"overlay","label":"","name":"","value":"","rect":[0,461,48,32],"shown":[0,461,48,32],"click":[24,477],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"@26","id":26,"role":"button","label":"Item","name":"","value":"","rect":[0,461,48,32],"shown":[0,461,48,32],"click":[24,477],"parent":25,"depth":1,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null}
+        ]}
+        """)
+
+    // Closed, nothing is covered and every control has a point to click.
+    val closed = json_of(every_kind(signal(false)))
+
+    assert(!closed.contains("\"click\":null"), closed)
+    assert(!closed.contains("\"role\":\"overlay\""), closed)
+end json_reports_every_control_kind
+
+@test
+private json_of_an_open_menu_shows_its_rows_and_what_it_covers()
+    val v = column([
+        menu_bar([
+            menu("File", [item("New", idle(), "Ctrl+N"), item("Dim", idle(), enabled = false)]),
+            menu("Edit", [item("Undo", idle())])
+        ], signal(0)),
+        text("page").named("page")
+    ])
+
+    assert_json(json_of(v),
+        raw"""
+        {"window":[0,0,400,800],"entries":[
+        {"ref":"page","id":1,"role":"text","label":"page","name":"page","value":"","rect":[0,33,400,16],"shown":[0,33,400,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@2","id":2,"role":"overlay","label":"","name":"","value":"","rect":[0,0,400,33],"shown":[0,0,400,33],"click":[200,16],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"menu.File","id":3,"role":"menu","label":"File","name":"menu.File","value":"","rect":[0,0,48,32],"shown":[0,0,48,32],"click":[24,16],"parent":2,"depth":1,"enabled":true,"focused":false,"covered":false,"marks":["selected"],"range":null},
+        {"ref":"menu.Edit","id":4,"role":"menu","label":"Edit","name":"menu.Edit","value":"","rect":[48,0,48,32],"shown":[48,0,48,32],"click":[72,16],"parent":2,"depth":1,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"@5","id":5,"role":"overlay","label":"","name":"","value":"","rect":[0,33,104,56],"shown":[0,33,104,56],"click":[52,61],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"menu.File.New","id":6,"role":"menu_item","label":"New Ctrl+N","name":"menu.File.New","value":"","rect":[0,37,104,24],"shown":[0,37,104,24],"click":[52,49],"parent":5,"depth":1,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"menu.File.Dim","id":7,"role":"menu_item","label":"Dim","name":"menu.File.Dim","value":"","rect":[0,61,104,24],"shown":[0,61,104,24],"click":[52,73],"parent":5,"depth":1,"enabled":false,"focused":false,"covered":false,"marks":["disabled"],"range":null}
+        ]}
+        """)
+end json_of_an_open_menu_shows_its_rows_and_what_it_covers
+
+@test
+private json_of_a_modal_hides_what_is_beneath()
+    val v = column([button("back", idle()).named("back"), text("note")])
+        .modal(signal(true), button("ok", idle()).named("ok"))
+
+    assert_json(json_of(v),
+        raw"""
+        {"window":[0,0,400,800],"entries":[
+        {"ref":"back","id":1,"role":"button","label":"back","name":"back","value":"","rect":[0,0,400,32],"shown":[0,0,400,32],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@2","id":2,"role":"text","label":"note","name":"","value":"","rect":[0,32,400,16],"shown":[0,32,400,16],"click":null,"parent":null,"depth":0,"enabled":true,"focused":false,"covered":true,"marks":["covered"],"range":null},
+        {"ref":"@3","id":3,"role":"overlay","label":"","name":"","value":"","rect":[184,384,32,32],"shown":[184,384,32,32],"click":[200,400],"parent":null,"depth":0,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null},
+        {"ref":"ok","id":4,"role":"button","label":"ok","name":"ok","value":"","rect":[184,384,32,32],"shown":[184,384,32,32],"click":[200,400],"parent":3,"depth":1,"enabled":true,"focused":false,"covered":false,"marks":[],"range":null}
+        ]}
+        """)
+end json_of_a_modal_hides_what_is_beneath
+
+// A name two controls share is no key, so each falls back to its reference, which still finds it.
+@test
+private a_shared_name_falls_back_to_the_reference()
+    var c = recorder()
+    val v = column([button("a", idle()).named("same"), button("b", idle()).named("same"),
+                    button("c", idle()).named("own")])
+
+    render(v, &c, SIZE)
+
+    val s = snapshot(v, &c, SIZE)
+    val all = s.entries.view()
+
+    assert_eq(s.key(all[0]), "@1")
+    assert_eq(s.key(all[1]), "@2")
+    assert_eq(s.key(all[2]), "own")
+
+    for i in 0..<all.len
+        assert_eq(s.find(s.key(all[i])).unwrap().label, all[i].label)
+end a_shared_name_falls_back_to_the_reference
+
+// The same tree and state give the same text from one frame to the next, and taking it moves nothing.
+@test
+private json_is_the_same_between_frames()
+    val v = every_kind(signal(true))
+    var c = recorder()
+
+    render(v, &c, SIZE)
+
+    val first = snapshot(v, &c, SIZE).to_json()
+
+    render(v, &c, SIZE)
+
+    val second = snapshot(v, &c, SIZE).to_json()
+    val third = snapshot(v, &c, SIZE).to_json()
+
+    assert_eq(first, second)
+    assert_eq(second, third)
+end json_is_the_same_between_frames
+
+// Every key the JSON gives, named or not, leads to a point inside its control, and a press there
+// through the window's own two steps runs that control and no other.
+@test
+private every_key_clicks_its_own_control()
+    val hits = [signal(0), signal(0), signal(0), signal(0)]
+    val v = column([
+        button("one", count(hits[0])).named("one"),
+        button("two", count(hits[1])),
+        text("three").on_tap(count(hits[2])),
+        row([button("four", count(hits[3]))])
+    ])
+    var c = recorder()
+
+    for k in 0..<4
+        c.taps.reset()
+        render(v, &c, SIZE)
+
+        val s = snapshot(v, &c, SIZE)
+        val all = s.entries.view()
+        var e = all[0]
+
+        for i in 0..<all.len
+            if all[i].label == ["one", "two", "three", "four"][k] then e = all[i]
+
+        val key = s.key(e)
+        val (x, y) = s.click_point(key).unwrap()
+
+        assert(s.to_json().contains(s"{\"ref\":\"${key}\",\"id\":${e.id},"), key)
+        assert(x >= e.shown.x && x < e.shown.right() && y >= e.shown.y && y < e.shown.bottom(), key)
+
+        c.point(x, y, true)
+        c.release(x, y)
+
+        for j in 0..<4
+            assert_eq(hits[j].read(), if j <= k then 1 else 0, key)
+end every_key_clicks_its_own_control
+
+// A covered control has no point to click in the JSON, and its lookup says why.
+@test
+private a_covered_control_has_no_click_point()
+    var c = recorder()
+    val v = button("back", idle()).named("back").modal(signal(true), button("ok", idle()).named("ok"))
+
+    render(v, &c, SIZE)
+
+    val s = snapshot(v, &c, SIZE)
+
+    assert(s.to_json().contains("\"name\":\"back\",\"value\":\"\",\"rect\":[0,0,400,800],\"shown\":[0,0,400,800],\"click\":null,"), s.to_json())
+    assert_eq(s.click_point("back").unwrap_err().kind, MissKind.Covered)
+end a_covered_control_has_no_click_point
+
+// Selectable text reports what is selected as its value, and a selection left from longer text as
+// nothing rather than a cut through the words.
+@test
+private selectable_text_reports_its_selection()
+    val sel = signal(Selection(1, 3))
+    val v = selectable("pick", sel).named("p")
+
+    assert_eq(json_of(v).contains("\"role\":\"selectable\",\"label\":\"pick\",\"name\":\"p\",\"value\":\"ic\","), true)
+
+    sel.set(Selection(2, 9))
+    assert(json_of(v).contains("\"label\":\"pick\",\"name\":\"p\",\"value\":\"\","), json_of(v))
+
+    sel.set(nothing_selected())
+    assert(json_of(v).contains("\"label\":\"pick\",\"name\":\"p\",\"value\":\"\","), json_of(v))
+end selectable_text_reports_its_selection

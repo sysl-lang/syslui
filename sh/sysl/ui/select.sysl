@@ -76,6 +76,16 @@ impl View for Selectable
 
         val cur = self.sel.read()
         val h = c.text_size(self.s).h
+        val noted = c.survey()
+
+        // Its words are its label and what is selected is its value. A selection left over from
+        // longer text reaches past the end and is reported as nothing rather than cut.
+        noted match
+            Some(n) ->
+                val held = if !cur.empty() && cur.hi() <= self.s.len then self.s[cur.lo()..<cur.hi()] else ""
+
+                n.open("selectable", r, Words.Label, held)
+            None -> ()
 
         if !cur.empty()
             val x0 = c.text_x(self.s, cur.lo())
@@ -84,6 +94,10 @@ impl View for Selectable
             c.fill(Rect(r.x + x0, r.y, x1 - x0, h), c.theme().selection)
 
         c.text(r, self.s)
+
+        noted match
+            Some(n) -> n.close()
+            None -> ()
     end paint
 
 // Which grabbable thing a selection is, in the canvas's single grab.
