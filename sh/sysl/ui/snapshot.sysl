@@ -655,17 +655,25 @@ private at_text(r: Rect) -> string = s"[${r.x},${r.y} ${r.w}x${r.h}]"
 
 // A string in double quotes, with what would break the line or the quoting escaped.
 private quoted(s: string) -> string
+    val b = s.bytes
     var out = "\""
 
-    for i in 0..<s.len
-        val b = s[i]
+    // The text between escapes is copied as one slice; an escaped byte is ASCII, so every cut falls
+    // on a character boundary.
+    var run = 0
+    for i in 0..<b.len
+        val c = b[i]
+        val escaped = c == u8('"') || c == u8('\\') || c == u8('\n')
 
-        if b == u8('"') then out = out + "\\\""
-        elif b == u8('\\') then out = out + "\\\\"
-        elif b == u8('\n') then out = out + "\\n"
-        else out = out + s[i..<i + 1]
+        if escaped
+            out = out + s[run..<i]
+            run = i + 1
 
-    out + "\""
+        if c == u8('"') then out = out + "\\\""
+        elif c == u8('\\') then out = out + "\\\\"
+        elif c == u8('\n') then out = out + "\\n"
+
+    out + s[run..<b.len] + "\""
 end quoted
 
 // A rectangle as JSON: `[x,y,w,h]`.

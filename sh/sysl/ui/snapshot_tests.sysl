@@ -764,6 +764,47 @@ private an_overlay_above_a_nest_takes_the_click_from_both()
     assert_eq((outer.read(), inner.read(), over.read()), (1, 0, 1))
 end an_overlay_above_a_nest_takes_the_click_from_both
 
+// A label of two-, three- and four-byte characters is dumped whole, and so is a value.
+@test
+private dump_keeps_non_ascii_labels_whole()
+    for label in ["é", "€", "😀", "é€😀"]
+        val got = shot(text(label)).dump()
+
+        assert(got.contains(s" \"${label}\" "), got)
+    end for
+
+    val held = shot(text_field(signal("é€😀"), 1)).dump()
+
+    assert(held.contains(" value=\"é€😀\""), held)
+end dump_keeps_non_ascii_labels_whole
+
+@test
+private dump_escapes_around_non_ascii()
+    val got = shot(text("a\"é\\€\n😀b")).dump()
+
+    assert(got.contains(" \"a\\\"é\\\\€\\n😀b\" "), got)
+end dump_escapes_around_non_ascii
+
+@test
+private dump_of_an_empty_label_has_no_label()
+    val got = shot(text("")).dump()
+
+    assert(!got.contains("\"\""), got)
+end dump_of_an_empty_label_has_no_label
+
+@test
+private dump_and_json_agree_on_a_non_ascii_label()
+    var c = recorder()
+    val v = text("é€😀")
+
+    render(v, &c, WINDOW)
+
+    val s = snapshot(v, &c, WINDOW)
+
+    assert(s.dump().contains(" \"é€😀\" "), s.dump())
+    assert(s.to_json().contains("\"label\":\"é€😀\""), s.to_json())
+end dump_and_json_agree_on_a_non_ascii_label
+
 // FNV-1a, so a recording of a hundred and fifty lines can be held as one number. A failure prints the
 // recording itself.
 private fnv(s: string) -> u64
