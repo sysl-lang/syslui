@@ -1,7 +1,7 @@
 // syslUI — a declarative retained user interface for a machine with a heap.
 //
 //     dependencies {
-//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.16" }
+//       syslui { git = "github.com/sysl-lang/syslui", version = "0.1.17" }
 //     }
 //
 // **The presentation is not in here.** What the toolkit produces is a block of premultiplied ARGB32
@@ -20,7 +20,7 @@
 
 package {
   name    = "syslui"
-  version = "0.1.16"
+  version = "0.1.17"
 
   // **The oldest compiler this builds with is 0.7.7, the one it was last built and tested with.** This
   // package's own source asks for less: an
@@ -29,7 +29,7 @@ package {
   // naming a type parameter (`step: T = T.zero()`). The floor is the dependency's: `plutovg` 0.2.6
   // imports `sysl.raw` and calls `.to_string()`, neither of which exists on 0.5.x, and a consumer
   // of this package builds `plutovg` with it.
-  sysl = "0.7.7"
+  sysl = "0.9.0"
 }
 
 // The drawing backend, and the one dependency.

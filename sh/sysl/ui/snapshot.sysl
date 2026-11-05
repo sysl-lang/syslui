@@ -377,7 +377,7 @@ struct Survey
     open_named(*self, name: string, r: Rect)
         val i = self.add(NAMED, r, Words.Own, "", "")
 
-        self.nodes.set(i, self.nodes.view()[i] with { name = name })
+        self.nodes[i] = self.nodes.view()[i] with { name = name }
         self.opened.push(i)
     end open_named
 
@@ -398,7 +398,7 @@ struct Survey
         val at = o[o.len - 1]
         val top = self.clips.stack.view()
 
-        self.nodes.set(at, self.nodes.view()[at] with { taps = true })
+        self.nodes[at] = self.nodes.view()[at] with { taps = true }
         self.regions.push(Cover(at, if top.len == 0 then r else meet(top[top.len - 1], r)))
     end tap_region
 
@@ -410,7 +410,7 @@ struct Survey
 
         val n = self.nodes.view()[o[o.len - 1]]
 
-        self.nodes.set(o[o.len - 1], n with { marks = joined(n.marks, word) })
+        self.nodes[o[o.len - 1]] = n with { marks = joined(n.marks, word) }
     end mark
 
     // Give the innermost open entry a label that is not painted as one: a field's hint.
@@ -419,7 +419,7 @@ struct Survey
 
         if o.len == 0 then return
 
-        self.nodes.set(o[o.len - 1], self.nodes.view()[o[o.len - 1]] with { label = word })
+        self.nodes[o[o.len - 1]] = self.nodes.view()[o[o.len - 1]] with { label = word }
     end label
 
     // Say that something raised at `r` is above every node opened so far.
@@ -448,10 +448,10 @@ struct Survey
             self.drop(at, n.parent)
         elif n.role == NAMED
             if kids == 1 && v[only].name.len == 0
-                self.nodes.set(only, v[only] with { name = n.name })
+                self.nodes[only] = v[only] with { name = n.name }
                 self.drop(at, n.parent)
             else
-                self.nodes.set(at, n with { role = if kids == 0 then "view" else "group" })
+                self.nodes[at] = n with { role = if kids == 0 then "view" else "group" }
         elif kids == 0 && n.label.len == 0 && n.value.len == 0 && n.marks.len == 0 &&
              (n.role == "overlay" || n.role == TAPPABLE) && n.drew_from == self.drew
             // What takes a click outside a menu is a tappable that draws nothing, and an overlay
@@ -464,10 +464,10 @@ struct Survey
     private drop(*self, at: usize, parent: int)
         val v = self.nodes.view()
 
-        self.nodes.set(at, v[at] with { kept = false })
+        self.nodes[at] = v[at] with { kept = false }
 
         for i in at + 1..<v.len
-            if v[i].parent == int(at) then self.nodes.set(i, v[i] with { parent = parent })
+            if v[i].parent == int(at) then self.nodes[i] = v[i] with { parent = parent }
     end drop
 
     private add(*self, role: string, r: Rect, words: Words, value: string, marks: string) -> usize
@@ -536,7 +536,7 @@ struct Survey
 
         val i = self.add("text", r, Words.Ignored, "", "")
 
-        self.nodes.set(i, self.nodes.view()[i] with { label = t })
+        self.nodes[i] = self.nodes.view()[i] with { label = t }
     end add_words
 end Survey
 
@@ -565,7 +565,7 @@ impl Canvas for Survey
 
         // A label is what the control is called, so it is kept however little of the control shows.
         n.words match
-            Label -> self.nodes.set(o[o.len - 1], n with { label = joined(n.label, t) })
+            Label -> self.nodes[o[o.len - 1]] = n with { label = joined(n.label, t) }
             Own -> self.add_words(r, t)
             Ignored -> ()
     end text
@@ -689,8 +689,16 @@ private json_string(out: *StrBuilder, s: string)
 
     out.push("\"")
 
+    // The text between escapes is copied as one slice; an escaped byte is ASCII, so every cut falls
+    // on a character boundary.
+    var run = 0
     for i in 0..<b.len
         val c = b[i]
+        val escaped = c == u8('"') || c == u8('\\') || c < 32
+
+        if escaped
+            out.push(s[run..<i])
+            run = i + 1
 
         if c == u8('"') then out.push("\\\"")
         elif c == u8('\\') then out.push("\\\\")
@@ -701,10 +709,12 @@ private json_string(out: *StrBuilder, s: string)
         elif c == 12 then out.push("\\f")
         elif c < 32
             out.push("\\u00")
-            out.bytes.push(HEX[c >> 4])
-            out.bytes.push(HEX[c & 15])
-        else out.bytes.push(c)
+            val hi = c >> 4
+            val lo = c & 15
+            out.push(HEX[hi..<hi + 1])
+            out.push(HEX[lo..<lo + 1])
 
+    out.push(s[run..<b.len])
     out.push("\"")
 end json_string
 

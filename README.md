@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.16" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.1.17" }
 }
 ```
 
@@ -94,6 +94,10 @@ read it instead. That is where SolidJS, Svelte 5, Angular and Swift Observation 
 encodes the whole tree in the static type of `body` and pays for it with associated types and an
 opaque result type; that buys no box per node, which is worth having on a microcontroller and worth
 very little here.
+
+**State kept outside a `Signal`** asks for a rebuild with `invalidate()` (since 0.1.17). It moves the
+same counter, `writes()`, that `Signal.set` moves, so the frame loop builds the tree on its next frame
+and every `Derived` works itself out again. Several calls before a frame cost one rebuild.
 
 ## Styling, and why a hover needs a view of its own
 

@@ -3358,6 +3358,42 @@ private every_write_moves_the_clock()
     assert(writes() > between, "and so does a write to something else entirely")
 end every_write_moves_the_clock
 
+// State kept outside any `Signal` asks for a rebuild by moving the same clock.
+@test
+private invalidate_moves_the_clock_with_no_signal_written()
+    val before = writes()
+
+    invalidate()
+
+    assert(writes() > before, "a rebuild was asked for though no signal changed")
+end invalidate_moves_the_clock_with_no_signal_written
+
+// Asking twice is two moves of the clock, and a loop that compares it still rebuilds once.
+@test
+private invalidate_twice_moves_the_clock_each_time()
+    val before = writes()
+
+    invalidate()
+    invalidate()
+
+    assert_eq(writes(), before + 2)
+end invalidate_twice_moves_the_clock_each_time
+
+// A value computed from other values is worked out again, since the clock is what it compares.
+@test
+private invalidate_recomputes_a_derived_value()
+    val runs = ticks()
+    val counted = derived(() -> runs.take())
+
+    assert_eq(counted.read(), 2)
+    assert_eq(counted.read(), 2)
+
+    invalidate()
+
+    assert_eq(counted.read(), 3, "worked out again with no signal written")
+    assert_eq(counted.read(), 3)
+end invalidate_recomputes_a_derived_value
+
 // Reading changes nothing, or a frame loop comparing the clock would rebuild for ever.
 @test
 private reading_does_not_move_the_clock()

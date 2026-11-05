@@ -47,6 +47,15 @@ private var clock: int = 0
 // How many writes have happened. Compare it against what you last saw.
 writes() -> int = clock
 
+// Ask for the tree to be built again without a `Signal` having changed. An application that keeps
+// some of its state outside `Signal`s calls this after changing it, and the frame loop -- which
+// rebuilds when `writes()` has moved -- builds the tree on its next frame.
+//
+// **It moves the same counter `Signal.set` does**, so every `Derived` also recomputes on its next
+// read. Calling it more than once before a frame costs nothing extra: the loop compares the counter
+// and rebuilds once. Calling it with no loop running just moves the counter.
+invalidate() = clock += 1
+
 // A value that says who read it, so a write can tell exactly them.
 //
 // **A dependent is held weakly, and that is the whole lifetime story.** A subtree that has been

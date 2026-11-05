@@ -79,7 +79,7 @@ struct Phases
             if v[i].slot == slot && v[i].r == r
                 val next = step(v[i].value, target, rate * self.dt)
 
-                self.entries.set(i, Phase(r, slot, next, true))
+                self.entries[i] = Phase(r, slot, next, true)
 
                 return next
 

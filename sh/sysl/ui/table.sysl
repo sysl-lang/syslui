@@ -126,7 +126,7 @@ private widths(c: *Canvas, s: TableStyle, cols: []Col, rows: [][]string, avail: 
         val v = out.view()
 
         for i in 0..<cols.len
-            if v[i] == 0 then out.set(i, each)
+            if v[i] == 0 then out[i] = each
 
     out
 end widths

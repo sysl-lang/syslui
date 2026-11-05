@@ -287,7 +287,7 @@ radio_group(labels: []string, chosen: &Signal[int], role: Role = Role.Primary,
 // **The keyboard is opt-in, through an `id`**, for the reason a field's is: keys are routed by a
 // number that outlives a relayout, and a slider nobody gave one takes no keys and draws exactly as
 // it always did. A focused slider shows its knob lit, as hovering does.
-struct Slider[T: Eq + Ord]
+struct Slider[T: Eq + PartialOrd]
     value: &Signal[T]
     lo: T
     hi: T
@@ -339,7 +339,7 @@ struct Slider[T: Eq + Ord]
 
     private put(self, want: T) = if want != self.value.read() then self.value.set(want)
 
-impl[T: Eq + Ord] View for Slider[T]
+impl[T: Eq + PartialOrd] View for Slider[T]
     measure(&self, c: *Canvas, avail: Size) -> Size = Size(self.width, KNOB)
 
     paint(&self, c: *Canvas, r: Rect)
@@ -407,7 +407,7 @@ impl[T: Eq + Ord] View for Slider[T]
 // `slider(cutoff, 20.0, 2000.0, 260, step = 10.0)`. A step of zero, the default, is the finest grid
 // `T` holds: an `int` slider moves by whole numbers and a `real` one moves continuously. Give it an `id` and arrows, Home and End move it once
 // it has been tapped.
-slider[T: Eq + Ord + Zero](value: &Signal[T], lo: T, hi: T, width: int, step: T = T.zero(),
+slider[T: Eq + PartialOrd + Zero](value: &Signal[T], lo: T, hi: T, width: int, step: T = T.zero(),
                role: Role = Role.Primary, id: int = NOBODY) -> &View =
     Slider(value, lo, hi, width, step, id, role, () -> ())
 
