@@ -248,7 +248,7 @@ end Snapshot
 // Take a snapshot of `v` painted at `at`, reading fonts and focus from `c`. Call it after `render`, so
 // the answer describes the frame that was just drawn.
 snapshot(v: &View, c: *Canvas, at: Rect) -> Snapshot
-    var s = Survey(c, buf(), buf(), clips(), buf(), buf(), buf(), 0)
+    var s = Survey(c, buf(), buf(), clips(), buf(), buf(), buf(), 0, transforms())
 
     s.clips.push(at)
 
@@ -369,6 +369,11 @@ struct Survey
     // that drew something.
     drew: int
 
+    // The transforms pushed, composed. **Every rectangle a view hands the survey is kept where it
+    // lands**, so an entry's place is where the pointer has to go to reach it -- which is what a
+    // script clicking an entry needs.
+    xforms: Transforms
+
     // Open an entry. Everything painted before the matching `close` is inside it.
     open(*self, role: string, r: Rect, words: Words = Words.Own, value: string = "", marks: string = "")
         self.opened.push(self.add(role, r, words, value, marks))
@@ -397,9 +402,10 @@ struct Survey
 
         val at = o[o.len - 1]
         val top = self.clips.stack.view()
+        val landed = self.xforms.now().rect(r)
 
         self.nodes[at] = self.nodes.view()[at] with { taps = true }
-        self.regions.push(Cover(at, if top.len == 0 then r else meet(top[top.len - 1], r)))
+        self.regions.push(Cover(at, if top.len == 0 then landed else meet(top[top.len - 1], landed)))
     end tap_region
 
     // Add a state to the innermost open entry: the checkbox's box saying that the checkbox is checked.
@@ -423,7 +429,7 @@ struct Survey
     end label
 
     // Say that something raised at `r` is above every node opened so far.
-    cover(*self, r: Rect) = self.covers.push(Cover(self.nodes.view().len, r))
+    cover(*self, r: Rect) = self.covers.push(Cover(self.nodes.view().len, self.xforms.now().rect(r)))
 
     // Finish the innermost entry and decide whether it is reported, and as what.
     close(*self)
@@ -474,9 +480,11 @@ struct Survey
         val o = self.opened.view()
         val parent = if o.len == 0 then -1 else int(o[o.len - 1])
         val top = self.clips.stack.view()
-        val shown = if top.len == 0 then r else meet(top[top.len - 1], r)
+        val landed = self.xforms.now().rect(r)
+        val shown = if top.len == 0 then landed else meet(top[top.len - 1], landed)
 
-        self.nodes.push(Node(role, "", "", value, marks, r, shown, words, parent, true, self.drew, false))
+        self.nodes.push(Node(role, "", "", value, marks, landed, shown, words, parent, true, self.drew,
+                             false))
         self.nodes.view().len - 1
     end add
 
@@ -532,7 +540,7 @@ struct Survey
 
     // A run of text as an entry of its own.
     private add_words(*self, r: Rect, t: string)
-        if !self.clips.shows(r) then return
+        if !self.clips.shows(self.xforms.now().rect(r)) then return
 
         val i = self.add("text", r, Words.Ignored, "", "")
 
@@ -573,13 +581,21 @@ impl Canvas for Survey
     override draw_image(*self, r: Rect, img: &Image, radius: int)
         self.drew += 1
 
-        if self.clips.shows(r) then self.leaf("image", r)
+        if self.clips.shows(self.xforms.now().rect(r)) then self.leaf("image", r)
 
-    clip(*self, r: Rect) = self.clips.push(r)
+    clip(*self, r: Rect) = self.clips.push(self.xforms.now().rect(r))
 
     unclip(*self) = self.clips.pop()
 
-    override visible(*self, r: Rect) -> bool = self.clips.shows(r)
+    override visible(*self, r: Rect) -> bool = self.clips.shows(self.xforms.now().rect(r))
+
+    // Kept here and not passed on, so a survey leaves the real canvas exactly as it found it; the two
+    // pointer questions it forwards are mapped on the way instead.
+    override push_transform(*self, scale: real, dx: real, dy: real) = self.xforms.push(scale, dx, dy)
+
+    override pop_transform(*self) = self.xforms.pop()
+
+    override transform(*self) -> Transform = self.xforms.now()
 
     // The theme and the size in force go to the real canvas, because measuring a run depends on them
     // and every push is popped again before this pass is over.
@@ -604,11 +620,14 @@ impl Canvas for Survey
 
     // What the pointer is over may change what a view says, so it is answered truthfully. Everything
     // that could act on the pointer sees it at rest, and the keyboard has nothing to say.
-    hovered(*self, r: Rect) -> bool = self.inner.hovered(r)
+    hovered(*self, r: Rect) -> bool = self.inner.hovered(self.xforms.now().rect(r))
 
     pressed(*self, r: Rect) -> bool = false
 
-    override pointer(*self) -> (int, int) = self.inner.pointer()
+    override pointer(*self) -> (int, int)
+        val (x, y) = self.inner.pointer()
+
+        self.xforms.now().back(x, y)
 
     override covering(*self) -> Option[*Covers] = self.inner.covering()
 
@@ -627,7 +646,8 @@ impl Canvas for Survey
     // An overlay's own entry is opened by the wrapper. The theme and size travel with it, and the ink
     // does not because this canvas has none.
     raise_above(*self, v: &View, at: Rect) =
-        self.raised.push(Overlay(Raised(v), at, self.inner.theme(), None, self.inner.font_size()))
+        self.raised.push(Overlay(Raised(v), at, self.inner.theme(), None, self.inner.font_size(),
+                                 self.xforms.now()))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised

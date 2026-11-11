@@ -58,6 +58,10 @@ struct Overlay
     // the same reason: a menu raised from under a big heading is drawn at the heading's size, not
     // at the root's.
     size: real
+
+    // The transform in force where this was raised, so a menu opened from inside a scaled drawing is
+    // painted at that scale and where its anchor was drawn rather than at one to one.
+    place: Transform
 end Overlay
 
 // One overlay as input sees it: where it was, and the view that can say whether it is still up.
@@ -89,7 +93,7 @@ struct Covers
         self.layer = 0
 
     private enter(*self, o: Overlay)
-        self.next.push(Veil(o.view, o.at))
+        self.next.push(Veil(o.view, o.place.rect(o.at)))
         self.layer = int(self.next.view().len)
 
     private finish(*self)
@@ -199,6 +203,12 @@ render(v: &View, c: *Canvas, at: Rect)
                 Some(k) -> k.enter(p[i])
                 None -> ()
 
+            // Pushed only when there is one, so a frame with no transform paints exactly the calls it
+            // always did.
+            val place = p[i].place
+            val moved = place != no_transform()
+
+            if moved then c.push_transform(place.scale, place.dx, place.dy)
             c.push_theme(p[i].look)
             c.push_font_size(p[i].size)
 
@@ -211,6 +221,8 @@ render(v: &View, c: *Canvas, at: Rect)
 
             c.pop_font_size()
             c.pop_theme()
+
+            if moved then c.pop_transform()
 
     covering match
         Some(k) -> k.finish()

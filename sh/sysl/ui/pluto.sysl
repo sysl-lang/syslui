@@ -85,6 +85,10 @@ struct PlutoCanvas
     // The pointer shape the frame being painted asked for, and the one the last frame settled on.
     shapes: Shaping
 
+    // The transforms pushed, composed. PlutoVG's matrix carries them for drawing; this copy is what
+    // the pointer, the clips and the covers are mapped through, in the arithmetic the recorder shares.
+    xforms: Transforms
+
     // The shape the frame `render` last finished asked for under the pointer -- what a frame loop
     // shows. See `Canvas.cursor`.
     shape(*self) -> Cursor = self.shapes.now
@@ -174,6 +178,12 @@ struct PlutoCanvas
             self.vg.rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h))
         else
             self.vg.round_rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h), f32(radius), f32(radius))
+
+    // A rectangle of the view's, where it lands through the transforms in force.
+    private placed(*self, r: Rect) -> Rect = self.xforms.now().rect(r)
+
+    // A point outside every push, in the view's coordinates.
+    private back(*self, p: (int, int)) -> (int, int) = self.xforms.now().back(p.0, p.1)
 end PlutoCanvas
 
 impl Canvas for PlutoCanvas
@@ -214,15 +224,32 @@ impl Canvas for PlutoCanvas
         self.vg.restore()
     end text
 
+    // PlutoVG cuts the clip through the matrix in force, so it lands where the drawing does; the stack
+    // keeps it where it lands, beside the pointer it is compared with.
     clip(*self, r: Rect)
         self.vg.save()
         self.path(r, 0)
         self.vg.clip()
-        self.clips.push(r)
+        self.clips.push(self.placed(r))
 
     unclip(*self)
         self.vg.restore()
         self.clips.pop()
+
+    // **A save, a translation and a scale on PlutoVG's own matrix**, so text, strokes, fills, radii
+    // and pictures are all scaled by the rasterizer rather than by arithmetic here, and `pop_transform`
+    // is the `restore` that puts back exactly the matrix and clip it found.
+    override push_transform(*self, scale: real, dx: real, dy: real)
+        self.vg.save()
+        self.vg.translate(f32(dx), f32(dy))
+        self.vg.scale(f32(scale), f32(scale))
+        self.xforms.push(scale, dx, dy)
+
+    override pop_transform(*self)
+        self.vg.restore()
+        self.xforms.pop()
+
+    override transform(*self) -> Transform = self.xforms.now()
 
     ink(*self, color: u32) = self.tints.push(color)
 
@@ -230,26 +257,35 @@ impl Canvas for PlutoCanvas
         self.tints.pop()
         ()
 
-    hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py) && self.covers.clear(self.px, self.py)
+    // Every rectangle is asked about where it lands and every point answered in the view's
+    // coordinates, as the recorder does; its comment has the reason.
+    hovered(*self, r: Rect) -> bool =
+        self.placed(r).holds(self.px, self.py) && self.covers.clear(self.px, self.py)
 
     pressed(*self, r: Rect) -> bool = self.down && self.hovered(r)
 
-    override pointer(*self) -> (int, int) = (self.px, self.py)
+    override pointer(*self) -> (int, int) = self.back((self.px, self.py))
 
     override grab(*self, r: Rect, slot: int) -> bool =
-        self.covers.admits(&self.hold) && self.hold.claim(r, slot)
+        self.covers.admits(&self.hold) && self.hold.claim(self.placed(r), slot)
 
-    override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
+    override press_origin(*self) -> (int, int) = self.back((self.hold.began_x, self.hold.began_y))
 
     override drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)
         val shown = self.clips.shows(Rect(self.hold.began_x, self.hold.began_y, 1, 1))
 
-        if shown && self.covers.admits(&self.hold) then self.hold.drag(r, slot, slop_x, slop_y) else (0, 0)
+        if !shown || !self.covers.admits(&self.hold) then return (0, 0)
+
+        val t = self.xforms.now()
+        val (mx, my) = self.hold.drag(t.rect(r), slot, t.length(slop_x), t.length(slop_y))
+
+        t.travel(self.hold.x, self.hold.y, mx, my)
+    end drag
 
     override wheel(*self, r: Rect) -> (int, int)
         val shown = self.clips.shows(Rect(self.px, self.py, 1, 1))
 
-        if shown && self.covers.clear(self.px, self.py) then self.hold.turned(r) else (0, 0)
+        if shown && self.covers.clear(self.px, self.py) then self.hold.turned(self.placed(r)) else (0, 0)
 
     override held(*self, b: PointerButton) -> bool =
         if b == PointerButton.Primary then self.down else self.chord.held(b)
@@ -258,7 +294,7 @@ impl Canvas for PlutoCanvas
 
     override grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool =
         if b == PointerButton.Primary then self.grab(r, slot)
-        else self.chord.admitted(&self.covers, b) && self.chord.claim(r, slot, b)
+        else self.chord.admitted(&self.covers, b) && self.chord.claim(self.placed(r), slot, b)
 
     override drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int)
         if b == PointerButton.Primary then return self.drag(r, slot, slop_x, slop_y)
@@ -267,10 +303,16 @@ impl Canvas for PlutoCanvas
 
         val free = self.clips.shows(Rect(x, y, 1, 1)) && self.chord.admitted(&self.covers, b)
 
-        if free then self.chord.drag(r, slot, b, slop_x, slop_y) else (0, 0)
+        if !free then return (0, 0)
+
+        val t = self.xforms.now()
+        val (mx, my) = self.chord.drag(t.rect(r), slot, b, t.length(slop_x), t.length(slop_y))
+
+        t.travel(self.px, self.py, mx, my)
+    end drag_by
 
     override press_origin_by(*self, b: PointerButton) -> (int, int) =
-        if b == PointerButton.Primary then self.press_origin() else self.chord.origin(b)
+        if b == PointerButton.Primary then self.press_origin() else self.back(self.chord.origin(b))
 
     override focus(*self) -> int = self.board.focus
 
@@ -279,11 +321,11 @@ impl Canvas for PlutoCanvas
     override keys(*self) -> []Press = self.board.keys()
 
     override tapped(*self, r: Rect) -> bool =
-        self.board.landed(r) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
+        self.board.landed(self.placed(r)) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
 
     override covering(*self) -> Option[*Covers] = Some(&self.covers)
 
-    override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
+    override tap_point(*self) -> (int, int) = self.back((self.board.tap_x, self.board.tap_y))
 
     override tap_count(*self) -> int = self.board.taps()
 
@@ -297,7 +339,7 @@ impl Canvas for PlutoCanvas
         self.shapes.settle()
 
     override cursor(*self, r: Rect, shape: Cursor)
-        if r.holds(self.px, self.py) && self.clips.shows(Rect(self.px, self.py, 1, 1)) &&
+        if self.placed(r).holds(self.px, self.py) && self.clips.shows(Rect(self.px, self.py, 1, 1)) &&
            self.covers.clear(self.px, self.py)
             self.shapes.want(shape)
 
@@ -308,10 +350,10 @@ impl Canvas for PlutoCanvas
     // **Answered from the stack above rather than from PlutoVG.** Its `clip_extents` are in device
     // space, so this compared a view's coordinates against pixels -- correct only while the canvas
     // is drawn at one to one, which a phone's density is not.
-    override visible(*self, r: Rect) -> bool = self.clips.shows(r)
+    override visible(*self, r: Rect) -> bool = self.clips.shows(self.placed(r))
 
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
-        self.anim.at(r, slot, target, rate)
+        self.anim.at(self.placed(r), slot, target, rate)
 
     override text_ink(*self) -> u32
         val v = self.tints.view()
@@ -361,7 +403,7 @@ impl Canvas for PlutoCanvas
                 Size(w, at.line_h)
     end text_size
 
-    hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(r, f)
+    hit(*self, r: Rect, f: &Fn() -> unit) = self.taps.add(self.placed(r), f)
 
     // **The transform places the picture and the path cuts it**, which is the whole of what a
     // texture is: PlutoVG lays a surface down in user space one pixel to one unit, so the scale that
@@ -370,18 +412,27 @@ impl Canvas for PlutoCanvas
     // **So the corner radius is divided by that scale before it is asked for**, or a picture squeezed
     // into a rectangle of another shape would come out with elliptical corners. `round_rect` takes
     // its two radii separately, which is what makes the compensation exact rather than a compromise.
+    //
+    // The matrix holds the pushed transforms too, so their scale is taken back out: what this answers
+    // is the density outside every push, as the trait says.
     override pixel_scale(*self) -> real
         var matrix: [6]f32
         native.canvas_get_matrix(self.vg.handle,&matrix[0])
-        native_pixel_scale(matrix[..])
+        native_pixel_scale(matrix[..]) / self.xforms.now().scale
 
+    // **The anchor goes through the whole matrix and the size through the pushed scale alone**: the
+    // corner lands where the drawing around it put that point, snapped to a device pixel, and each
+    // source pixel then covers `scale` device pixels. PlutoVG samples a texture at the centre of each
+    // device pixel without filtering, which is the nearest-neighbour the trait promises.
     override draw_native_image(*self, x: int, y: int, img: &Image)
         var matrix: [6]f32
         native.canvas_get_matrix(self.vg.handle,&matrix[0])
         val (px,py) = native_pixel_anchor(matrix[..],x,y)
+        val s = f32(self.xforms.now().scale)
         self.vg.save()
         self.vg.reset_transform()
         self.vg.translate(f32(px),f32(py))
+        self.vg.scale(s, s)
         self.vg.texture(img.pixels)
         self.vg.begin()
         self.vg.rect(0.0,0.0,f32(img.width()),f32(img.height()))
@@ -417,7 +468,7 @@ impl Canvas for PlutoCanvas
 
         self.raised.push(Overlay(v, at, self.look,
                                  if on.len == 0 then None else Some(on[on.len - 1]),
-                                 self.font_size()))
+                                 self.font_size(), self.xforms.now()))
     end raise_above
 
     take_overlays(*self) -> Buf[Overlay]
@@ -468,7 +519,7 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     sizings.push(sizing(face, size))
 
     PlutoCanvas(vg, face, sizings, buf(), -1, -1, false, hits(), clips(), grabbing(), buf(),
-                phases(), buf(), dark(), buf(), keyboard(), chord(), covers(), shaping())
+                phases(), buf(), dark(), buf(), keyboard(), chord(), covers(), shaping(), transforms())
 end pluto_canvas
 
 // One size of the face: where a run's baseline sits below the top of its line, how tall a line is,

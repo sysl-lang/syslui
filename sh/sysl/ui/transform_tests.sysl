@@ -1,0 +1,454 @@
+module sh.sysl.ui
+
+import sh.sysl.plutovg
+import sh.sysl.plutovg.c as native
+
+// ## `push_transform`: the arithmetic, the recording, the pointer, the clip, and the real backend
+//
+// The view rectangle every pointer test below asks about is `R`, under a scale of a half moved to
+// (100, 50) -- so it lands at (110, 60) and is 20 across, and the pointer at (115, 65) outside is at
+// (30, 30) in the view's coordinates.
+
+private val R = Rect(20, 20, 40, 40)
+
+private push_half(c: *Canvas) = c.push_transform(0.5, 100.0, 50.0)
+
+@test
+private transforms_compose_inside_out_and_pop_back_exactly()
+    var t = transforms()
+
+    t.push(2.0, 10.0, 20.0)
+    t.push(0.5, 4.0, 6.0)
+
+    assert(t.now() == Transform(1.0, 18.0, 32.0), "the scales multiply and the inner move is scaled")
+    assert(t.depth() == 2, "two deep")
+
+    t.pop()
+
+    assert(t.now() == Transform(2.0, 10.0, 20.0), "a pop puts back exactly the one below")
+
+    t.pop()
+
+    assert(t.now() == no_transform(), "and the last pop leaves nothing")
+end transforms_compose_inside_out_and_pop_back_exactly
+
+@test
+private a_transform_maps_rectangles_out_and_points_back()
+    val t = Transform(0.5, 10.0, 20.0)
+
+    assert(t.rect(Rect(0, 0, 100, 50)) == Rect(10, 20, 50, 25), "out: scaled, then moved")
+    assert(t.back(60, 45) == (100, 50), "back: moved, then unscaled")
+    assert(t.length(8) == 4, "a distance of the view's is half as far outside")
+    assert(no_transform().rect(R) == R && no_transform().back(7, -3) == (7, -3), "nothing is identity")
+
+// **The rounding is the whole of the agreement between `hovered` and `pointer`**, so it is checked at
+// every point of a grid at a scale and an offset that land nothing on a whole pixel.
+@test
+private a_rectangle_and_a_point_agree_at_any_scale()
+    val t = Transform(0.75, 3.5, -2.25)
+    val r = Rect(4, 6, 9, 5)
+    val out = t.rect(r)
+
+    for x in -5..<30
+        for y in -5..<30
+            val (vx, vy) = t.back(x, y)
+
+            assert(out.holds(x, y) == r.holds(vx, vy), s"at ${x},${y}")
+end a_rectangle_and_a_point_agree_at_any_scale
+
+// A run of single-pixel moves at a scale of two loses none of the halves it would round away.
+@test
+private travel_adds_up_to_the_whole_distance()
+    val t = Transform(2.0, 1.0, 0.0)
+    var sum = 0
+    var x = 7
+
+    for i in 0..<9
+        x += 1
+        sum += t.travel(x, 0, 1, 0).0
+
+    assert(sum == t.back(x, 0).0 - t.back(7, 0).0, s"the moves sum to the distance, got ${sum}")
+    assert(sum == 4, "nine pixels from 7 is four whole units of a half-pixel's view")
+end travel_adds_up_to_the_whole_distance
+
+// ## Drawing
+
+@test
+private the_recorder_writes_what_is_drawn_where_it_lands()
+    var c = recorder()
+
+    c.push_transform(2.0, 5.0, 5.0)
+    c.fill(Rect(0, 0, 10, 10), 1)
+    c.stroke(Rect(1, 1, 4, 4), 2, 3)
+    c.text(Rect(0, 10, 16, 16), "hi")
+    c.push_transform(0.5, 10.0, 0.0)
+    c.fill(Rect(0, 0, 10, 10), 3)
+    c.pop_transform()
+    c.pop_transform()
+    c.fill(Rect(0, 0, 10, 10), 4)
+
+    val expected = "transform 2 5,5\nfill 5,5 20x20 #1\nstroke 7,7 8x8 #2 w3\ntext 5,25 32x32 'hi'\n" +
+                   "transform 0.5 10,0\nfill 25,5 10x10 #3\nuntransform\nuntransform\nfill 0,0 10x10 #4\n"
+
+    assert(c.dump() == expected, s"expected:\n${expected}got:\n${c.dump()}")
+end the_recorder_writes_what_is_drawn_where_it_lands
+
+// The real backend draws through PlutoVG's matrix: a square of ten at a scale of two, moved by four,
+// covers device pixels 4 to 23 and nothing either side.
+@test
+private the_real_backend_scales_what_it_draws()
+    val surf = plutovg.surface(32, 32).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), a_face(), 15.0)
+
+    c.push_transform(2.0, 4.0, 4.0)
+    c.fill(Rect(0, 0, 10, 10), 0xFF0000)
+    c.pop_transform()
+
+    assert(pixel(surf, 4, 4) == 0xFFFF0000u32 && pixel(surf, 23, 23) == 0xFFFF0000u32, "inside")
+    assert(pixel(surf, 3, 4) == 0 && pixel(surf, 24, 23) == 0 && pixel(surf, 4, 24) == 0, "and not beyond")
+end the_real_backend_scales_what_it_draws
+
+// ## The pointer
+
+@test
+private every_pointer_question_is_answered_in_the_views_coordinates()
+    var c = recorder()
+
+    c.point(115, 65)
+    push_half(&c)
+    assert(c.hovered(R), "hovered: the pointer is over where the view landed")
+    assert(!c.hovered(Rect(115, 65, 1, 1)), "and not over the raw position read as the view's")
+    assert(c.pointer() == (30, 30), "pointer")
+    assert(!c.pressed(R), "pressed: not yet")
+    c.pop_transform()
+
+    c.point(115, 65, true)
+    push_half(&c)
+    assert(c.pressed(R), "pressed")
+    assert(c.grab(R, 1), "grab")
+    assert(c.press_origin() == (30, 30), "press_origin")
+    assert(c.tapped(R) && !c.tapped(Rect(0, 0, 10, 10)), "tapped")
+    assert(c.tap_point() == (30, 30), "tap_point")
+    c.pop_transform()
+
+    c.point(125, 70, true)
+    push_half(&c)
+    assert(c.grab(R, 1), "the grab holds as the pointer moves")
+    assert(c.pointer() == (50, 40), "and the pointer follows it")
+    assert(c.press_origin() == (30, 30), "and the origin stays where the press began")
+    c.pop_transform()
+
+    assert(c.pointer() == (125, 70), "outside the push the pointer is the frame loop's again")
+end every_pointer_question_is_answered_in_the_views_coordinates
+
+@test
+private a_drag_is_measured_in_the_views_units_and_slop()
+    var c = recorder()
+
+    c.point(115, 65, true)
+    c.point(118, 65, true)
+    push_half(&c)
+    assert(c.drag(R, 2, 8, 8) == (0, 0), "six of the view's units is inside a slop of eight")
+    c.pop_transform()
+
+    c.point(125, 65, true)
+    push_half(&c)
+    assert(c.drag(R, 2, 8, 8) == (20, 0), "ten pixels outside is twenty of the view's, from the press")
+    c.pop_transform()
+
+    c.point(126, 66, true)
+    push_half(&c)
+    assert(c.drag(R, 2, 8, 8) == (2, 2), "and then what moved since")
+    c.pop_transform()
+end a_drag_is_measured_in_the_views_units_and_slop
+
+@test
+private the_wheel_the_hit_and_the_cursor_follow_the_transform()
+    var c = recorder()
+    val struck = signal(false)
+
+    c.point(115, 65)
+    c.spin(0.0, 30.0)
+    push_half(&c)
+    assert(c.wheel(Rect(0, 0, 10, 10)) == (0, 0), "wheel: not over what the pointer is not over")
+    assert(c.wheel(R) == (0, 30), "wheel: the turn, which is not a distance on the screen")
+    c.cursor(R, Cursor.Pointer)
+    c.hit(R, () -> struck.set(true))
+    c.pop_transform()
+    c.keys_done()
+
+    assert(c.shape() == Cursor.Pointer, "cursor")
+
+    c.point(115, 65, true)
+    c.release(115, 65)
+
+    assert(struck.read(), "hit: a tap where the view landed")
+end the_wheel_the_hit_and_the_cursor_follow_the_transform
+
+@test
+private the_named_buttons_follow_the_transform()
+    var c = recorder()
+
+    c.press(115, 65, PointerButton.Secondary)
+    c.point(125, 65)
+    push_half(&c)
+    assert(c.grab_by(R, 3, PointerButton.Secondary), "grab_by")
+    assert(c.press_origin_by(PointerButton.Secondary) == (30, 30), "press_origin_by")
+    c.pop_transform()
+
+    var d = recorder()
+
+    d.press(115, 65, PointerButton.Secondary)
+    d.point(125, 65)
+    push_half(&d)
+    assert(d.drag_by(R, 4, PointerButton.Secondary, 0, 0) == (20, 0), "drag_by")
+    d.pop_transform()
+end the_named_buttons_follow_the_transform
+
+// The real backend answers as the recorder does, because it maps through the same arithmetic.
+@test
+private the_real_backend_answers_the_pointer_in_the_views_coordinates()
+    var c = pluto_canvas(plutovg.canvas(plutovg.surface(200, 100).unwrap()).unwrap(), a_face(), 15.0)
+
+    c.point(115, 65, true)
+    c.point(125, 65, true)
+    push_half(&c)
+    assert(c.hovered(R) && c.pressed(R), "hovered and pressed")
+    assert(c.pointer() == (50, 30), "pointer")
+    assert(c.press_origin() == (30, 30), "press_origin")
+    assert(c.tapped(R) && c.tap_point() == (30, 30), "tapped and tap_point")
+    assert(c.drag(R, 2, 0, 0) == (20, 0), "drag")
+    assert(c.transform() == Transform(0.5, 100.0, 50.0), "and it says what is in force")
+    c.pop_transform()
+
+    assert(c.transform() == no_transform(), "until the pop")
+end the_real_backend_answers_the_pointer_in_the_views_coordinates
+
+// An overlay raised inside a push is painted under it and covers where it was drawn.
+@test
+private an_overlay_is_painted_and_covers_where_it_was_raised()
+    var c = recorder()
+    val heard = signal(false)
+    val over: &View = PointerReader((k, r) -> k.fill(r, 7))
+    val tree: &View = PointerReader((k, r) ->
+        heard.set(k.hovered(Rect(0, 0, 100, 100)))
+        k.push_transform(2.0, 10.0, 10.0)
+        k.raise_above(over, Rect(0, 0, 5, 5))
+        k.pop_transform())
+
+    render(tree, &c, Rect(0, 0, 100, 100))
+
+    val expected = "transform 2 10,10\nraise 0,0 5x5\nuntransform\ntransform 2 10,10\n" +
+                   "fill 10,10 10x10 #7\nuntransform\n"
+
+    assert(c.dump() == expected, s"expected:\n${expected}got:\n${c.dump()}")
+
+    c.point(12, 12)
+    render(tree, &c, Rect(0, 0, 100, 100))
+    assert(!heard.read(), "covered where it landed")
+
+    c.point(3, 3)
+    render(tree, &c, Rect(0, 0, 100, 100))
+    assert(heard.read(), "and not where it would have been at one to one")
+end an_overlay_is_painted_and_covers_where_it_was_raised
+
+// A snapshot entry is where the pointer has to go to reach it, the survey's pointer answers are the
+// view's, and the real canvas is left exactly as it was.
+@test
+private a_snapshot_entry_is_where_it_landed()
+    var c = recorder()
+    val inner = text("hi").named("t")
+    val over = signal(false)
+    val seen = signal((0, 0))
+    val tree: &View = PointerReader((k, r) ->
+        k.push_transform(2.0, 10.0, 20.0)
+        inner.paint(k, Rect(0, 0, 16, 16))
+        over.set(k.hovered(Rect(0, 0, 16, 16)))
+        seen.set(k.pointer())
+        k.pop_transform())
+
+    c.point(15, 25)
+
+    val s = snapshot(tree, &c, Rect(0, 0, 200, 200))
+
+    assert(s.find("t").unwrap().rect == Rect(10, 20, 32, 32), "scaled and moved")
+    assert(over.read() && seen.read() == (2, 2), "hovered and pointer in the view's coordinates")
+    assert(c.dump() == "" && c.transform() == no_transform(), "and nothing reached the real canvas")
+end a_snapshot_entry_is_where_it_landed
+
+// ## The clip
+
+// **A clip and a transform compose in either order**: a clip opened inside a push is cut where it
+// lands, and one opened outside still cuts what is drawn inside a later push.
+@test
+private a_clip_composes_with_a_transform_either_way_round()
+    var c = recorder()
+
+    c.push_transform(2.0, 10.0, 10.0)
+    c.clip(Rect(0, 0, 10, 10))
+    assert(c.visible(Rect(9, 0, 5, 5)), "the clip is twenty across where it landed")
+    assert(!c.visible(Rect(10, 0, 5, 5)), "and nothing past it")
+    c.unclip()
+    c.pop_transform()
+
+    c.clip(Rect(0, 0, 50, 50))
+    c.push_transform(2.0, 40.0, 0.0)
+    assert(c.visible(Rect(0, 0, 5, 5)), "a clip from outside reaches into the push")
+    assert(!c.visible(Rect(5, 0, 5, 5)), "at the push's scale")
+    c.pop_transform()
+    c.unclip()
+
+    assert(c.dump() == "transform 2 10,10\nclip 10,10 20x20\nunclip\nuntransform\nclip 0,0 50x50\n" +
+                       "transform 2 40,0\nuntransform\nunclip\n", c.dump())
+end a_clip_composes_with_a_transform_either_way_round
+
+@test
+private the_real_backend_cuts_a_clip_where_it_lands()
+    val surf = plutovg.surface(32, 32).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), a_face(), 15.0)
+
+    c.push_transform(2.0, 8.0, 8.0)
+    c.clip(Rect(0, 0, 4, 4))
+    assert(!c.visible(Rect(4, 0, 4, 4)), "culling agrees with the cut")
+    c.fill(Rect(-10, -10, 40, 40), 0xFF0000)
+    c.unclip()
+    c.pop_transform()
+
+    assert(pixel(surf, 8, 8) == 0xFFFF0000u32 && pixel(surf, 15, 15) == 0xFFFF0000u32, "inside")
+    assert(pixel(surf, 7, 8) == 0 && pixel(surf, 16, 15) == 0 && pixel(surf, 15, 16) == 0, "cut")
+end the_real_backend_cuts_a_clip_where_it_lands
+
+// ## The native image
+
+// Each source pixel is the pushed scale's square of device pixels, sampled nearest: a 2x2 picture at
+// a scale of two is four exact 2x2 blocks, anchored where the drawing put (1, 1).
+@test
+private a_native_image_follows_the_pushed_scale_pixel_for_pixel()
+    val surf = plutovg.surface(32, 32).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), a_face(), 15.0)
+    val src = plutovg.surface(2, 2).unwrap()
+
+    put(src, 0, 0, 0xFFFF0000u32)
+    put(src, 1, 0, 0xFF00FF00u32)
+    put(src, 0, 1, 0xFF0000FFu32)
+    put(src, 1, 1, 0xFFFFFFFFu32)
+
+    c.push_transform(2.0, 4.0, 6.0)
+    assert(c.pixel_scale() == 1.0, "the density, which the push does not change")
+    c.draw_native_image(1, 1, Image(src))
+    c.pop_transform()
+
+    for dy in 0..<2
+        for dx in 0..<2
+            assert(pixel(surf, 6 + dx, 8 + dy) == 0xFFFF0000u32, "top left")
+            assert(pixel(surf, 8 + dx, 8 + dy) == 0xFF00FF00u32, "top right")
+            assert(pixel(surf, 6 + dx, 10 + dy) == 0xFF0000FFu32, "bottom left")
+            assert(pixel(surf, 8 + dx, 10 + dy) == 0xFFFFFFFFu32, "bottom right")
+
+    assert(pixel(surf, 5, 8) == 0 && pixel(surf, 10, 8) == 0 && pixel(surf, 6, 7) == 0 &&
+           pixel(surf, 6, 12) == 0, "and nothing around it")
+end a_native_image_follows_the_pushed_scale_pixel_for_pixel
+
+// Under a density of two and a push of a half, a 4x4 picture covers 2x2 device pixels: it shrinks
+// with the drawing, and `pixel_scale` still answers the density.
+@test
+private a_native_image_shrinks_with_the_drawing()
+    val surf = plutovg.surface(32, 32).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), a_face(), 15.0)
+    val src = plutovg.surface(4, 4).unwrap()
+
+    for y in 0..<4
+        for x in 0..<4
+            put(src, x, y, 0xFFFF0000u32)
+
+    c.vg.scale(2.0, 2.0)
+    c.push_transform(0.5, 0.0, 0.0)
+    assert(c.pixel_scale() == 2.0, "the density, not the density times the push")
+    c.draw_native_image(3, 3, Image(src))
+    c.pop_transform()
+
+    assert(pixel(surf, 3, 3) == 0xFFFF0000u32 && pixel(surf, 4, 4) == 0xFFFF0000u32, "two across")
+    assert(pixel(surf, 5, 3) == 0 && pixel(surf, 3, 5) == 0 && pixel(surf, 2, 3) == 0, "and no more")
+end a_native_image_shrinks_with_the_drawing
+
+// The trait's own body, which the recorder inherits, puts it down as a picture at its pixel size
+// through the transform: an 800x480 framebuffer on a board at half size is 400x240.
+@test
+private the_default_native_image_follows_the_transform()
+    var c = recorder()
+
+    c.push_transform(0.5, 10.0, 20.0)
+    c.draw_native_image(0, 0, Image(plutovg.surface(800, 480).unwrap()))
+    c.pop_transform()
+
+    assert(c.dump() == "transform 0.5 10,20\nimage 10,20 400x240 of 800x480\nuntransform\n", c.dump())
+end the_default_native_image_follows_the_transform
+
+// ## Popping
+
+// A pop puts back the very matrix, transform and pointer answers that were in force before the push.
+@test
+private a_pop_restores_the_exact_previous_state()
+    var c = pluto_canvas(plutovg.canvas(plutovg.surface(32, 32).unwrap()).unwrap(), a_face(), 15.0)
+
+    c.vg.scale(1.5, 1.5)
+    c.point(115, 65, false)
+    c.push_transform(2.0, 1.0, 1.0)
+
+    val before = matrix_of(&c)
+    val pointed = c.pointer()
+
+    c.push_transform(3.0, 5.0, 7.0)
+    assert(c.transform() == Transform(6.0, 11.0, 15.0), "composed")
+    c.pop_transform()
+
+    val after = matrix_of(&c)
+
+    for i in 0..<6
+        assert(before[i] == after[i], s"matrix entry ${i}")
+
+    assert(c.transform() == Transform(2.0, 1.0, 1.0), "the transform")
+    assert(c.pointer() == pointed, "the pointer")
+
+    c.pop_transform()
+
+    assert(c.transform() == no_transform() && c.pointer() == (115, 65), "and outside, nothing")
+    assert(c.pixel_scale() == 1.5, "the density was never touched")
+end a_pop_restores_the_exact_previous_state
+
+// ## Helpers
+
+private a_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end a_face
+
+private matrix_of(c: *PlutoCanvas) -> [6]f32
+    var m: [6]f32
+
+    native.canvas_get_matrix(c.vg.handle, &m[0])
+    m
+
+// One premultiplied ARGB pixel, which PlutoVG stores little end first.
+private pixel(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+
+private put(s: &plutovg.Surface, x: int, y: int, argb: u32)
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    d[at] = u8(argb & 0xFF)
+    d[at + 1] = u8((argb >> 8) & 0xFF)
+    d[at + 2] = u8((argb >> 16) & 0xFF)
+    d[at + 3] = u8(argb >> 24)
+end put

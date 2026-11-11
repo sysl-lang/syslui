@@ -1,0 +1,91 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+import sysl.math.Float
+
+// A uniform scale and a translation: a point `p` in the coordinates a view paints in lands at
+// `p * scale + (dx, dy)` in the coordinates outside every `Canvas.push_transform`.
+//
+// **Uniform on purpose.** What a transform is for is fitting a drawing made in fixed pixels -- a
+// board of parts with their own font sizes, insets and strokes -- into a panel of another size
+// without changing how it looks, and a non-uniform scale would change how it looks. A circle stays a
+// circle, a radius stays one number, and text is scaled rather than stretched.
+//
+// **The scale must be positive.** Nothing a view does needs a mirror, and the inverse below divides
+// by it.
+struct Transform derives Eq
+    scale: real
+    dx: real
+    dy: real
+
+    // This transform with `scale`, `dx`, `dy` applied inside it: a point in the inner coordinates is
+    // taken into this transform's by the new one, then out by this one -- so the scales multiply and
+    // the inner translation is scaled by the outer scale.
+    inside(self, scale: real, dx: real, dy: real) -> Transform =
+        Transform(self.scale * scale, self.dx + dx * self.scale, self.dy + dy * self.scale)
+
+    // A rectangle in the view's coordinates, in the coordinates outside every push.
+    //
+    // **Each edge is rounded up on its own**, which is the rounding `back` agrees with: a point
+    // outside is inside this rectangle exactly when `back` puts it inside `r`. So `hovered(r)` and
+    // `r.holds(pointer())` cannot disagree at any scale, and two views sharing an edge share it after
+    // the transform as well.
+    rect(self, r: Rect) -> Rect
+        val x0 = up(real(r.x) * self.scale + self.dx)
+        val y0 = up(real(r.y) * self.scale + self.dy)
+
+        Rect(x0, y0, up(real(r.right()) * self.scale + self.dx) - x0,
+             up(real(r.bottom()) * self.scale + self.dy) - y0)
+    end rect
+
+    // A point outside every push, in the view's coordinates: the pixel of the view it falls in.
+    back(self, x: int, y: int) -> (int, int) =
+        (int(((real(x) - self.dx) / self.scale).floor()), int(((real(y) - self.dy) / self.scale).floor()))
+
+    // How far the view's coordinates moved, for a point outside every push that moved by `(mx, my)`
+    // to arrive at `(x, y)`.
+    //
+    // **The difference of two `back`s rather than the movement divided by the scale**, so that a run
+    // of these adds up to exactly how far the pointer is from where the run began -- a drag under a
+    // scale of two that moved one pixel at a time would otherwise lose every half it rounded away.
+    travel(self, x: int, y: int, mx: int, my: int) -> (int, int)
+        val (nx, ny) = self.back(x, y)
+        val (ox, oy) = self.back(x - mx, y - my)
+
+        (nx - ox, ny - oy)
+
+    // A distance in the view's coordinates as a whole number outside: the most a pointer may travel
+    // and still be within `n` of the view's own units.
+    length(self, n: int) -> int = int((real(n) * self.scale).floor())
+end Transform
+
+// Nothing scaled and nothing moved, which is what a canvas answers before anything has been pushed.
+no_transform() -> Transform = Transform(1.0, 0.0, 0.0)
+
+private up(v: real) -> int = int(v.ceil())
+
+// The transforms in force, each already composed with the one below it -- the shape `Clips` has, for
+// the same reason: the innermost is the whole answer and a nested push needs no walk.
+//
+// **A mechanism struct shared by every canvas that honours `push_transform`**, so that the recorder
+// the tests read and the real backend map rectangles and pointers by the same arithmetic.
+struct Transforms
+    stack: Buf[Transform]
+
+    push(*self, scale: real, dx: real, dy: real) = self.stack.push(self.now().inside(scale, dx, dy))
+
+    pop(*self)
+        self.stack.pop()
+        ()
+
+    // The composition of everything pushed, or `no_transform()` when nothing is.
+    now(*self) -> Transform
+        val v = self.stack.view()
+
+        if v.len == 0 then no_transform() else v[v.len - 1]
+
+    // How deep the stack is, which is what a test asserts to know a `pop` happened.
+    depth(*self) -> usize = self.stack.view().len
+end Transforms
+
+transforms() -> Transforms = Transforms(buf())

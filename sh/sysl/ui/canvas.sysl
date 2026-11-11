@@ -390,15 +390,57 @@ trait Canvas
     // adding at all -- a photograph is not expressible as filled rectangles at any price.
     draw_image(*self, r: Rect, img: &Image, radius: int = 0) = ()
 
-    // Device pixels per horizontal layout unit. A raster inspector uses this to
-    // reserve space without enlarging the pixels it is meant to show faithfully.
+    // Device pixels per horizontal layout unit **outside every `push_transform`** -- the display's
+    // density, which a raster inspector divides a native image's size by to reserve room for it
+    // without enlarging the pixels it is meant to show faithfully.
+    //
+    // **A pushed transform does not change it**, because a native image follows the pushed scale
+    // (see `draw_native_image`): the room it takes in the view's coordinates is its pixel count over
+    // this at every scale, so a view that reserved it once keeps it as the transform changes.
     pixel_scale(*self) -> real = 1.0
 
-    // Position the top-left in layout coordinates, snapped to a device pixel;
-    // each source pixel occupies exactly one device pixel. The image remains
-    // upright regardless of the canvas transform, and existing clips still apply.
+    // Put an image down with each source pixel on device pixels rather than layout units, its
+    // top-left at `(x, y)` in the view's coordinates, snapped to a whole device pixel.
+    //
+    // **Outside every push, one source pixel is one device pixel.** Inside a `push_transform` of
+    // composed scale `s`, one source pixel is `s` device pixels, sampled nearest-neighbour: the image
+    // shrinks and grows with the drawing around it -- an 800x480 framebuffer on a board fitted to
+    // half its size covers 400x240 device pixels rather than being clipped -- and at a whole-number
+    // scale every source pixel is an exact square of device pixels, so it stays crisp. The image
+    // stays upright whatever the canvas's own transform is, and the clips in force still cut it.
+    //
+    // The default places it as `draw_image` would at its pixel size, which is the same thing on a
+    // canvas whose layout unit is one device pixel.
     draw_native_image(*self, x: int, y: int, img: &Image) =
         self.draw_image(Rect(x,y,img.width(),img.height()),img,0)
+
+    // ## A scale and a translation for everything drawn and everything asked about the pointer
+    //
+    // **Draw a picture made in fixed pixels at another size without changing how it looks.** Every
+    // drawing call between `push_transform(scale, dx, dy)` and its `pop_transform` lands at
+    // `p * scale + (dx, dy)` -- text, strokes, fills, radii and images all scaled together -- and
+    // every pointer question a view asks inside it is answered in the view's own coordinates:
+    // `hovered`, `pressed`, `grab`, `pointer`, `press_origin`, `drag`, `wheel`, `cursor`, `tapped`,
+    // `tap_point`, `hit`, `visible`, the named-button forms, and a `raise_above`, whose overlay is
+    // painted under the transform it was raised in. So a view written for one to one works unchanged
+    // inside a push. A distance comes back in the view's units too -- a `drag`'s travel, and the
+    // slops it is given -- while the `wheel`'s turn is a scroll amount rather than a distance on the
+    // screen and is answered as it was turned.
+    //
+    // **Pushes nest and compose**: a push inside a push is applied inside it, so the scales multiply.
+    // They nest with `clip`/`unclip` like brackets -- a clip opened inside a push is closed inside it
+    // -- and a clip is cut where it lands, so a clip and a transform compose in either order.
+    //
+    // **The defaults do nothing**, and `transform` answers `no_transform()`: a backend that does not
+    // honour a push draws at one to one and answers the pointer as it always did, which is the
+    // picture a tree drew before transforms existed rather than a wrong one. `scale` must be positive.
+    push_transform(*self, scale: real, dx: real, dy: real) = ()
+
+    pop_transform(*self) = ()
+
+    // The composition of every push in force, which is what a canvas that wraps another or keeps an
+    // overlay for later reads to put things where they were drawn.
+    transform(*self) -> Transform = no_transform()
 
     // Paint this view after the whole tree has been painted, above everything, at `at`.
     //
@@ -524,6 +566,12 @@ struct Recorder
     // The pointer shape the frame being painted asked for, and the one the last frame settled on.
     shapes: Shaping
 
+    // The transforms pushed, composed. **The recording is written where things land**: a rectangle
+    // drawn inside a push is recorded through it, so a test reads the transform's effect directly.
+    // Widths, radii and text sizes are recorded as the view gave them, which a real backend scales
+    // along with everything else.
+    xforms: Transforms
+
     // The shape the last frame `render` finished asked for under the pointer.
     shape(*self) -> Cursor = self.shapes.now
 
@@ -577,6 +625,12 @@ struct Recorder
 
     // A metric of the base font at the size in force, rounded to the nearest pixel.
     private scaled(*self, n: int) -> int = int(real(n) * self.font_size() / self.size + 0.5)
+
+    // A rectangle of the view's, where it lands through the transforms in force.
+    private placed(*self, r: Rect) -> Rect = self.xforms.now().rect(r)
+
+    // A point outside every push, in the view's coordinates.
+    private back(*self, p: (int, int)) -> (int, int) = self.xforms.now().back(p.0, p.1)
 end Recorder
 
 impl Pointing for Recorder
@@ -610,29 +664,49 @@ impl Canvas for Recorder
     // of a tree that never asked for one -- a test about layout should not have to say anything
     // about corners. A rounded one adds `r8`, and that is the whole of the difference.
     fill(*self, r: Rect, color: u32, radius: int)
-        self.ops.push(s"fill ${r.x},${r.y} ${r.w}x${r.h} #${color}" + radii(radius))
+        val at = self.placed(r)
+
+        self.ops.push(s"fill ${at.x},${at.y} ${at.w}x${at.h} #${color}" + radii(radius))
 
     stroke(*self, r: Rect, color: u32, width: int, radius: int, dash: int)
-        self.ops.push(s"stroke ${r.x},${r.y} ${r.w}x${r.h} #${color} w${width}" + radii(radius) +
+        val at = self.placed(r)
+
+        self.ops.push(s"stroke ${at.x},${at.y} ${at.w}x${at.h} #${color} w${width}" + radii(radius) +
                       (if dash == 0 then "" else s" d${dash}"))
 
     // **The size is written only when it is not the base**, the way a radius is: a recording of a
     // tree that never asked for a size reads exactly as it did before there were sizes.
     text(*self, r: Rect, t: string)
         val pt = self.font_size()
+        val at = self.placed(r)
 
-        self.ops.push(s"text ${r.x},${r.y} ${r.w}x${r.h} '${t}'" +
+        self.ops.push(s"text ${at.x},${at.y} ${at.w}x${at.h} '${t}'" +
                       (if pt == self.size then "" else s" @${pt}"))
 
+    // **The clip is kept where it lands**, so the stack and every point and rectangle compared with
+    // it are in one set of coordinates however the pushes and clips interleave.
     clip(*self, r: Rect)
-        self.ops.push(s"clip ${r.x},${r.y} ${r.w}x${r.h}")
-        self.clips.push(r)
+        val at = self.placed(r)
+
+        self.ops.push(s"clip ${at.x},${at.y} ${at.w}x${at.h}")
+        self.clips.push(at)
 
     unclip(*self)
         self.ops.push("unclip")
         self.clips.pop()
 
-    override visible(*self, r: Rect) -> bool = self.clips.shows(r)
+    override visible(*self, r: Rect) -> bool = self.clips.shows(self.placed(r))
+
+    // Recorded, so a test can see the brackets nest with the clips.
+    override push_transform(*self, scale: real, dx: real, dy: real)
+        self.ops.push(s"transform ${number(scale)} ${number(dx)},${number(dy)}")
+        self.xforms.push(scale, dx, dy)
+
+    override pop_transform(*self)
+        self.ops.push("untransform")
+        self.xforms.pop()
+
+    override transform(*self) -> Transform = self.xforms.now()
 
     override text_ink(*self) -> u32
         val v = self.tints.view()
@@ -672,28 +746,38 @@ impl Canvas for Recorder
         self.ops.push("unink")
         self.tints.pop()
 
-    hovered(*self, r: Rect) -> bool = r.holds(self.px, self.py) && self.covers.clear(self.px, self.py)
+    // **Every rectangle is asked about where it lands and every point is answered in the view's
+    // coordinates**, so the pointer, the grabs, the clips and the covers all stay in the one set of
+    // coordinates the frame loop feeds the pointer in, whatever is pushed.
+    hovered(*self, r: Rect) -> bool =
+        self.placed(r).holds(self.px, self.py) && self.covers.clear(self.px, self.py)
 
     pressed(*self, r: Rect) -> bool = self.down && self.hovered(r)
 
-    override pointer(*self) -> (int, int) = (self.px, self.py)
+    override pointer(*self) -> (int, int) = self.back((self.px, self.py))
 
     override grab(*self, r: Rect, slot: int) -> bool =
-        self.covers.admits(&self.hold) && self.hold.claim(r, slot)
+        self.covers.admits(&self.hold) && self.hold.claim(self.placed(r), slot)
 
-    override press_origin(*self) -> (int, int) = (self.hold.began_x, self.hold.began_y)
+    override press_origin(*self) -> (int, int) = self.back((self.hold.began_x, self.hold.began_y))
 
     // **Both are asked only where the clip in force still shows the point**, so a list scrolled
     // half out of the one around it cannot be dragged or wheeled from the part that is not there.
     override drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)
         val shown = self.clips.shows(Rect(self.hold.began_x, self.hold.began_y, 1, 1))
 
-        if shown && self.covers.admits(&self.hold) then self.hold.drag(r, slot, slop_x, slop_y) else (0, 0)
+        if !shown || !self.covers.admits(&self.hold) then return (0, 0)
+
+        val t = self.xforms.now()
+        val (mx, my) = self.hold.drag(t.rect(r), slot, t.length(slop_x), t.length(slop_y))
+
+        t.travel(self.hold.x, self.hold.y, mx, my)
+    end drag
 
     override wheel(*self, r: Rect) -> (int, int)
         val shown = self.clips.shows(Rect(self.px, self.py, 1, 1))
 
-        if shown && self.covers.clear(self.px, self.py) then self.hold.turned(r) else (0, 0)
+        if shown && self.covers.clear(self.px, self.py) then self.hold.turned(self.placed(r)) else (0, 0)
 
     override held(*self, b: PointerButton) -> bool =
         if b == PointerButton.Primary then self.down else self.chord.held(b)
@@ -702,7 +786,7 @@ impl Canvas for Recorder
 
     override grab_by(*self, r: Rect, slot: int, b: PointerButton) -> bool =
         if b == PointerButton.Primary then self.grab(r, slot)
-        else self.chord.admitted(&self.covers, b) && self.chord.claim(r, slot, b)
+        else self.chord.admitted(&self.covers, b) && self.chord.claim(self.placed(r), slot, b)
 
     // **Asked only where the clip in force shows the press**, for the reason `drag` is.
     override drag_by(*self, r: Rect, slot: int, b: PointerButton, slop_x: int, slop_y: int) -> (int, int)
@@ -711,10 +795,16 @@ impl Canvas for Recorder
         val (x, y) = self.chord.origin(b)
         val free = self.clips.shows(Rect(x, y, 1, 1)) && self.chord.admitted(&self.covers, b)
 
-        if free then self.chord.drag(r, slot, b, slop_x, slop_y) else (0, 0)
+        if !free then return (0, 0)
+
+        val t = self.xforms.now()
+        val (mx, my) = self.chord.drag(t.rect(r), slot, b, t.length(slop_x), t.length(slop_y))
+
+        t.travel(self.px, self.py, mx, my)
+    end drag_by
 
     override press_origin_by(*self, b: PointerButton) -> (int, int) =
-        if b == PointerButton.Primary then self.press_origin() else self.chord.origin(b)
+        if b == PointerButton.Primary then self.press_origin() else self.back(self.chord.origin(b))
 
     override focus(*self) -> int = self.board.focus
 
@@ -723,11 +813,11 @@ impl Canvas for Recorder
     override keys(*self) -> []Press = self.board.keys()
 
     override tapped(*self, r: Rect) -> bool =
-        self.board.landed(r) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
+        self.board.landed(self.placed(r)) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
 
     override covering(*self) -> Option[*Covers] = Some(&self.covers)
 
-    override tap_point(*self) -> (int, int) = (self.board.tap_x, self.board.tap_y)
+    override tap_point(*self) -> (int, int) = self.back((self.board.tap_x, self.board.tap_y))
 
     override tap_count(*self) -> int = self.board.taps()
 
@@ -741,35 +831,42 @@ impl Canvas for Recorder
         self.shapes.settle()
 
     override cursor(*self, r: Rect, shape: Cursor)
-        if r.holds(self.px, self.py) && self.clips.shows(Rect(self.px, self.py, 1, 1)) &&
+        if self.placed(r).holds(self.px, self.py) && self.clips.shows(Rect(self.px, self.py, 1, 1)) &&
            self.covers.clear(self.px, self.py)
             self.shapes.want(shape)
 
     // The trait's own body answers `target`, which is the settled appearance. A recorder has a store
-    // and a clock a test can drive, so it replaces it.
+    // and a clock a test can drive, so it replaces it. The rectangle is the key, taken where it lands
+    // so the same view drawn under two transforms is two animations.
     override phase(*self, r: Rect, slot: int, target: real, rate: real) -> real =
-        self.anim.at(r, slot, target, rate)
+        self.anim.at(self.placed(r), slot, target, rate)
 
     text_size(*self, s: string) -> Size =
         Size(int(s.len) * self.scaled(self.char_w), self.scaled(self.line_h))
 
     hit(*self, r: Rect, f: &Fn() -> unit)
-        self.ops.push(s"hit ${r.x},${r.y} ${r.w}x${r.h}")
-        self.taps.add(r, f)
+        val at = self.placed(r)
+
+        self.ops.push(s"hit ${at.x},${at.y} ${at.w}x${at.h}")
+        self.taps.add(at, f)
 
     // **The picture's own size is recorded beside the rectangle it went into**, because that is the
     // half a fit decides and the half a test is about: a recording that said only where it landed
     // could not tell `Contain` from `Stretch`.
     override draw_image(*self, r: Rect, img: &Image, radius: int)
-        self.ops.push(s"image ${r.x},${r.y} ${r.w}x${r.h} of ${img.width()}x${img.height()}" +
+        val at = self.placed(r)
+
+        self.ops.push(s"image ${at.x},${at.y} ${at.w}x${at.h} of ${img.width()}x${img.height()}" +
                       radii(radius))
 
     // **Recorded as well as kept**, so a test can see that something was raised without having to
     // run a whole frame through `render` -- which is the difference between asserting that a menu
-    // opens and asserting what the menu looks like.
+    // opens and asserting what the menu looks like. The rectangle is recorded as the view gave it,
+    // and the transform travels with the overlay.
     raise_above(*self, v: &View, at: Rect)
         self.ops.push(s"raise ${at.x},${at.y} ${at.w}x${at.h}")
-        self.raised.push(Overlay(v, at, self.look, override_ink(self.tints), self.font_size()))
+        self.raised.push(Overlay(v, at, self.look, override_ink(self.tints), self.font_size(),
+                                 self.xforms.now()))
 
     take_overlays(*self) -> Buf[Overlay]
         val out = self.raised
@@ -783,7 +880,7 @@ end Recorder
 // package's own tests is written in terms of.
 recorder(char_w: int = 8, line_h: int = 16, size: real = 16.0) -> Recorder =
     Recorder(buf(), hits(), char_w, line_h, size, buf(), -1, -1, false, dark(), buf(), clips(),
-             grabbing(), buf(), buf(), phases(), keyboard(), chord(), covers(), shaping())
+             grabbing(), buf(), buf(), phases(), keyboard(), chord(), covers(), shaping(), transforms())
 
 // The override in force, if anything has pushed one.
 //
