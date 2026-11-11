@@ -68,7 +68,7 @@ flex_col(title: string, right: bool = false) -> Col = Col(title, Width.Flex, rig
 // and is two lines to write by hand.
 struct Table
     columns: []Col
-    rows: [][]string
+    rows: []const []string
 
     // Where the list is scrolled to. The application's, like every other piece of state that has to
     // outlive a rebuild.
@@ -94,7 +94,7 @@ private row_height(c: *Canvas, s: TableStyle) -> int = c.text_size("Ag").h + 2 *
 // of a table whose columns do not shift as you scroll. It is measurement rather than drawing, so it
 // goes through the canvas's cache, and a column of a thousand distinct strings is a thousand shaping
 // passes once rather than per frame. A table that cannot afford it wants `Fixed`.
-private widths(c: *Canvas, s: TableStyle, cols: []Col, rows: [][]string, avail: int) -> Buf[int]
+private widths(c: *Canvas, s: TableStyle, cols: []Col, rows: []const []string, avail: int) -> Buf[int]
     var out: Buf[int] = buf()
     var taken = 0
     var flexes = 0
@@ -132,7 +132,7 @@ private widths(c: *Canvas, s: TableStyle, cols: []Col, rows: [][]string, avail: 
 end widths
 
 // One row of cells, laid out to the widths the table settled on.
-private cells(s: TableStyle, cols: []Col, values: []string, w: Buf[int]) -> &View
+private cells(s: TableStyle, cols: []Col, values: []const string, w: Buf[int]) -> &View
     var out: Buf[&View] = buf()
     val v = w.view()
 
@@ -293,6 +293,6 @@ end window_last
 // which is the same sentence as changing a colour and applies to every table below it. A flag here
 // would have been one table's appearance decided at one call site, which is the thing a theme is for
 // preventing.
-table(columns: []Col, rows: [][]string, offset: &Signal[int], height: int,
+table(columns: []Col, rows: []const []string, offset: &Signal[int], height: int,
       on_row: Option[&Fn(usize) -> unit] = None) -> &View =
     Table(columns, rows, offset, height, on_row)

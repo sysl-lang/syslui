@@ -121,7 +121,7 @@ impl View for Field
 end Field
 
 // The two keys a field hands back to the application, in the order they arrived.
-private answer(f: &Field, ps: []Press)
+private answer(f: &Field, ps: []const Press)
     for p in ps
         if p.key == Key.Enter && !f.multiline then (f.on_enter)()
         elif p.key == Key.Escape then (f.on_escape)()
@@ -297,7 +297,7 @@ private line_starts(s: string) -> Buf[usize]
 end line_starts
 
 // Which line an offset is on.
-private line_of(ls: []usize, at: usize) -> usize
+private line_of(ls: []const usize, at: usize) -> usize
     var i = 0usize
 
     while i + 1 < ls.len && ls[i + 1] <= at
@@ -307,7 +307,7 @@ private line_of(ls: []usize, at: usize) -> usize
 end line_of
 
 // Line `i` without its newline.
-private line_text(s: string, ls: []usize, i: usize) -> string
+private line_text(s: string, ls: []const usize, i: usize) -> string
     val lo = ls[i]
     val hi = if i + 1 < ls.len then ls[i + 1] - 1 else s.len
 

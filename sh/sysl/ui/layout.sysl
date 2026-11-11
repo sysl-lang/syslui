@@ -94,7 +94,7 @@ end Row
 // as it would anyway; one that would take whatever it was offered -- a `scroll` with no height of its
 // own -- answers zero, so its whole size is its share. Offered `left` instead, the first such child
 // would take everything, and a footer under it or a second one beside it would get nothing.
-private share(c: *Canvas, v: []&View, along: int, spacing: int, vertical: bool,
+private share(c: *Canvas, v: []const &View, along: int, spacing: int, vertical: bool,
               across: int) -> (Buf[int], int, int)
     var sizes: Buf[int] = buf()
     var taken = 0
@@ -123,7 +123,7 @@ end share
 // **The flexible children are measured last, against what the others left**, which is the only
 // order in which their answer means anything: a filling `scroll` above a footer is as tall as its
 // content or as the room above the footer, whichever is less. Each child is still measured once.
-private extent(c: *Canvas, v: []&View, avail: Size, spacing: int, vertical: bool) -> Size
+private extent(c: *Canvas, v: []const &View, avail: Size, spacing: int, vertical: bool) -> Size
     val total = if vertical then avail.h else avail.w
     val across = if vertical then avail.w else avail.h
 
@@ -189,7 +189,7 @@ private stretch(flex: int, spare: int, weight: int) -> int =
 // That is the shape Swift reaches `buildArray` for, arrived at from the other end: the loop stays
 // out of the block, and the sequence the loop would have built is named rather than accumulated.
 // A caller that already holds a `Buf` still passes `.view()`.
-column(children: []&View, spacing: int = 0) -> &View
+column(children: []const &View, spacing: int = 0) -> &View
     var b: Buf[&View] = buf()
 
     b.extend(children)
@@ -197,7 +197,7 @@ column(children: []&View, spacing: int = 0) -> &View
     Column(b, spacing)
 end column
 
-row(children: []&View, spacing: int = 0) -> &View
+row(children: []const &View, spacing: int = 0) -> &View
     var b: Buf[&View] = buf()
 
     b.extend(children)

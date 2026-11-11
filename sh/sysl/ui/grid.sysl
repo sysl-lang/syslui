@@ -80,7 +80,7 @@ end Grid
 // third of a pixel short is a grid eight pixels narrower than the space it was given, with the error
 // all at the right-hand end. Taking each edge as `col * (w + gutter) / cols` puts the rounding
 // between the columns instead, where nobody can see it, and the last edge lands exactly on `w`.
-private lay(c: *Canvas, v: []&View, cols: int, gutter: int, w: int) -> (Buf[Rect], int)
+private lay(c: *Canvas, v: []const &View, cols: int, gutter: int, w: int) -> (Buf[Rect], int)
     var out: Buf[Rect] = buf()
     var at = 0
     var y = 0
@@ -156,7 +156,7 @@ end Grid
 // sentence as changing a colour and applies to everything below it rather than to one container --
 // and a grid that differed from its neighbours by a literal at one call site is exactly the thing a
 // grid exists to prevent.
-grid(children: []&View) -> &View
+grid(children: []const &View) -> &View
     var b: Buf[&View] = buf()
 
     b.extend(children)

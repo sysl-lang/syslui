@@ -88,7 +88,7 @@ end apply
 
 // Every key of a frame, in order, which is how a paste that arrives as several events and a person
 // typing quickly both come out as one edit.
-apply_all(s: string, sel: Selection, ps: []Press, multiline: bool = false) -> Edited
+apply_all(s: string, sel: Selection, ps: []const Press, multiline: bool = false) -> Edited
     var out = Edited(s, sel)
 
     for p in ps
@@ -135,7 +135,7 @@ private boundaries(s: string) -> Buf[usize]
 end boundaries
 
 // Which boundary `at` is, or the one before it if a stale offset has landed inside a character.
-private slot(bs: []usize, at: usize) -> usize
+private slot(bs: []const usize, at: usize) -> usize
     var i = 0usize
 
     while i + 1 < bs.len && bs[i + 1] <= at
@@ -145,13 +145,13 @@ private slot(bs: []usize, at: usize) -> usize
 end slot
 
 // The boundary before `at`, and the one after it. Both stop at the ends rather than wrapping.
-private step_left(s: string, bs: []usize, at: usize) -> usize
+private step_left(s: string, bs: []const usize, at: usize) -> usize
     val i = slot(bs, at)
 
     if i == 0 then 0usize else bs[i - 1]
 end step_left
 
-private step_right(s: string, bs: []usize, at: usize) -> usize
+private step_right(s: string, bs: []const usize, at: usize) -> usize
     val i = slot(bs, at)
 
     if i + 1 >= bs.len then s.len else bs[i + 1]
@@ -162,7 +162,7 @@ end step_right
 // **Only ASCII whitespace counts**, which is a limit worth stating rather than hiding: a non-breaking
 // space is a character a word motion will run straight over. Widening it means a table, and a table
 // belongs in `sysl.text` where the width tables already are.
-private blank(s: string, bs: []usize, k: usize) -> bool
+private blank(s: string, bs: []const usize, k: usize) -> bool
     if k + 1 >= bs.len then return false
 
     val b = s.bytes[bs[k]]
@@ -171,7 +171,7 @@ private blank(s: string, bs: []usize, k: usize) -> bool
 end blank
 
 // The start of the word to the left: back over any spaces, then back over the word itself.
-private word_left(s: string, bs: []usize, at: usize) -> usize
+private word_left(s: string, bs: []const usize, at: usize) -> usize
     var i = slot(bs, at)
 
     while i > 0 && blank(s, bs, i - 1)
@@ -184,7 +184,7 @@ private word_left(s: string, bs: []usize, at: usize) -> usize
 end word_left
 
 // And the end of the word to the right, which is the same walk the other way.
-private word_right(s: string, bs: []usize, at: usize) -> usize
+private word_right(s: string, bs: []const usize, at: usize) -> usize
     val last = bs.len - 1
     var i = slot(bs, at)
 
@@ -228,10 +228,10 @@ end line_end
 // vertical move that knows only the text: in a proportional font the caret will not come out under
 // where it started. Doing better means asking the canvas to measure both lines, which is a question
 // for the view rather than for a pure rule, and the view can override it the day it matters.
-private col_at(s: string, bs: []usize, at: usize) -> usize
+private col_at(s: string, bs: []const usize, at: usize) -> usize
     slot(bs, at) - slot(bs, line_start(s, at))
 
-private at_column(s: string, bs: []usize, start: usize, col: usize) -> usize
+private at_column(s: string, bs: []const usize, start: usize, col: usize) -> usize
     val stop = slot(bs, line_end(s, start))
     val want = slot(bs, start) + col
 
@@ -239,7 +239,7 @@ private at_column(s: string, bs: []usize, start: usize, col: usize) -> usize
 end at_column
 
 // The same column on the line above, or the start of the run when there is no line above.
-private up(s: string, bs: []usize, at: usize) -> usize
+private up(s: string, bs: []const usize, at: usize) -> usize
     val start = line_start(s, at)
 
     if start == 0 then return 0usize
@@ -248,7 +248,7 @@ private up(s: string, bs: []usize, at: usize) -> usize
 end up
 
 // And on the line below, or the end of the run.
-private down(s: string, bs: []usize, at: usize) -> usize
+private down(s: string, bs: []const usize, at: usize) -> usize
     val stop = line_end(s, at)
 
     if stop >= s.len then return s.len

@@ -120,7 +120,7 @@ press(k: Key, shift: bool = false, ctrl: bool = false, alt: bool = false, cmd: b
 typed(t: string) -> Press = Press(Key.Typed(t), false, false, false, false)
 
 // No keys at all -- what a backend with no keyboard answers, so that a field on one still draws.
-no_keys() -> []Press = buf[Press]().view()
+no_keys() -> []const Press = buf[Press]().view()
 
 // What the window has told the canvas about the keyboard, between one frame and the next.
 //
@@ -161,7 +161,7 @@ struct Keyboard
     press(*self, p: Press) = self.presses.push(p)
 
     // What this frame's keys are, for whoever has the focus.
-    keys(*self) -> []Press = self.presses.view()
+    keys(*self) -> []const Press = self.presses.view()
 
     // Forget this frame's keys and the press that came with them. **`render` calls it at the end of
     // a frame**, which is the only moment either is certainly finished with.

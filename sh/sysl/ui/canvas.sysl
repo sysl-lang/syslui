@@ -303,7 +303,7 @@ trait Canvas
     take_focus(*self, id: int) = ()
 
     // What arrived since the last frame, for whichever view has the focus.
-    keys(*self) -> []Press = no_keys()
+    keys(*self) -> []const Press = no_keys()
 
     // Did the press this frame follows land in `r`, and where exactly?
     //
@@ -455,7 +455,8 @@ trait Canvas
     // backend that ignores `visible` is merely slower, one that ignores `grab` merely asks the
     // pointer to stay inside. A backend that ignored this would draw a frame with the dialog
     // *missing*, which is a wrong picture rather than a plainer one, so it is required and a new
-    // backend is made to think about it.
+    // backend is made to think about it. The canvas keeps `v` until the overlays are taken.
+    @keeps(v)
     raise_above(*self, v: &View, at: Rect)
 
     // **The theme, the text colour and the text size in force are captured with it**, so an overlay
@@ -812,7 +813,7 @@ impl Canvas for Recorder
 
     override take_focus(*self, id: int) = self.board.take(id)
 
-    override keys(*self) -> []Press = self.board.keys()
+    override keys(*self) -> []const Press = self.board.keys()
 
     override tapped(*self, r: Rect) -> bool =
         self.board.landed(self.placed(r)) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
