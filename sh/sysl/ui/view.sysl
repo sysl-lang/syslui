@@ -163,6 +163,7 @@ trait View
     // **A function of the theme in force rather than a theme**, so that two restyles nest and each
     // sees the other's work -- and so that a caller changing one field does not have to name, or
     // even know, the other twelve.
+    @answers(f)
     restyle(&self, f: &Fn(Theme) -> Theme) -> &View = Themed(self, f)
 
     // The commonest restyle by a wide margin: this subtree's controls in another colour.
@@ -226,6 +227,7 @@ trait View
     // **The anchor decides where it goes, and only knows that while painting** -- a menu under a
     // button has to be under *that* button, wherever layout put it this frame. Nothing is reserved
     // for it while it is closed, which is the whole point of an overlay.
+    @answers(open, content)
     popover(&self, open: &Signal[bool], content: &View, below: bool = true,
             gap: int = 4) -> &View =
         Popover(self, content, open, below, gap)
@@ -235,6 +237,7 @@ trait View
     // **Applied at the root**, because it centres in the rectangle *it* was given -- which is the
     // window only if it wraps the whole tree. `on_dismiss` is what a tap outside the content does;
     // `None` is a modal that has to be answered.
+    @answers(open, content, on_dismiss)
     modal(&self, open: &Signal[bool], content: &View,
           on_dismiss: Option[&Fn() -> unit] = None) -> &View =
         Modal(self, content, open, on_dismiss)
@@ -245,6 +248,7 @@ trait View
     // saves: it says that input composes with the chain the same way drawing does, so anything is
     // tappable and a button is a composition rather than a type. `button` below is three links and
     // no new view.
+    @answers(f)
     on_tap(&self, f: &Fn() -> unit) -> &View = Tappable(self, f, TAPPABLE, false)
 
     // Give this view a stable name, which a `snapshot` reports and a lookup finds.
