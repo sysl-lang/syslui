@@ -252,7 +252,7 @@ end radio
 // its options share, so the group is a `column` of them and the invariant belongs to the signal
 // rather than to a container. A group that owned a view could not put one option in one half of a
 // form and the rest in the other; this one can, because `radio` is callable on its own.
-radio_group(labels: []string, chosen: &Signal[int], role: Role = Role.Primary,
+radio_group(labels: []const string, chosen: &Signal[int], role: Role = Role.Primary,
             spacing: int = 6) -> &View =
     column(generate(labels.len, i -> radio(chosen, int(i), labels[i], role)), spacing)
 

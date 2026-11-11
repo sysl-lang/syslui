@@ -54,7 +54,7 @@ struct Menu
     title: string
     items: Buf[MenuItem]
 
-menu(title: string, items: []MenuItem) -> Menu
+menu(title: string, items: []const MenuItem) -> Menu
     var b: Buf[MenuItem] = buf()
 
     b.extend(items)
@@ -63,7 +63,7 @@ end menu
 
 // The bar. `open` holds the index of the open menu, or `NO_MENU`; a value naming no menu reads as
 // closed. A snapshot reports each title as `menu.<title>` and each row as `menu.<title>.<label>`.
-menu_bar(menus: []Menu, open: &Signal[int]) -> &View
+menu_bar(menus: []const Menu, open: &Signal[int]) -> &View
     var b: Buf[Menu] = buf()
 
     b.extend(menus)

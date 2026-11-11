@@ -1,6 +1,7 @@
 module sh.sysl.ui
 @tests
 
+import sysl.buf.{Buf, buf}
 import sysl.text.Search
 
 private val SCREEN: Rect = Rect(0, 0, 400, 300)
@@ -539,3 +540,31 @@ private a_menu_is_drawn_at_the_text_size_it_was_raised_under()
 
     assert(shows(&c, "text 8,57 48x32 'One' @32"), c.dump())
 end a_menu_is_drawn_at_the_text_size_it_was_raised_under
+
+@test
+private a_menu_and_its_bar_are_built_from_read_only_views()
+    var items: Buf[MenuItem] = buf()
+    var menus: Buf[Menu] = buf()
+    var labels: Buf[string] = buf()
+    var a = recorder()
+    var b = recorder()
+
+    items.push(item("Undo", nothing()))
+    menus.push(menu("Edit", items.view()))
+    labels.push("a")
+    labels.push("b")
+
+    draw(menu_bar(menus.view(), signal(0)), &a)
+    draw(menu_bar([menu("Edit", [item("Undo", nothing())])], signal(0)), &b)
+    assert_eq(a.dump(), b.dump(), "a Buf's view draws what the literal does")
+
+    val chosen = signal(0)
+    val g = radio_group(labels.view(), chosen)
+    val t = tabs(labels.view(), chosen, i -> text("x"))
+
+    var c = recorder()
+
+    draw(g, &c)
+    draw(t, &c)
+    assert(c.dump().len > 0, "both drew from read-only views")
+end a_menu_and_its_bar_are_built_from_read_only_views

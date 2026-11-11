@@ -24,7 +24,7 @@ import sysl.buf.{Buf, buf}
 //             0 -> details_panel()
 //             1 -> history_panel()
 //             _ -> notes_panel())
-tabs(labels: []string, chosen: &Signal[int], body: &Fn(int) -> &View) -> &View
+tabs(labels: []const string, chosen: &Signal[int], body: &Fn(int) -> &View) -> &View
     var bar: Buf[&View] = buf()
 
     val at = chosen.read()
