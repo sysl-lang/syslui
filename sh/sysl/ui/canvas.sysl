@@ -472,7 +472,9 @@ trait Canvas
     // and no second walk that would know where anything landed, because layout is decided during
     // paint. So a view that wants a tap says so where it draws, the canvas collects the regions in
     // paint order, and the backend matches a click against the last one that contains it -- last
-    // being topmost, since a later fill covers an earlier one.
+    // being topmost, since a later fill covers an earlier one. The canvas keeps `f` until the click
+    // comes, so the declaration says so.
+    @keeps(f)
     hit(*self, r: Rect, f: &Fn() -> unit)
 
     // The snapshot being taken, if this paint is one.
