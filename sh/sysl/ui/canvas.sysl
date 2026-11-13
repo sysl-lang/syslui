@@ -302,6 +302,12 @@ trait Canvas
     // Take it. A view calls this while painting, on the frame a press lands inside it.
     take_focus(*self, id: int) = ()
 
+    // The view `id`, which has the keyboard, asks to have `f` called once when it stops having it --
+    // whatever the cause, and whether or not it is painted in the frame that happens. A view calls
+    // this each frame it paints focused. The default is a canvas with no keyboard, which never moves it.
+    @keeps(f)
+    watch_focus(*self, id: int, f: &Fn() -> unit) = ()
+
     // What arrived since the last frame, for whichever view has the focus.
     keys(*self) -> []const Press = no_keys()
 
@@ -812,6 +818,8 @@ impl Canvas for Recorder
     override focus(*self) -> int = self.board.focus
 
     override take_focus(*self, id: int) = self.board.take(id)
+
+    override watch_focus(*self, id: int, f: &Fn() -> unit) = self.board.watch(id, f)
 
     override keys(*self) -> []const Press = self.board.keys()
 

@@ -57,6 +57,9 @@ struct Field
     on_enter: &Fn() -> unit
     on_escape: &Fn() -> unit
 
+    // Called once each time this field stops being the focused one.
+    on_blur: &Fn() -> unit
+
 impl View for Field
     measure(&self, c: *Canvas, avail: Size) -> Size =
         Size(self.width, self.rows * c.text_size("").h + 2 * FIELD_PAD)
@@ -72,6 +75,8 @@ impl View for Field
         if c.tapped(r) then c.take_focus(self.id)
 
         val mine = c.focus() == self.id
+
+        if mine then c.watch_focus(self.id, self.on_blur)
         val was = self.text.read()
         val inner = Rect(r.x + FIELD_PAD, r.y + FIELD_PAD, r.w - 2 * FIELD_PAD, r.h - 2 * FIELD_PAD)
 
@@ -137,9 +142,20 @@ private answer(f: &Field, ps: []const Press)
 // keyboard either way: whether a submitted field stays focused, or a cancelled one puts its old text
 // back, is the application's to decide, and both are a line in the handler. Neither key changes the
 // text. Both do nothing by default, as they did before the two were here (since 0.1.16).
+//
+// **`on_blur` is called once each time the field stops being the focused one**: a press anywhere
+// else -- another field, a button, empty space -- or focus taken programmatically. It is the moment
+// to commit an edit. It is called at the end of the frame in which the keyboard moved, so text typed
+// before then is already in the signal. **Enter does not call it**, because Enter leaves the field
+// focused; nor is it called by a field that never had the keyboard, and a press on the field itself
+// is not a loss. The loss is recorded by the canvas, so it is reported even when the field is not
+// painted that frame (scrolled away, its panel closed); a field that is simply no longer drawn while
+// still holding the keyboard is not blurred until something else takes it. Tab is an ordinary key
+// that the library does not turn into a focus move. Defaults to nothing.
 text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "",
-           on_enter: &Fn() -> unit = () -> (), on_escape: &Fn() -> unit = () -> ()) -> &View =
-    Field(text, id, width, 1, false, hint, () -> (), on_enter, on_escape)
+           on_enter: &Fn() -> unit = () -> (), on_escape: &Fn() -> unit = () -> (),
+           on_blur: &Fn() -> unit = () -> ()) -> &View =
+    Field(text, id, width, 1, false, hint, () -> (), on_enter, on_escape, on_blur)
 
 // Several lines of it. **Lines are the ones in the text**: nothing wraps, so a long paragraph is one
 // line that scrolls sideways. Wrapping needs the canvas to measure candidate breaks, which is a
@@ -149,8 +165,9 @@ text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "",
 // **Escape calls `on_escape`, and Enter is a newline** rather than a submit, which is what it is in an
 // area; a form submits an area with a button.
 text_area(text: &Signal[string], id: int, width: int = 320, rows: int = 5,
-          hint: string = "", on_escape: &Fn() -> unit = () -> ()) -> &View =
-    Field(text, id, width, rows, true, hint, () -> (), () -> (), on_escape)
+          hint: string = "", on_escape: &Fn() -> unit = () -> (),
+          on_blur: &Fn() -> unit = () -> ()) -> &View =
+    Field(text, id, width, rows, true, hint, () -> (), () -> (), on_escape, on_blur)
 
 // ## The three things a paint has to work out
 

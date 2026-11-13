@@ -157,6 +157,12 @@ struct Keyboard
     // only the window system can read it. A press nobody counted is a single.
     count: int
 
+    // The one focused view that asked to be told when it loses the keyboard: its id, and what to call.
+    // **Held here rather than in the view**, because a view that is not painted in the frame the
+    // keyboard moves cannot be asked anything, and the callback still has to run.
+    watched: int
+    leave: &Fn() -> unit
+
     // The window reported a key.
     press(*self, p: Press) = self.presses.push(p)
 
@@ -168,6 +174,7 @@ struct Keyboard
     reset(*self)
         self.presses = buf()
         self.fresh = false
+        self.told()
 
     // Told once a frame, through the canvas's `point`. **The transition into down is the blur**, not
     // the hold and not the release -- and it is also the press a field takes focus from, recorded
@@ -202,6 +209,24 @@ struct Keyboard
 
     // Where the focused view's caret is now.
     edit(*self, sel: Selection) = self.sel = sel
+
+    // The focused view `id` asks to be told when it stops being the focused one. Called each frame it
+    // paints focused, so the callback is always the latest build's. **A different view that was
+    // being watched has lost the keyboard by now, so it is told first.**
+    watch(*self, id: int, f: &Fn() -> unit)
+        if self.watched != NOBODY && self.watched != id then self.told()
+
+        self.watched = id
+        self.leave = f
+
+    // Tell the watched view, once, if it no longer has the keyboard. `reset` calls it at the end of a
+    // frame, which is when a press that moved the keyboard has been fully painted.
+    told(*self)
+        if self.watched != NOBODY && self.focus != self.watched
+            val f = self.leave
+
+            self.watched = NOBODY
+            f()
 end Keyboard
 
-keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false, -1, -1, false, 0)
+keyboard() -> Keyboard = Keyboard(buf(), NOBODY, nothing_selected(), false, -1, -1, false, 0, NOBODY, () -> ())
