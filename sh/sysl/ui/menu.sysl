@@ -35,7 +35,7 @@ const NO_MENU: int = -1
 
 // One row of a menu.
 enum MenuItem
-    Action(label: string, run: &Fn() -> unit, shortcut: string, enabled: bool)
+    Action(label: string, run: &Fn() -> unit, shortcut: string, enabled: bool, checked: Option[bool])
     Separator
 end MenuItem
 
@@ -44,7 +44,18 @@ end MenuItem
 // **`shortcut` is only a label.** Which keys do what is the application's, for the reason ⌘C is not in
 // `key.sysl`: only the application knows what its shortcuts are.
 item(label: string, run: &Fn() -> unit, shortcut: string = "", enabled: bool = true) -> MenuItem =
-    MenuItem.Action(label, run, shortcut, enabled)
+    MenuItem.Action(label, run, shortcut, enabled, None)
+
+// A row that does something when chosen and says whether it is on: View -> Grid, with a tick beside it
+// while the grid is showing.
+//
+// **`on` is what the tick shows; `run` is what flips it**, so the application keeps the state, as it
+// does for every other row. **A menu with any `toggle` reserves a column for the tick on every row**,
+// the way a Mac menu does, so the labels line up and do not move when `on` changes; a menu with none
+// is drawn exactly as it always was. That is why this is a constructor of its own rather than a
+// `checked` flag on `item`: a flag that defaults to false cannot tell "off" from "not a toggle".
+toggle(label: string, run: &Fn() -> unit, on: bool, shortcut: string = "", enabled: bool = true) -> MenuItem =
+    MenuItem.Action(label, run, shortcut, enabled, Some(on))
 
 // A rule between two groups of rows. It is drawn where it is written, first or last included.
 separator() -> MenuItem = MenuItem.Separator
@@ -205,8 +216,15 @@ private title_face(t: Theme, title: string, on: bool, i: Interaction) -> &View =
 private dropdown(m: Menu, shut: &Signal[int], t: Theme) -> &View
     var rows: Buf[&View] = buf()
 
+    var column_for_ticks = false
+
     for it in m.items.view()
-        rows.push(menu_row(m.title, it, shut, t))
+        it match
+            Action(_, _, _, _, checked) -> if checked.is_some() then column_for_ticks = true
+            Separator -> ()
+
+    for it in m.items.view()
+        rows.push(menu_row(m.title, it, shut, t, column_for_ticks))
 
     column(rows.view(), 0)
         .pad(top = t.pad / 2, bottom = t.pad / 2)
@@ -214,11 +232,11 @@ private dropdown(m: Menu, shut: &Signal[int], t: Theme) -> &View
         .border(t.edge, 1, t.radius)
 end dropdown
 
-private menu_row(title: string, it: MenuItem, shut: &Signal[int], t: Theme) -> &View =
+private menu_row(title: string, it: MenuItem, shut: &Signal[int], t: Theme, ticks: bool) -> &View =
     it match
         Separator -> divider().pad(top = t.pad / 2, bottom = t.pad / 2)
-        Action(label, run, shortcut, enabled) ->
-            val face = reactive((i, th) -> row_face(th, label, shortcut, enabled, i))
+        Action(label, run, shortcut, enabled, checked) ->
+            val face = reactive((i, th) -> row_face(th, label, shortcut, enabled, i, ticks, checked))
             val name = s"menu.${title}.${label}"
 
             // Closed first, so an action that opens something else is not undone by the closing.
@@ -229,7 +247,8 @@ private menu_row(title: string, it: MenuItem, shut: &Signal[int], t: Theme) -> &
             if enabled then Named(Tappable(face, pick, MENU_ROW, false), name)
             else Named(DisabledRow(face), name)
 
-private row_face(t: Theme, label: string, shortcut: string, enabled: bool, i: Interaction) -> &View
+private row_face(t: Theme, label: string, shortcut: string, enabled: bool, i: Interaction, ticks: bool,
+                       checked: Option[bool]) -> &View
     val ink = if enabled then t.ink else mix(t.ink, t.panel, MENU_DIM)
     val words = text(label).foreground(ink)
 
@@ -241,10 +260,44 @@ private row_face(t: Theme, label: string, shortcut: string, enabled: bool, i: In
         text(shortcut).foreground(if enabled then mix(t.ink, t.panel, MENU_QUIET) else ink)
     ], t.pad)
 
-    inside
+    val lined = if ticks then row([Tick(checked.unwrap_or(false), ink), inside], 0) else inside
+
+    lined
         .pad(top = t.pad / 2, right = t.pad, bottom = t.pad / 2, left = t.pad)
         .background(mix(t.panel, t.table.hover, if enabled then int(i.hover * 100.0) else 0))
 end row_face
+
+// The tick column of a row in a menu that has toggles: a check mark when `on`, and the same room
+// when not, so a row's label sits where it does either way.
+//
+// **Drawn from squares**, since the canvas has rectangles and no paths, and so it does not depend on
+// the font having a check glyph. Its measured height is nothing, so it never makes a row taller.
+private struct Tick
+    on: bool
+    ink: u32
+
+impl View for Tick
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(TICK_COLUMN, 0)
+
+    paint(&self, c: *Canvas, r: Rect)
+        if !self.on then return
+
+        c.survey() match
+            Some(n) -> n.mark("checked")
+            None -> ()
+
+        val top = r.y + (r.h - TICK_H) / 2
+
+        // Down and right three steps, then up and right five: each step a two-pixel square.
+        val steps: [8][2]int = [[0, 3], [1, 4], [2, 5], [3, 4], [4, 3], [5, 2], [6, 1], [7, 0]]
+
+        for s in steps
+            c.fill(Rect(r.x + s[0], top + s[1], 2, 2), self.ink)
+    end paint
+
+// The tick's width and the room reserved for it, and its height.
+private const TICK_COLUMN: int = 16
+private const TICK_H: int = 7
 
 // A row that is reported and takes no tap of its own, so the tap falls to the dropdown's catcher.
 private struct DisabledRow

@@ -568,3 +568,104 @@ private a_menu_and_its_bar_are_built_from_read_only_views()
     draw(t, &c)
     assert(c.dump().len > 0, "both drew from read-only views")
 end a_menu_and_its_bar_are_built_from_read_only_views
+
+// ## Toggles
+
+private val TICK_INK: string = "fill 8,48 2x2 #"
+
+private view_menu(open: &Signal[int], grid: bool, ran: &Signal[int], enabled: bool = true) -> &View =
+    menu_bar([
+        menu("View", [
+            toggle("Grid", counter(ran), grid, enabled = enabled),
+            toggle("Rulers", counter(ran), false),
+            item("Reset", counter(ran))
+        ])
+    ], open)
+
+@test
+private a_menu_with_no_toggle_is_drawn_exactly_as_it_always_was()
+    var c = recorder()
+
+    draw(two_menus(signal(0), signal(0)), &c)
+
+    // Captured from the build before toggles existed.
+    assert_eq(c.dump(), "raise -1000000,-1000000 2000000x2000000\nraise 0,0 400x33\nraise 0,33 104x89\nraise 0,33 104x89\nhit -1000000,-1000000 2000000x2000000\nfill 0,0 400x33 #1843248\nhit 0,0 48x32\nfill 0,0 48x32 #2766160\nink #15132911\ntext 8,8 32x16 'File'\nunink\nhit 48,0 48x32\nfill 48,0 48x32 #1843248\nink #15132911\ntext 56,8 32x16 'Edit'\nunink\nfill 0,32 400x1 #2764602\nhit 0,33 104x89\nfill 0,33 104x89 #1843248 r6\nhit 0,37 104x24\nfill 0,37 104x24 #1843248\nink #15132911\ntext 8,41 24x16 'New'\nunink\nink #11119797\ntext 48,41 48x16 'Ctrl+N'\nunink\nfill 0,61 104x24 #1843248\nink #7764613\ntext 8,65 24x16 'Dim'\nunink\nink #7764613\ntext 48,65 48x16 'Ctrl+D'\nunink\nfill 0,89 104x1 #2764602\nhit 0,94 104x24\nfill 0,94 104x24 #1843248\nink #15132911\ntext 8,98 88x16 'Quit'\nunink\nstroke 0,33 104x89 #2764602 w1 r6\n")
+end a_menu_with_no_toggle_is_drawn_exactly_as_it_always_was
+
+@test
+private an_item_that_is_on_draws_a_tick_and_one_that_is_off_does_not()
+    var c = recorder()
+
+    draw(view_menu(signal(0), true, signal(0)), &c)
+
+    assert(shows(&c, s"${TICK_INK}${dark().ink}"), c.dump())
+
+    var off = recorder()
+
+    draw(view_menu(signal(0), false, signal(0)), &off)
+
+    assert(!shows(&off, "fill 8,"), "no tick when nothing is on")
+end an_item_that_is_on_draws_a_tick_and_one_that_is_off_does_not
+
+@test
+private every_row_of_a_menu_with_a_toggle_makes_room_for_the_tick()
+    var c = recorder()
+
+    draw(view_menu(signal(0), false, signal(0)), &c)
+
+    assert(shows(&c, "text 24,41 32x16 'Grid'"), "a toggle that is off")
+    assert(shows(&c, "text 24,65 48x16 'Rulers'"), "a toggle")
+    assert(shows(&c, "text 24,89 40x16 'Reset'"), "a plain item lines up with them")
+end every_row_of_a_menu_with_a_toggle_makes_room_for_the_tick
+
+@test
+private turning_a_toggle_on_does_not_move_anything()
+    var on = recorder()
+    var off = recorder()
+
+    draw(view_menu(signal(0), true, signal(0)), &on)
+    draw(view_menu(signal(0), false, signal(0)), &off)
+
+    assert(shows(&on, "text 24,41 32x16 'Grid'"), "on")
+    assert(shows(&off, "text 24,41 32x16 'Grid'"), "off")
+    assert(shows(&on, "raise 0,33 80x80"), "the size with it on")
+    assert(shows(&off, "raise 0,33 80x80"), "the size with it off")
+end turning_a_toggle_on_does_not_move_anything
+
+@test
+private a_disabled_toggle_that_is_on_draws_its_tick_dimmed()
+    var c = recorder()
+    val t = dark()
+
+    draw(view_menu(signal(0), true, signal(0), enabled = false), &c)
+
+    assert(shows(&c, s"${TICK_INK}${row_ink(t)}"), c.dump())
+    assert(!shows(&c, s"${TICK_INK}${t.ink}"), "not in full ink")
+end a_disabled_toggle_that_is_on_draws_its_tick_dimmed
+
+@test
+private a_snapshot_marks_a_toggle_that_is_on_as_checked_and_not_one_that_is_off()
+    var c = recorder()
+    val v = view_menu(signal(0), true, signal(0))
+
+    draw(v, &c)
+
+    val s = snapshot(v, &c, SCREEN)
+
+    assert_eq(s.find("menu.View.Grid").unwrap().marks, "checked")
+    assert_eq(s.find("menu.View.Rulers").unwrap().marks, "")
+    assert_eq(s.find("menu.View.Reset").unwrap().marks, "")
+end a_snapshot_marks_a_toggle_that_is_on_as_checked_and_not_one_that_is_off
+
+@test
+private choosing_a_toggle_that_is_on_runs_it_and_closes()
+    val open = signal(0)
+    val ran = signal(0)
+    val v = view_menu(open, true, ran)
+    var c = recorder()
+
+    tap_name(v, &c, "menu.View.Grid")
+
+    assert_eq(ran.read(), 1)
+    assert_eq(open.read(), NO_MENU)
+end choosing_a_toggle_that_is_on_runs_it_and_closes
