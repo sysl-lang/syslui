@@ -5701,3 +5701,190 @@ private a_canvas_implementing_none_of_it_answers_at_rest()
 
     tree.paint(&c, inside)
 end a_canvas_implementing_none_of_it_answers_at_rest
+
+// ## A field that loses the keyboard says so, once
+
+private val FORM: Rect = Rect(0, 0, 200, 400)
+
+// Two fields and a button, each of the fields noting in `log` that it was blurred and what its text
+// was at that moment.
+private blurring(a: &Signal[string], b: &Signal[string], log: &Signal[string], taps: &Signal[int]) -> &View =
+    column([
+        text_field(a, 1, on_blur = () -> log.set(log.read() + s"a:${a.read()} ")),
+        text_field(b, 2, on_blur = () -> log.set(log.read() + s"b:${b.read()} ")),
+        button("go", () -> taps.set(taps.read() + 1))])
+
+// One whole frame with the pointer at (x, y), pressed or not.
+private pointer_frame(v: &View, c: *Recorder, x: int, y: int, down: bool)
+    c.point(x, y, down)
+    render(v, c, FORM)
+
+@test
+private a_press_on_another_field_blurs_the_first_once()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 14, true)
+    pointer_frame(v, &c, 20, 14, false)
+    assert_eq(log.read(), "", "a press on a field is not a loss")
+
+    pointer_frame(v, &c, 20, 42, true)
+    assert(c.focus() == 2, "the second field has it")
+    assert_eq(log.read(), "a: ", "the first was told, once")
+
+    pointer_frame(v, &c, 20, 42, false)
+    pointer_frame(v, &c, 20, 42, false)
+    assert_eq(log.read(), "a: ", "and not again")
+end a_press_on_another_field_blurs_the_first_once
+
+@test
+private a_press_on_empty_space_blurs_the_field_once()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 14, true)
+    pointer_frame(v, &c, 20, 14, false)
+    pointer_frame(v, &c, 20, 300, true)
+    pointer_frame(v, &c, 20, 300, false)
+    pointer_frame(v, &c, 20, 300, true)
+
+    assert(c.focus() == NOBODY)
+    assert_eq(log.read(), "a: ", "once, and a second press elsewhere finds nothing to tell")
+end a_press_on_empty_space_blurs_the_field_once
+
+@test
+private a_press_on_a_button_blurs_the_field_and_the_button_still_taps()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 14, true)
+    pointer_frame(v, &c, 20, 14, false)
+    pointer_frame(v, &c, 20, 70, true)
+    assert(c.taps.tap(20, 70), "the button is there")
+
+    assert_eq(log.read(), "a: ")
+    assert_eq(taps.read(), 1, "and its own tap ran")
+end a_press_on_a_button_blurs_the_field_and_the_button_still_taps
+
+// **What was typed is in the signal when the handler runs**, so a commit reads the last digit.
+@test
+private text_typed_before_the_press_is_in_the_signal_when_blur_runs()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 14, true)
+    pointer_frame(v, &c, 20, 14, false)
+    c.key(typed("42"))
+    render(v, &c, FORM)
+    assert_eq(a.read(), "42")
+
+    pointer_frame(v, &c, 20, 300, true)
+    assert_eq(log.read(), "a:42 ")
+end text_typed_before_the_press_is_in_the_signal_when_blur_runs
+
+@test
+private enter_keeps_the_keyboard_and_does_not_blur()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 14, true)
+    pointer_frame(v, &c, 20, 14, false)
+    c.key(press(Key.Enter))
+    c.key(press(Key.Escape))
+    render(v, &c, FORM)
+    render(v, &c, FORM)
+
+    assert(c.focus() == 1)
+    assert_eq(log.read(), "")
+end enter_keeps_the_keyboard_and_does_not_blur
+
+@test
+private a_field_that_never_had_the_keyboard_is_never_blurred()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 300, true)
+    pointer_frame(v, &c, 20, 300, false)
+    pointer_frame(v, &c, 20, 70, true)
+    render(v, &c, FORM)
+
+    assert_eq(log.read(), "")
+end a_field_that_never_had_the_keyboard_is_never_blurred
+
+@test
+private focus_going_a_to_b_to_a_calls_in_order()
+    val a = signal("x")
+    val b = signal("y")
+    val log = signal("")
+    val taps = signal(0)
+    val v = blurring(a, b, log, taps)
+    var c = recorder()
+
+    pointer_frame(v, &c, 20, 14, true)
+    pointer_frame(v, &c, 20, 14, false)
+    pointer_frame(v, &c, 20, 42, true)
+    pointer_frame(v, &c, 20, 42, false)
+    pointer_frame(v, &c, 20, 14, true)
+
+    assert(c.focus() == 1)
+    assert_eq(log.read(), "a:x b:y ")
+end focus_going_a_to_b_to_a_calls_in_order
+
+// **Taking the keyboard from code is a loss too**, and so is a loss in a frame the field is not
+// painted in: the canvas holds the callback, so a scrolled-away or closed field is still told.
+@test
+private focus_taken_in_code_blurs_even_when_the_field_is_not_painted()
+    val a = signal("x")
+    val log = signal("")
+    val field = text_field(a, 1, on_blur = () -> log.set(log.read() + s"a:${a.read()} "))
+    var c = recorder()
+
+    pointer_frame(field, &c, 20, 14, true)
+    pointer_frame(field, &c, 20, 14, false)
+
+    c.take_focus(9)
+    render(text("gone"), &c, FORM)
+
+    assert_eq(log.read(), "a:x ", "told although the field was not drawn")
+
+    render(text("gone"), &c, FORM)
+    assert_eq(log.read(), "a:x ", "once")
+end focus_taken_in_code_blurs_even_when_the_field_is_not_painted
+
+@test
+private an_area_blurs_too()
+    val a = signal("")
+    val log = signal("")
+    val area = text_area(a, 1, on_blur = () -> log.set(log.read() + "area "))
+    var c = recorder()
+
+    pointer_frame(area, &c, 20, 14, true)
+    pointer_frame(area, &c, 20, 14, false)
+    pointer_frame(area, &c, 300, 300, true)
+
+    assert_eq(log.read(), "area ")
+end an_area_blurs_too

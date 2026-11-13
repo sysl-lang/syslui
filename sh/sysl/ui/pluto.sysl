@@ -318,6 +318,8 @@ impl Canvas for PlutoCanvas
 
     override take_focus(*self, id: int) = self.board.take(id)
 
+    override watch_focus(*self, id: int, f: &Fn() -> unit) = self.board.watch(id, f)
+
     override keys(*self) -> []const Press = self.board.keys()
 
     override tapped(*self, r: Rect) -> bool =
