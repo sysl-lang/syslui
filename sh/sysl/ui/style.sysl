@@ -131,10 +131,42 @@ reactive(body: &Fn(Interaction, Theme) -> &View) -> &View = Reactive(body)
 //     button("Delete", drop, .Error)              // filled, red
 //     button("Later", defer, .Secondary, .Soft)   // muted ground, coloured label
 //     button("Draft", edit, .Accent, .Dashed)     // a dashed outline: provisional
+//
+// **`enabled = false` makes it a label that looks like a button and is not one**: it takes no tap,
+// answers no hover or press, registers no hit region (so the cursor is left alone), is drawn with its
+// colour mixed toward the panel, and is reported in a snapshot as `button` with the `disabled` mark.
+// The flag is read when the tree is built, so a tree rebuilt with a different value takes effect on
+// the next frame.
 button(label: string, on_tap: &Fn() -> unit, role: Role = Role.Primary,
-       variant: Variant = Variant.Filled) -> &View =
-    Tappable(reactive((i, t) -> button_face(t, label, i, t.color(role), variant)), on_tap, "button",
-             false)
+       variant: Variant = Variant.Filled, enabled: bool = true) -> &View =
+    if enabled then
+        Tappable(reactive((i, t) -> button_face(t, label, i, t.color(role), variant)), on_tap, "button",
+                 false)
+    else DisabledButton(label, role, variant)
+
+// How far a disabled button's colour is mixed toward the panel it sits on.
+private const BUTTON_DIM: int = 55
+
+// A button that is drawn at rest, dimmed, and registers nothing to tap.
+private struct DisabledButton
+    label: string
+    role: Role
+    variant: Variant
+
+impl View for DisabledButton
+    measure(&self, c: *Canvas, avail: Size) -> Size = disabled_face(c.theme(), self).measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(s) ->
+                s.open("button", r, Words.Label, "", "disabled")
+                disabled_face(c.theme(), self).paint(c, r)
+                s.close()
+            None -> disabled_face(c.theme(), self).paint(c, r)
+    end paint
+
+private disabled_face(t: Theme, b: &DisabledButton) -> &View =
+    button_face(t, b.label, AT_REST, mix(t.color(b.role), t.panel, BUTTON_DIM), b.variant)
 
 // **One function from a theme, a label and a state to a view**, which is the shape a `ButtonStyle`
 // would have if styles became a trait -- and the reason this is not written inline in the lambda.

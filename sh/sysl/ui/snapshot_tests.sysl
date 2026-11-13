@@ -373,6 +373,102 @@ private a_part_covered_control_is_clicked_where_it_shows()
     assert_eq(hit.read(), 1)
 end a_part_covered_control_is_clicked_where_it_shows
 
+// A tap at the middle of a 100x40 button, through the two steps a window delivers.
+private tap_button(v: &View, c: *Recorder)
+    c.taps.reset()
+    render(v, c, WINDOW)
+    c.point(20, 20, true)
+    c.release(20, 20)
+end tap_button
+
+@test
+private a_disabled_button_runs_nothing_when_tapped_and_an_enabled_one_does()
+    val hit = signal(0)
+    var c = recorder()
+
+    tap_button(button("go", bump(hit), enabled = false).frame(100, 40), &c)
+    assert_eq(hit.read(), 0)
+
+    var d = recorder()
+
+    tap_button(button("go", bump(hit), enabled = true).frame(100, 40), &d)
+    assert_eq(hit.read(), 1)
+end a_disabled_button_runs_nothing_when_tapped_and_an_enabled_one_does
+
+@test
+private a_disabled_button_is_drawn_dimmed_in_every_variant()
+    val t = dark()
+    val dim = mix(t.color(Role.Primary), t.panel, 55)
+    val variants = [Variant.Filled, Variant.Soft, Variant.Outline, Variant.Dashed]
+
+    for v in variants
+        var on = recorder()
+        var off = recorder()
+
+        button("hi", () -> (), Role.Primary, v).paint(&on, Rect(0, 0, 100, 28))
+        button("hi", () -> (), Role.Primary, v, enabled = false).paint(&off, Rect(0, 0, 100, 28))
+
+        assert(on.dump() != off.dump(), "disabled differs from enabled")
+        assert(!off.dump().contains(s"#${t.color(Role.Primary)}"), "no undimmed role colour")
+        assert(off.dump().contains("#"), "still drawn")
+    end for
+
+    var filled = recorder()
+
+    button("hi", () -> (), enabled = false).paint(&filled, Rect(0, 0, 100, 28))
+    assert(filled.dump().contains(s"#${dim}"), s"the dimmed ground:\n${filled.dump()}")
+end a_disabled_button_is_drawn_dimmed_in_every_variant
+
+@test
+private a_hovered_or_pressed_disabled_button_does_not_change()
+    val variants = [Variant.Filled, Variant.Soft, Variant.Outline, Variant.Dashed]
+
+    for v in variants
+        val face = button("hi", () -> (), Role.Primary, v, enabled = false)
+        var away = recorder()
+        var over = recorder()
+        var down = recorder()
+
+        over.point(50, 14)
+        down.point(50, 14, true)
+        face.paint(&away, Rect(0, 0, 100, 28))
+        face.paint(&over, Rect(0, 0, 100, 28))
+        face.paint(&down, Rect(0, 0, 100, 28))
+
+        assert_eq(over.dump(), away.dump())
+        assert_eq(down.dump(), away.dump())
+    end for
+end a_hovered_or_pressed_disabled_button_does_not_change
+
+@test
+private a_disabled_button_is_reported_as_disabled_in_a_snapshot()
+    val s = shot(button("Save", no_op(), enabled = false).named("save"))
+    var c = recorder()
+    val v = button("Save", no_op(), enabled = false).named("save")
+
+    render(v, &c, WINDOW)
+
+    assert(s.dump().contains("button \"Save\" name=save"), s"got:\n${s.dump()}")
+    assert(s.dump().contains("disabled"), s"got:\n${s.dump()}")
+    assert(snapshot(v, &c, WINDOW).to_json().contains("\"enabled\":false"), "json says so")
+    assert(shot(button("Save", no_op()).named("save")).to_json().contains("\"enabled\":true"), "enabled says true")
+end a_disabled_button_is_reported_as_disabled_in_a_snapshot
+
+@test
+private enabling_a_button_between_frames_takes_effect()
+    val hit = signal(0)
+    var c = recorder()
+
+    tap_button(button("go", bump(hit), enabled = false).frame(100, 40), &c)
+    assert_eq(hit.read(), 0)
+
+    tap_button(button("go", bump(hit), enabled = true).frame(100, 40), &c)
+    assert_eq(hit.read(), 1)
+
+    tap_button(button("go", bump(hit), enabled = false).frame(100, 40), &c)
+    assert_eq(hit.read(), 1)
+end enabling_a_button_between_frames_takes_effect
+
 // The whole of what a name is for: the same name, in a tree built again with everything moved.
 @test
 private a_name_survives_a_rebuild_between_frames()
