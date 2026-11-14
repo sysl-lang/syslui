@@ -294,6 +294,12 @@ struct Chord
     middle: Grab
     keys: Modifiers
 
+    // Whether each button went down since the last frame ended. **A right-click is over before a frame
+    // is drawn**, as a tap is, so the press is kept for the one frame that follows it rather than
+    // asked about while it lasts; where it went down is its grab's `began`.
+    struck_secondary: bool
+    struck_middle: bool
+
     private of(*self, b: PointerButton) -> *Grab =
         if b == PointerButton.Middle then &self.middle else &self.secondary
 
@@ -302,7 +308,19 @@ struct Chord
         self.secondary.moved(x, y, self.secondary.down)
         self.middle.moved(x, y, self.middle.down)
 
-    press(*self, x: int, y: int, b: PointerButton) = self.of(b).moved(x, y, true)
+    press(*self, x: int, y: int, b: PointerButton)
+        if b == PointerButton.Middle then self.struck_middle = true else self.struck_secondary = true
+
+        self.of(b).moved(x, y, true)
+
+    // Did this button go down since the last frame ended?
+    struck(self, b: PointerButton) -> bool =
+        if b == PointerButton.Middle then self.struck_middle else self.struck_secondary
+
+    // The frame is over: a press it followed has been seen.
+    settle(*self)
+        self.struck_secondary = false
+        self.struck_middle = false
 
     let_go(*self, x: int, y: int, b: PointerButton) = self.of(b).moved(x, y, false)
 
@@ -322,7 +340,7 @@ struct Chord
         (g.began_x, g.began_y)
 end Chord
 
-chord() -> Chord = Chord(grabbing(), grabbing(), no_modifiers())
+chord() -> Chord = Chord(grabbing(), grabbing(), no_modifiers(), false, false)
 
 // The shape of the pointer, which is how a window says what a press would do before it happens.
 //

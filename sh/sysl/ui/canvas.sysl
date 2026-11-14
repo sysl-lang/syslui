@@ -344,6 +344,18 @@ trait Canvas
     // The default is a canvas with no pointer, which never saw a press.
     tap_count(*self) -> int = 0
 
+    // `tapped` for a named button: did a press of `b` this frame follows land in `r`? **A right-click
+    // is what opens a context menu**, and like a tap it can begin and end between two frames, so it is
+    // kept for the one frame that follows rather than read from `held`. It is the press that counts,
+    // not the release, as a context menu opens on the press. The default is a canvas that only hears
+    // the primary button.
+    tapped_by(*self, r: Rect, b: PointerButton) -> bool =
+        b == PointerButton.Primary && self.tapped(r)
+
+    // Where that press of `b` was, in the coordinates a view is painted in.
+    tap_point_by(*self, b: PointerButton) -> (int, int) =
+        if b == PointerButton.Primary then self.tap_point() else (-1, -1)
+
     // Where the focused view's caret is, and what it has selected.
     editing(*self) -> Selection = nothing_selected()
 
@@ -892,6 +904,17 @@ impl Canvas for Recorder
 
     override tap_count(*self) -> int = self.board.taps()
 
+    override tapped_by(*self, r: Rect, b: PointerButton) -> bool
+        if b == PointerButton.Primary then return self.tapped(r)
+
+        val (x, y) = self.chord.origin(b)
+
+        self.chord.struck(b) && self.placed(r).holds(x, y) && !self.covers.struck(x, y)
+    end tapped_by
+
+    override tap_point_by(*self, b: PointerButton) -> (int, int) =
+        if b == PointerButton.Primary then self.tap_point() else self.back(self.chord.origin(b))
+
     override editing(*self) -> Selection = self.board.sel
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
@@ -899,6 +922,7 @@ impl Canvas for Recorder
     override keys_done(*self)
         self.board.reset()
         self.hold.settle()
+        self.chord.settle()
         self.shapes.settle()
 
     override cursor(*self, r: Rect, shape: Cursor)

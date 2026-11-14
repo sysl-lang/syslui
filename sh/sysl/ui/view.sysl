@@ -236,6 +236,18 @@ trait View
             gap: int = 4) -> &View =
         Popover(self, content, open, below, gap)
 
+    // Open a menu of `items` where this view is right-clicked. `at` is where it is open, or `None`;
+    // `menu.sysl` has the rest.
+    @keeps(items)
+    @answers(at, items)
+    context_menu(&self, at: &Signal[Option[(int, int)]], items: []const MenuItem,
+                 title: string = "context") -> &View
+        var b: Buf[MenuItem] = buf()
+
+        b.extend(items)
+        ContextMenu(self, at, b, title)
+    end context_menu
+
     // Cover this view with `content`, centred, and make everything under it untappable.
     //
     // **Applied at the root**, because it centres in the rectangle *it* was given -- which is the

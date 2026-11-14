@@ -176,7 +176,8 @@ impl View for MenuBar
         if chosen.items.view().len == 0 then return
 
         val title = self.title_at(c, r, at)
-        val drop = dropdown(chosen, shut, c.theme())
+
+        val drop = dropdown(chosen, () -> shut.set(NO_MENU), c.theme())
         val s = drop.measure(c, Size(1_000_000, 1_000_000))
         val w = if s.w > title.w then s.w else title.w
         val place = Rect(kept_inside(title.x, w, r), r.bottom(), w, s.h)
@@ -213,7 +214,9 @@ private title_face(t: Theme, title: string, on: bool, i: Interaction) -> &View =
         .padding(t.pad)
         .background(mix(t.panel, t.table.hover, if on then 100 else int(i.hover * 100.0)))
 
-private dropdown(m: Menu, shut: &Signal[int], t: Theme) -> &View
+// The rows of a menu in their panel. `shut` closes whatever opened it, a bar's menu or a context
+// menu, and runs before the row's action.
+private[ui] dropdown(m: Menu, shut: &Fn() -> unit, t: Theme) -> &View
     var rows: Buf[&View] = buf()
 
     var column_for_ticks = false
@@ -232,7 +235,7 @@ private dropdown(m: Menu, shut: &Signal[int], t: Theme) -> &View
         .border(t.edge, 1, t.radius)
 end dropdown
 
-private menu_row(title: string, it: MenuItem, shut: &Signal[int], t: Theme, ticks: bool) -> &View =
+private menu_row(title: string, it: MenuItem, shut: &Fn() -> unit, t: Theme, ticks: bool) -> &View =
     it match
         Separator -> divider().pad(top = t.pad / 2, bottom = t.pad / 2)
         Action(label, run, shortcut, enabled, checked) ->
@@ -241,7 +244,7 @@ private menu_row(title: string, it: MenuItem, shut: &Signal[int], t: Theme, tick
 
             // Closed first, so an action that opens something else is not undone by the closing.
             val pick: &Fn() -> unit = () ->
-                shut.set(NO_MENU)
+                shut()
                 run()
 
             if enabled then Named(Tappable(face, pick, MENU_ROW, false), name)
@@ -313,6 +316,97 @@ impl View for DisabledRow
                 self.child.paint(c, r)
                 s.close()
             None -> self.child.paint(c, r)
+    end paint
+
+// A view whose right-click opens a menu where the pointer is.
+//
+//     val at: &Signal[Option[(int, int)]] = signal(None)
+//
+//     board.context_menu(at, [
+//         item("Rotate", rotate, "R"),
+//         item("Delete", delete, "⌫"),
+//     ])
+//
+// **Where it is open is the application's**, as which menu of a bar is open is: `None` is closed, and
+// `Some((x, y))` is open at that point in the view's coordinates. A right-click (the secondary button)
+// inside the view writes the point it went down at, and closing writes `None`. An application that
+// opens it from a key, or wants to know what was under the click, reads and writes the same signal,
+// and the items can be built from it: the tree is built again each frame.
+//
+// **It closes the ways a menu closes**: choosing a row, a tap anywhere else, `Escape`, and a right-click
+// outside the view. A right-click elsewhere inside the view moves it there, as it does on every desktop.
+// **It is kept inside the view it is attached to**, opening left of the point or above it where it
+// would cross the view's edge, because a canvas does not know how big its window is. Attached to the
+// root, that is the window. A snapshot reports each row as `menu.<title>.<label>`.
+private[ui] struct ContextMenu
+    child: &View
+    at: &Signal[Option[(int, int)]]
+    items: Buf[MenuItem]
+    title: string
+
+impl View for ContextMenu
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.child.paint(c, r)
+
+        val shut = self.at
+        val surveying = c.survey().is_some()
+
+        if !surveying && c.tapped_by(r, PointerButton.Secondary)
+            shut.set(Some(c.tap_point_by(PointerButton.Secondary)))
+
+        val (x, y) = shut.read() match
+            Some(p) -> p
+            None -> return
+
+        if !surveying
+            for p in c.keys()
+                if p.key == Key.Escape
+                    shut.set(None)
+
+                    return
+
+        val up: &Fn() -> bool = () -> shut.read().is_some()
+        val drop = dropdown(Menu(self.title, self.items), () -> shut.set(None), c.theme())
+        val s = drop.measure(c, Size(1_000_000, 1_000_000))
+        val place = Rect(opened_at(x, s.w, r.x, r.right()), opened_at(y, s.h, r.y, r.bottom()), s.w, s.h)
+
+        c.raise_above(up_while(Dismisser(spacer().on_tap(() -> shut.set(None)), shut, r), up), EVERYWHERE)
+
+        // **A second catcher, the dropdown's own size, that does nothing**, as a bar's menu has: a tap
+        // on a disabled row, a separator or the margin must not reach the one that closes.
+        c.raise_above(up_while(spacer().on_tap(() -> ()), up), place)
+        c.raise_above(up_while(drop, up), place)
+    end paint
+
+// Where a menu `size` long opens from a point at `p`, between `lo` and `hi`: from the point where it
+// fits, ending at it where it does not, and never before `lo`.
+private[ui] opened_at(p: int, size: int, lo: int, hi: int) -> int
+    val at = if p + size <= hi then p else p - size
+
+    if at < lo then lo else at
+end opened_at
+
+// The catcher under an open context menu: a tap closes it, as `tap` does, and a right-click moves it
+// to where it went down if that is inside the view it belongs to, and closes it if not. **Raised above
+// the view**, so the view's own right-click is covered while the menu is up and this is what hears it.
+private struct Dismisser
+    tap: &View
+    at: &Signal[Option[(int, int)]]
+    within: Rect
+
+impl View for Dismisser
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.tap.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.tap.paint(c, r)
+
+        if c.survey().is_some() || !c.tapped_by(r, PointerButton.Secondary) then return
+
+        val (x, y) = c.tap_point_by(PointerButton.Secondary)
+
+        self.at.set(if self.within.holds(x, y) then Some((x, y)) else None)
     end paint
 
 // What a snapshot calls a title and a row.

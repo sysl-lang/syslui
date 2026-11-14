@@ -363,6 +363,17 @@ impl Canvas for PlutoCanvas
 
     override tap_count(*self) -> int = self.board.taps()
 
+    override tapped_by(*self, r: Rect, b: PointerButton) -> bool
+        if b == PointerButton.Primary then return self.tapped(r)
+
+        val (x, y) = self.chord.origin(b)
+
+        self.chord.struck(b) && self.placed(r).holds(x, y) && !self.covers.struck(x, y)
+    end tapped_by
+
+    override tap_point_by(*self, b: PointerButton) -> (int, int) =
+        if b == PointerButton.Primary then self.tap_point() else self.back(self.chord.origin(b))
+
     override editing(*self) -> Selection = self.board.sel
 
     override edit(*self, sel: Selection) = self.board.edit(sel)
@@ -370,6 +381,7 @@ impl Canvas for PlutoCanvas
     override keys_done(*self)
         self.board.reset()
         self.hold.settle()
+        self.chord.settle()
         self.shapes.settle()
 
     override cursor(*self, r: Rect, shape: Cursor)

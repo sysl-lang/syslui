@@ -1,0 +1,348 @@
+module sh.sysl.ui
+@tests
+
+import sysl.buf.{Buf, buf}
+import sysl.text.Search
+
+// The view the menu is attached to: the top-left of a 400 by 300 window.
+private val AREA: Rect = Rect(0, 0, 200, 150)
+private val WINDOW: Rect = Rect(0, 0, 400, 300)
+
+private counter(n: &Signal[int]) -> &Fn() -> unit = () -> n.set(n.read() + 1)
+
+private board(at: &Signal[Option[(int, int)]], ran: &Signal[int]) -> &View =
+    spacer().context_menu(at, [
+        item("Rotate", counter(ran), "R"),
+        item("Dim", counter(ran), enabled = false),
+        separator(),
+        item("Delete", counter(ran))
+    ])
+
+// The attached view at `AREA`, beside a second view, so a press can land in the window and not in it.
+private window(at: &Signal[Option[(int, int)]], ran: &Signal[int]) -> &View =
+    column([row([board(at, ran).frame(AREA.w, AREA.h), spacer()]), spacer()])
+
+private draw(v: &View, c: *Recorder)
+    c.taps.reset()
+    c.ops.clear()
+    render(v, c, WINDOW)
+end draw
+
+private right_click(c: *Recorder, x: int, y: int)
+    c.press(x, y, PointerButton.Secondary)
+    c.let_go(x, y, PointerButton.Secondary)
+end right_click
+
+private shows(c: *Recorder, op: string) -> bool = c.dump().contains(op)
+
+// The dropdown's size in the recorder's eight-by-sixteen font under the dark theme: "Rotate", two
+// gaps and "R" with two pads across, and three rows and a separator down.
+private dropdown_size(c: *Recorder) -> Size =
+    dropdown(menu("context", [item("Rotate", () -> (), "R"), item("Dim", () -> (), enabled = false), separator(),
+                         item("Delete", () -> ())]), () -> (), dark()).measure(c, Size(1_000_000, 1_000_000))
+
+@test
+private a_closed_context_menu_raises_nothing_and_measures_as_its_view()
+    var c = recorder()
+    val v = board(signal(None), signal(0))
+
+    render(v, &c, AREA)
+
+    assert(!shows(&c, "raise"), c.dump())
+    assert_eq(v.measure(&c, Size(200, 150)), spacer().measure(&c, Size(200, 150)))
+end a_closed_context_menu_raises_nothing_and_measures_as_its_view
+
+@test
+private a_right_click_opens_it_where_the_pointer_went_down()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+    val s = dropdown_size(&c)
+
+    right_click(&c, 30, 40)
+    draw(v, &c)
+
+    assert_eq(at.read(), Some((30, 40)))
+    assert(shows(&c, "raise -1000000,-1000000 2000000x2000000"), "the catcher")
+    assert(shows(&c, s"raise 30,40 ${s.w}x${s.h}"), c.dump())
+end a_right_click_opens_it_where_the_pointer_went_down
+
+@test
+private a_left_click_or_a_middle_click_does_not_open_it()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    c.point(30, 40, true)
+    c.release(30, 40)
+    draw(v, &c)
+    assert_eq(at.read(), None)
+
+    c.press(30, 40, PointerButton.Middle)
+    c.let_go(30, 40, PointerButton.Middle)
+    draw(v, &c)
+    assert_eq(at.read(), None)
+    assert(!shows(&c, "raise"), c.dump())
+end a_left_click_or_a_middle_click_does_not_open_it
+
+@test
+private a_right_click_outside_its_view_does_not_open_it()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    right_click(&c, 300, 40)
+    draw(v, &c)
+
+    assert_eq(at.read(), None)
+end a_right_click_outside_its_view_does_not_open_it
+
+@test
+private the_right_click_is_heard_for_one_frame_only()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    right_click(&c, 30, 40)
+    draw(v, &c)
+    at.set(None)
+    draw(v, &c)
+
+    assert_eq(at.read(), None)
+end the_right_click_is_heard_for_one_frame_only
+
+@test
+private near_the_right_and_bottom_edges_it_opens_left_of_and_above_the_point()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+    val s = dropdown_size(&c)
+
+    right_click(&c, 190, 140)
+    draw(v, &c)
+
+    assert(shows(&c, s"raise ${190 - s.w},${140 - s.h} ${s.w}x${s.h}"), c.dump())
+end near_the_right_and_bottom_edges_it_opens_left_of_and_above_the_point
+
+@test
+private a_menu_larger_than_its_view_starts_at_the_views_corner()
+    assert_eq(opened_at(5, 300, 0, 200), 0)
+    assert_eq(opened_at(50, 100, 20, 200), 50)
+    assert_eq(opened_at(150, 100, 20, 200), 50)
+    assert_eq(opened_at(150, 100, 0, 250), 150)
+end a_menu_larger_than_its_view_starts_at_the_views_corner
+
+@test
+private choosing_a_row_closes_the_menu_and_runs_it()
+    val at: &Signal[Option[(int, int)]] = signal(Some((30, 40)))
+    val ran = signal(0)
+    var c = recorder()
+    val v = window(at, ran)
+
+    draw(v, &c)
+
+    val (x, y) = snapshot(v, &c, WINDOW).click_point("menu.context.Delete").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    draw(v, &c)
+
+    assert_eq(ran.read(), 1)
+    assert_eq(at.read(), None)
+end choosing_a_row_closes_the_menu_and_runs_it
+
+@test
+private a_row_that_opens_the_menu_again_is_not_undone_by_the_closing()
+    val at: &Signal[Option[(int, int)]] = signal(Some((30, 40)))
+    var c = recorder()
+    val v = column([spacer().context_menu(at, [item("Again", () -> at.set(Some((5, 6))))]).frame(200, 150), spacer()])
+
+    draw(v, &c)
+
+    val (x, y) = snapshot(v, &c, WINDOW).click_point("menu.context.Again").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    draw(v, &c)
+
+    assert_eq(at.read(), Some((5, 6)))
+end a_row_that_opens_the_menu_again_is_not_undone_by_the_closing
+
+@test
+private a_disabled_row_neither_runs_nor_closes()
+    val at: &Signal[Option[(int, int)]] = signal(Some((30, 40)))
+    val ran = signal(0)
+    var c = recorder()
+    val v = window(at, ran)
+
+    draw(v, &c)
+
+    val e = snapshot(v, &c, WINDOW).find("menu.context.Dim").unwrap()
+    val x = e.rect.x + e.rect.w / 2
+    val y = e.rect.y + e.rect.h / 2
+
+    draw(v, &c)
+    c.taps.tap(x, y)
+    draw(v, &c)
+
+    assert_eq(ran.read(), 0)
+    assert_eq(at.read(), Some((30, 40)))
+end a_disabled_row_neither_runs_nor_closes
+
+@test
+private a_tap_anywhere_else_closes_it_without_running_anything()
+    val at: &Signal[Option[(int, int)]] = signal(Some((30, 40)))
+    val ran = signal(0)
+    var c = recorder()
+    val v = window(at, ran)
+
+    draw(v, &c)
+    c.taps.tap(350, 250)
+    draw(v, &c)
+
+    assert_eq(at.read(), None)
+    assert_eq(ran.read(), 0)
+end a_tap_anywhere_else_closes_it_without_running_anything
+
+@test
+private escape_closes_it_and_the_held_right_button_does_not_open_it_again()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    c.press(30, 40, PointerButton.Secondary)
+    render(v, &c, WINDOW)
+    assert_eq(at.read(), Some((30, 40)))
+
+    c.key(press(Key.Escape))
+    render(v, &c, WINDOW)
+    assert_eq(at.read(), None)
+
+    // Still held: the press was this frame's and the last, not every frame's.
+    render(v, &c, WINDOW)
+    assert_eq(at.read(), None)
+end escape_closes_it_and_the_held_right_button_does_not_open_it_again
+
+@test
+private a_right_click_elsewhere_in_its_view_moves_it_there()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    right_click(&c, 30, 40)
+    render(v, &c, WINDOW)
+    right_click(&c, 120, 20)
+    render(v, &c, WINDOW)
+
+    assert_eq(at.read(), Some((120, 20)))
+end a_right_click_elsewhere_in_its_view_moves_it_there
+
+@test
+private a_right_click_outside_its_view_closes_it()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    right_click(&c, 30, 40)
+    render(v, &c, WINDOW)
+    right_click(&c, 300, 250)
+    render(v, &c, WINDOW)
+
+    assert_eq(at.read(), None)
+end a_right_click_outside_its_view_closes_it
+
+@test
+private a_right_click_on_the_menu_itself_leaves_it_where_it_is()
+    val at: &Signal[Option[(int, int)]] = signal(None)
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    right_click(&c, 30, 40)
+    render(v, &c, WINDOW)
+    right_click(&c, 34, 44)
+    render(v, &c, WINDOW)
+
+    assert_eq(at.read(), Some((30, 40)))
+end a_right_click_on_the_menu_itself_leaves_it_where_it_is
+
+@test
+private a_snapshot_reports_the_rows_and_opens_nothing()
+    val at: &Signal[Option[(int, int)]] = signal(Some((30, 40)))
+    var c = recorder()
+    val v = window(at, signal(0))
+
+    draw(v, &c)
+
+    val shot = snapshot(v, &c, WINDOW)
+
+    assert(shot.find("menu.context.Rotate").is_ok(), "Rotate")
+    assert(shot.find("menu.context.Delete").is_ok(), "Delete")
+
+    // A snapshot of a closed one, with a right-click pending, reports and opens nothing.
+    at.set(None)
+    c.press(30, 40, PointerButton.Secondary)
+    snapshot(v, &c, WINDOW)
+    assert_eq(at.read(), None)
+end a_snapshot_reports_the_rows_and_opens_nothing
+
+@test
+private a_title_names_the_rows()
+    val at: &Signal[Option[(int, int)]] = signal(Some((10, 10)))
+    var c = recorder()
+    val v = spacer().context_menu(at, [item("Cut", () -> ())], "edit")
+
+    render(v, &c, WINDOW)
+
+    assert(snapshot(v, &c, WINDOW).find("menu.edit.Cut").is_ok(), "named by its title")
+end a_title_names_the_rows
+
+@test
+private tapped_by_hears_the_secondary_and_middle_buttons_in_their_rectangle_only()
+    var c = recorder()
+    val r = Rect(10, 10, 50, 50)
+
+    c.press(20, 30, PointerButton.Secondary)
+    assert(c.tapped_by(r, PointerButton.Secondary), "secondary, inside")
+    assert(!c.tapped_by(r, PointerButton.Middle), "not the middle")
+    assert(!c.tapped_by(Rect(100, 100, 10, 10), PointerButton.Secondary), "outside")
+    assert_eq(c.tap_point_by(PointerButton.Secondary), (20, 30))
+
+    c.keys_done()
+    assert(!c.tapped_by(r, PointerButton.Secondary), "gone at the end of the frame")
+
+    c.press(25, 35, PointerButton.Middle)
+    assert(c.tapped_by(r, PointerButton.Middle), "middle")
+    assert_eq(c.tap_point_by(PointerButton.Middle), (25, 35))
+end tapped_by_hears_the_secondary_and_middle_buttons_in_their_rectangle_only
+
+@test
+private tapped_by_the_primary_button_is_tapped()
+    var c = recorder()
+    val r = Rect(10, 10, 50, 50)
+
+    c.point(20, 30, true)
+    assert(c.tapped_by(r, PointerButton.Primary), "the primary press")
+    assert(!c.tapped_by(r, PointerButton.Secondary), "no secondary press")
+    assert_eq(c.tap_point_by(PointerButton.Primary), c.tap_point())
+end tapped_by_the_primary_button_is_tapped
+
+@test
+private tapped_by_reads_the_point_through_a_transform()
+    var c = recorder()
+
+    c.press(40, 60, PointerButton.Secondary)
+    c.push_transform(2.0, 0.0, 0.0)
+
+    assert(c.tapped_by(Rect(15, 25, 10, 10), PointerButton.Secondary), "the rectangle as drawn holds it")
+    assert_eq(c.tap_point_by(PointerButton.Secondary), (20, 30))
+
+    c.pop_transform()
+end tapped_by_reads_the_point_through_a_transform
+
+@test
+private a_canvas_without_the_other_buttons_hears_only_the_primary()
+    var s = blind()
+
+    assert(!s.tapped_by(Rect(0, 0, 10, 10), PointerButton.Secondary), "the default answers no")
+    assert_eq(s.tap_point_by(PointerButton.Secondary), (-1, -1))
+end a_canvas_without_the_other_buttons_hears_only_the_primary
