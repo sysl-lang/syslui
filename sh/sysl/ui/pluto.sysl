@@ -287,6 +287,13 @@ impl Canvas for PlutoCanvas
     override grab(*self, r: Rect, slot: int) -> bool =
         self.covers.admits(&self.hold) && self.hold.claim(self.placed(r), slot)
 
+    override anchor(*self) -> int = self.hold.anchor
+
+    override set_anchor(*self, v: int) = self.hold.anchor = v
+
+    override owns(*self, r: Rect, slot: int) -> bool =
+        self.covers.admits(&self.hold) && self.hold.owns(self.placed(r), slot)
+
     override press_origin(*self) -> (int, int) = self.back((self.hold.began_x, self.hold.began_y))
 
     override drag(*self, r: Rect, slot: int, slop_x: int, slop_y: int) -> (int, int)

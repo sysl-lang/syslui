@@ -135,6 +135,11 @@ struct Grab
     // The highest overlay that has covered where this press began. See `Covers.admits`.
     under: int
 
+    // One number the owner of this press may keep for as long as it lasts, and is zero at each new
+    // press. A drag that must be measured from where the thing it moves *started* has nowhere else
+    // to remember that, the tree being stateless.
+    anchor: int
+
     // Told by the frame loop, through the canvas's `point`, once a frame.
     //
     // **The release is what ends a grab**, not the pointer leaving anything -- which is the entire
@@ -145,6 +150,7 @@ struct Grab
             self.began_y = y
             self.dragging = false
             self.under = 0
+            self.anchor = 0
 
         if !down then self.held = false
 
@@ -173,6 +179,11 @@ struct Grab
 
         false
     end claim
+
+    // Is the press that is down this moment already `r`'s, under `slot`? Asks and claims nothing,
+    // which is what a thing whose rectangle moves as it is dragged needs: it cannot tell a drag it
+    // began from a press it never saw by claiming again.
+    owns(*self, r: Rect, slot: int) -> bool = self.down && self.held && self.at == r && self.slot == slot
 
     // How far the pointer has come since `r` was last told, once the press is `r`'s drag.
     //
@@ -237,7 +248,7 @@ struct Grab
         self.wheel_y -= real(int(self.wheel_y))
 end Grab
 
-grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0, -1, -1, false, 0, 0, 0.0, 0.0, 0)
+grabbing() -> Grab = Grab(-1, -1, false, false, Rect(0, 0, 0, 0), 0, -1, -1, false, 0, 0, 0.0, 0.0, 0, 0)
 
 // Which button of the pointer. A finger is `Primary`, and a button past these three is not reported.
 enum PointerButton
