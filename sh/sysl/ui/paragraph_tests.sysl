@@ -1,0 +1,418 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+import sh.sysl.plutovg
+
+// The recorder's font is eight points a byte and sixteen a line, so a width of `8n` holds `n` bytes.
+
+private val COUNTING: string = "one two three four five six seven eight nine ten"
+
+private nothing() -> &Fn() -> unit = () -> ()
+
+// The lines, one per line of the answer, so a failure prints them.
+private set_in(c: *Canvas, s: string, width: int, max_lines: int = 0) -> string
+    val v = wrap_lines(c, s, width, max_lines).view()
+    var out = ""
+
+    for i in 0..<v.len
+        out = out + v[i] + "|"
+
+    out
+end set_in
+
+// A view that says where it was put, so a test reads layout from what it was handed.
+private struct Marker
+    seen: &Signal[string]
+end Marker
+
+impl View for Marker
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(10, 40)
+
+    paint(&self, c: *Canvas, r: Rect) = self.seen.set(s"${r.x},${r.y} ${r.w}x${r.h}")
+end Marker
+
+// ## Where lines break
+
+@test
+private words_go_onto_the_next_line_when_the_next_would_not_fit()
+    var c = recorder()
+
+    assert_eq(set_in(&c, COUNTING, 240), "one two three four five six|seven eight nine ten|")
+    assert_eq(set_in(&c, COUNTING, 120), "one two three|four five six|seven eight|nine ten|")
+    assert_eq(set_in(&c, COUNTING, 1000), s"${COUNTING}|", "one line when it fits")
+
+@test
+private a_line_exactly_as_wide_as_the_width_fits()
+    var c = recorder()
+
+    assert_eq(set_in(&c, "abc def", 56), "abc def|")
+    assert_eq(set_in(&c, "abc def", 55), "abc|def|")
+
+@test
+private a_word_longer_than_the_line_is_cut_between_characters()
+    var c = recorder()
+
+    assert_eq(set_in(&c, "abcdefghijkl", 40), "abcde|fghij|kl|")
+    assert_eq(set_in(&c, "ab abcdefghijkl cd", 40), "ab|abcde|fghij|kl cd|", "after a short word, and before one")
+
+@test
+private a_line_narrower_than_one_character_still_takes_one_and_ends()
+    var c = recorder()
+
+    assert_eq(set_in(&c, "abc", 3), "a|b|c|")
+
+@test
+private a_newline_always_starts_a_line()
+    var c = recorder()
+
+    assert_eq(set_in(&c, "ab\ncd", 1000), "ab|cd|")
+    assert_eq(set_in(&c, "ab\n", 1000), "ab||", "a trailing newline starts an empty line")
+    assert_eq(set_in(&c, "\n\n", 1000), "|||")
+    assert_eq(set_in(&c, "one two\nthree", 40), "one|two|three|", "and soft breaks inside each")
+
+@test
+private spaces_at_a_break_belong_to_neither_line_and_none_ends_a_line()
+    var c = recorder()
+
+    assert_eq(set_in(&c, "ab   cd", 24), "ab|cd|")
+    assert_eq(set_in(&c, "ab   ", 1000), "ab|")
+    assert_eq(set_in(&c, "   ", 1000), "|", "spaces alone are one empty line")
+    assert_eq(set_in(&c, "  ab", 1000), "  ab|", "a line's own indent is kept")
+    assert_eq(set_in(&c, "a  b", 1000), "a  b|", "and the spaces between words")
+
+    var p = recorder()
+
+    assert(paragraph("ab   ").measure(&p, Size(1000, 100)) == Size(16, 16), "trailing spaces add no width")
+
+@test
+private a_long_word_is_never_cut_inside_a_character()
+    var c = recorder()
+
+    // Two bytes an accented letter and four an emoji, so sixteen and thirty-two points.
+    assert_eq(set_in(&c, "éééé", 32), "éé|éé|")
+    assert_eq(set_in(&c, "éééé", 40), "éé|éé|", "half a letter of room is no room")
+    assert_eq(set_in(&c, "😀😀", 40), "😀|😀|")
+    assert_eq(set_in(&c, "a😀b", 16), "a|😀|b|", "an emoji wider than the line is one line")
+
+@test
+private no_width_breaks_only_at_newlines()
+    var c = recorder()
+
+    assert_eq(set_in(&c, "ab cd  \nef", 0), "ab cd|ef|")
+    assert_eq(set_in(&c, "ab cd", -5), "ab cd|")
+
+// ## Measuring
+
+@test
+private it_measures_its_widest_line_and_a_line_height_per_line()
+    var c = recorder()
+
+    assert(paragraph(COUNTING).measure(&c, Size(240, 1000)) == Size(216, 32), "27 bytes, two lines")
+    assert(paragraph(COUNTING).measure(&c, Size(120, 1000)) == Size(104, 64), "13 bytes, four lines")
+    assert(paragraph("short").measure(&c, Size(1000, 0)) == Size(40, 16), "the height offered is no limit")
+
+@test
+private empty_measures_and_draws_as_empty_text_does()
+    var a = recorder()
+    var b = recorder()
+
+    assert(paragraph("").measure(&a, Size(100, 100)) == text("").measure(&b, Size(100, 100)), "one empty line")
+    paragraph("").paint(&a, Rect(0, 0, 100, 40))
+    text("").paint(&b, Rect(0, 0, 100, 40))
+    assert_eq(a.dump(), b.dump())
+
+@test
+private one_line_measures_and_draws_exactly_as_text_does()
+    for r in [Rect(0, 0, 200, 40), Rect(5, 7, 200, 10), Rect(0, 0, 200, 16)]
+        var a = recorder()
+        var b = recorder()
+
+        assert(paragraph("Ready").measure(&a, Size(200, 100)) == text("Ready").measure(&b, Size(200, 100)))
+        paragraph("Ready").paint(&a, r)
+        text("Ready").paint(&b, r)
+        assert_eq(a.dump(), b.dump())
+
+@test
+private zero_width_measures_nothing_wide_and_a_line_per_newline()
+    var c = recorder()
+
+    assert(paragraph("abc").measure(&c, Size(0, 100)) == Size(0, 16))
+    assert(paragraph("a\nb").measure(&c, Size(0, 100)) == Size(0, 32))
+    paragraph("abc").paint(&c, Rect(0, 0, 0, 0))
+
+@test
+private a_single_character_wider_than_the_line_measures_no_wider_than_offered()
+    var c = recorder()
+
+    assert(paragraph("abc").measure(&c, Size(3, 100)) == Size(3, 48))
+
+@test
+private a_font_size_scales_the_lines_and_the_line_height()
+    var c = recorder()
+
+    // A title is 24 points to the recorder's 16, so a byte is 12 and a line 24.
+    assert(paragraph("ab cd").font_size(24.0).measure(&c, Size(30, 100)) == Size(24, 48))
+
+// ## Painting
+
+@test
+private each_line_is_drawn_below_the_last_leading_by_default()
+    var c = recorder()
+
+    paragraph(COUNTING).paint(&c, Rect(0, 0, 120, 64))
+    assert_eq(c.dump(), "text 0,0 120x16 'one two three'\ntext 0,16 120x16 'four five six'\n" +
+                        "text 0,32 120x16 'seven eight'\ntext 0,48 120x16 'nine ten'\n")
+
+@test
+private the_block_is_centred_in_a_taller_rectangle_as_text_is()
+    var c = recorder()
+
+    paragraph("ab cd").paint(&c, Rect(0, 0, 24, 52))
+    assert_eq(c.dump(), "text 0,10 24x16 'ab'\ntext 0,26 24x16 'cd'\n")
+
+@test
+private centre_and_trailing_place_each_line_across_the_width()
+    var c = recorder()
+
+    paragraph("ab cdef", Align.Centre).paint(&c, Rect(0, 0, 40, 32))
+    paragraph("ab cdef", Align.Trailing).paint(&c, Rect(100, 0, 40, 32))
+    assert_eq(c.dump(), "text 12,0 28x16 'ab'\ntext 4,16 36x16 'cdef'\n" +
+                        "text 124,0 16x16 'ab'\ntext 108,16 32x16 'cdef'\n")
+
+// What Tekton's tiles build from a spacer either side of each word, written once.
+@test
+private a_centred_two_line_caption_is_one_paragraph()
+    var c = recorder()
+
+    paragraph("Half\nsphere", Align.Centre).paint(&c, Rect(0, 0, 64, 32))
+    assert_eq(c.dump(), "text 16,0 48x16 'Half'\ntext 8,16 56x16 'sphere'\n")
+
+@test
+private lines_past_a_short_rectangle_are_not_drawn_and_the_last_is_cut_to_it()
+    var c = recorder()
+
+    paragraph(COUNTING).paint(&c, Rect(0, 0, 120, 20))
+    assert_eq(c.dump(), "text 0,0 120x16 'one two three'\ntext 0,16 120x4 'four five six'\n")
+
+@test
+private measured_and_painted_at_the_measured_width_the_lines_are_the_same()
+    var c = recorder()
+
+    for w in [1, 7, 8, 40, 95, 120, 216, 239, 240, 500]
+        val m = paragraph(COUNTING).measure(&c, Size(w, 1000))
+
+        assert_eq(set_in(&c, COUNTING, m.w), set_in(&c, COUNTING, w), s"at ${w}")
+
+// ## Cut short
+
+@test
+private max_lines_keeps_that_many_and_ends_the_last_in_an_ellipsis()
+    var c = recorder()
+
+    // The ellipsis is three bytes, so twenty-four points.
+    assert_eq(set_in(&c, "one two three four", 64, 2), "one two|three…|", "it fits after the line")
+    assert_eq(set_in(&c, "one two three four", 64, 1), "one t…|", "the line is shortened to make room")
+    assert_eq(set_in(&c, "one two three four", 64, 4), "one two|three|four|", "nothing cut when it fits")
+    assert_eq(set_in(&c, "one two three four", 64, 0), "one two|three|four|", "none means no limit")
+    assert_eq(set_in(&c, "éé éé", 40, 1), "é…|", "shortened by whole characters")
+    assert_eq(set_in(&c, "abc def", 8, 1), "…|", "an ellipsis alone when nothing else fits")
+    assert(paragraph("one two three four", max_lines = 2).measure(&c, Size(64, 100)) == Size(64, 32))
+
+@test
+private a_cut_short_line_is_drawn_with_its_ellipsis()
+    var c = recorder()
+
+    paragraph("one two three four", max_lines = 1).paint(&c, Rect(0, 0, 64, 16))
+    assert_eq(c.dump(), "text 0,0 64x16 'one t…'\n")
+
+// ## Snapshot
+
+@test
+private a_snapshot_reports_the_whole_string_once()
+    var c = recorder()
+    val s = snapshot(paragraph(COUNTING), &c, Rect(0, 0, 120, 64)).dump()
+
+    assert(s.contains(s"text \"${COUNTING}\" [0,0 120x64]"), s)
+    assert(!s.contains("\"one two three\""), s)
+
+@test
+private inside_a_button_it_is_the_buttons_whole_label_and_can_be_clicked()
+    var c = recorder()
+    val ran = signal(0)
+    val v = button_with(paragraph(COUNTING), () -> ran.set(ran.read() + 1)).named("go").frame(120, 100)
+
+    render(v, &c, Rect(0, 0, 400, 300))
+
+    val snap = snapshot(v, &c, Rect(0, 0, 400, 300))
+
+    assert_eq(snap.find("go").unwrap().label, COUNTING)
+
+    val (x, y) = snap.click_point("go").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    assert_eq(ran.read(), 1)
+end inside_a_button_it_is_the_buttons_whole_label_and_can_be_clicked
+
+// ## Neighbours
+
+@test
+private resizing_a_side_pane_changes_the_line_count_and_the_columns_height()
+    val width = signal(240)
+    val seen = signal("")
+    val body = column([paragraph(COUNTING), Marker(seen)])
+    val v = split_row([sized(body, width, min_width = 100, max_width = 500), flexed(spacer())])
+    var c = recorder()
+
+    assert_eq(body.measure(&c, Size(240, 1000)).h, 72, "two lines and the marker")
+    render(v, &c, Rect(0, 0, 1000, 300))
+    assert(seen.read().starts_with("0,32 "), seen.read())
+
+    width.set(120)
+
+    var d = recorder()
+
+    assert_eq(body.measure(&d, Size(120, 1000)).h, 104, "four lines and the marker")
+    render(v, &d, Rect(0, 0, 1000, 300))
+    assert(seen.read().starts_with("0,64 "), seen.read())
+    assert(d.dump().contains("'nine ten'"), d.dump())
+end resizing_a_side_pane_changes_the_line_count_and_the_columns_height
+
+@test
+private inside_a_scroll_it_wraps_to_the_scrolls_width_and_lines_out_of_sight_are_not_drawn()
+    val offset = signal(0)
+    val v = scroll(column([paragraph(COUNTING)]), offset, 32)
+    var c = recorder()
+
+    render(v, &c, Rect(0, 0, 120, 100))
+    assert(c.dump().contains("'one two three'") && c.dump().contains("'four five six'"), c.dump())
+    assert(!c.dump().contains("'seven eight'") && !c.dump().contains("'nine ten'"), c.dump())
+
+    offset.set(32)
+
+    var d = recorder()
+
+    render(v, &d, Rect(0, 0, 120, 100))
+    assert(!d.dump().contains("'one two three'") && d.dump().contains("'nine ten'"), d.dump())
+end inside_a_scroll_it_wraps_to_the_scrolls_width_and_lines_out_of_sight_are_not_drawn
+
+@test
+private inside_a_modal_it_wraps_to_its_frame_and_is_reported()
+    var c = recorder()
+    val v = text("page").modal(signal(true), paragraph("ab cd").frame(24, 32))
+
+    render(v, &c, Rect(0, 0, 100, 100))
+    assert(c.dump().contains("text 38,34 24x16 'ab'\ntext 38,50 24x16 'cd'"), c.dump())
+
+    val s = snapshot(v, &c, Rect(0, 0, 100, 100)).dump()
+
+    assert(s.contains("text \"ab cd\" [38,34 24x32]"), s)
+
+@test
+private under_a_transform_it_breaks_in_its_own_coordinates()
+    var c = recorder()
+
+    c.push_transform(2.0, 0.0, 0.0)
+    paragraph("ab cd").paint(&c, Rect(0, 0, 24, 32))
+    c.pop_transform()
+    assert_eq(c.dump(), "transform 2 0,0\ntext 0,0 48x32 'ab'\ntext 0,32 48x32 'cd'\nuntransform\n")
+
+// ## The real backend
+
+private some_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end some_face
+
+// One premultiplied ARGB pixel, which PlutoVG stores little end first.
+private argb(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+
+// Whether anything is drawn in the band of device rows `y0` to `y1` and columns `x0` to `x1`.
+private inked(s: &plutovg.Surface, x0: int, x1: int, y0: int, y1: int) -> bool
+    for y in y0..<y1
+        for x in x0..<x1
+            if argb(s, x, y) != 0 then return true
+
+    false
+end inked
+
+// With the real font's metrics, at every width and at two sizes, measuring and painting at the
+// measured width break in the same places.
+@test
+private the_real_backend_breaks_the_same_at_the_measured_width()
+    val surf = plutovg.surface(8, 8).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+
+    for pt in [15.0, 23.0]
+        c.push_font_size(pt)
+
+        for w in 1..<400
+            val m = paragraph(COUNTING).measure(&c, Size(w, 1000))
+
+            assert(m.w <= w, s"no wider than offered at ${w}")
+            assert_eq(set_in(&c, COUNTING, m.w), set_in(&c, COUNTING, w), s"at ${w}, ${pt} points")
+
+        c.pop_font_size()
+end the_real_backend_breaks_the_same_at_the_measured_width
+
+// Two lines of capitals, each on its own band of device pixels, and nothing right of the width.
+private two_lines_land_in_their_bands(k: int)
+    val surf = plutovg.surface(200 * k, 80 * k).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+    val word = c.text_size("MMMM").w
+    val lh = c.text_size("").h
+    val p = paragraph("MMMM MMMM")
+    val m = p.measure(&c, Size(word + 4, 100))
+
+    assert(m == Size(word, 2 * lh), s"two lines at scale ${k}")
+
+    c.vg.scale(f32(k), f32(k))
+    p.paint(&c, Rect(0, 0, m.w, m.h))
+
+    assert(inked(surf, 0, m.w * k, 0, lh * k) && inked(surf, 0, m.w * k, lh * k, 2 * lh * k),
+           s"a line in each band at scale ${k}")
+    assert(!inked(surf, (m.w + 2) * k, 200 * k, 0, 80 * k) && !inked(surf, 0, 200 * k, 2 * lh * k, 80 * k),
+           s"and nothing beyond at scale ${k}")
+end two_lines_land_in_their_bands
+
+@test
+private the_real_backend_draws_two_lines_at_scale_one()
+    two_lines_land_in_their_bands(1)
+
+@test
+private the_real_backend_draws_two_lines_at_scale_two()
+    two_lines_land_in_their_bands(2)
+
+// The most opaque pixel of a large capital is in the theme's ink, light or dark.
+private ink_of(t: Theme) -> u32
+    val surf = plutovg.surface(120, 60).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+    var best = 0u32
+
+    paragraph("M M").font_size(40.0).restyle(_ -> t).paint(&c, Rect(0, 0, 40, 60))
+
+    for y in 0..<60
+        for x in 0..<120
+            val px = argb(surf, x, y)
+
+            if (px >> 24) > (best >> 24) then best = px
+
+    assert_eq(best >> 24, 0xFFu32, "a fully covered pixel")
+    best & 0xFFFFFFu32
+end ink_of
+
+@test
+private it_is_drawn_in_the_themes_ink_light_and_dark()
+    assert_eq(ink_of(light()), light().ink & 0xFFFFFFu32)
+    assert_eq(ink_of(dark()), dark().ink & 0xFFFFFFu32)
