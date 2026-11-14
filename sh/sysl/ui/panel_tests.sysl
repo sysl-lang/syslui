@@ -1,0 +1,116 @@
+module sh.sysl.ui
+@tests
+
+import sh.sysl.plutovg
+
+// ## `panel(radius)`, `ground` and `ground_role`
+
+private const WINDOW: u32 = 0x010203
+
+private argb(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+
+private opaque(c: u32) -> u32 = 0xFF000000u32 | c
+
+// Paints `v` into a 40x30 point area over a window ground, under `t`, at density `k`, and answers
+// the pixel at point (x, y).
+private pixel(v: &View, t: Theme, k: int, x: int, y: int) -> u32
+    val surf = plutovg.surface(40 * k, 30 * k).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+
+    c.vg.scale(f32(k), f32(k))
+    c.fill(Rect(0, 0, 40, 30), WINDOW, 0)
+    v.restyle(_ -> t).paint(&c, Rect(0, 0, 40, 30))
+    argb(surf, x * k, y * k)
+end pixel
+
+private themes() -> [2]Theme = [dark(), light()]
+
+private some_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end some_face
+
+private recorded_panel(v: &View) -> string
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 40, 20))
+    c.dump()
+end recorded_panel
+
+@test
+private a_default_panel_draws_exactly_as_before()
+    assert(recorded_panel(spacer().panel()).contains(s"fill 0,0 40x20 #${dark().panel} r6"), "dark")
+    assert(recorded_panel(spacer().panel(-1)) == recorded_panel(spacer().panel()), "-1 is the default")
+    assert(recorded_panel(spacer().panel(3)).contains(s"#${dark().panel} r3"), "an explicit radius")
+end a_default_panel_draws_exactly_as_before
+
+@test
+private a_square_panel_has_no_radius_and_follows_the_theme()
+    assert(recorded_panel(spacer().panel(0)).contains(s"fill 0,0 40x20 #${dark().panel}"), "flat")
+    assert(!recorded_panel(spacer().panel(0)).contains(" r"), "no radius")
+    assert(recorded_panel(spacer().panel(0).restyle(t -> light())).contains(s"#${light().panel}"), "light")
+end a_square_panel_has_no_radius_and_follows_the_theme
+
+@test
+private the_corner_pixel_of_a_square_panel_is_the_panel_colour_under_both_themes_at_both_densities()
+    val ts = themes()
+
+    for k in 1..<3
+        for i in 0..<ts.len
+            val t = ts[i]
+
+            assert(pixel(spacer().panel(0), t, k, 0, 0) == opaque(t.panel), s"square top-left, theme ${i}, scale ${k}")
+            assert(pixel(spacer().panel(0), t, k, 39, 29) == opaque(t.panel), s"square bottom-right, theme ${i}, scale ${k}")
+
+            // And the default panel's corner really is the window ground, so the check can fail.
+            assert(pixel(spacer().panel(), t, k, 0, 0) == opaque(WINDOW), s"rounded corner shows the window, theme ${i}, scale ${k}")
+            assert(pixel(spacer().panel(), t, k, 20, 15) == opaque(t.panel), s"rounded middle, theme ${i}, scale ${k}")
+end the_corner_pixel_of_a_square_panel_is_the_panel_colour_under_both_themes_at_both_densities
+
+@test
+private a_square_panel_nested_in_a_split_row_is_flat_at_the_window_edge()
+    val v = split_row([sized(spacer().panel(0), signal(20), 5, 30), flexed(spacer().panel(0))])
+
+    for k in 1..<3
+        assert(pixel(v, dark(), k, 0, 0) == opaque(dark().panel), s"left pane corner, scale ${k}")
+        assert(pixel(v, dark(), k, 0, 29) == opaque(dark().panel), s"left pane bottom corner, scale ${k}")
+        assert(pixel(v, dark(), k, 39, 0) == opaque(dark().panel), s"right pane corner, scale ${k}")
+end a_square_panel_nested_in_a_split_row_is_flat_at_the_window_edge
+
+@test
+private a_zero_size_panel_paints_without_trouble()
+    var c = recorder()
+
+    spacer().panel(0).paint(&c, Rect(0, 0, 0, 0))
+    spacer().panel(1000).paint(&c, Rect(0, 0, 4, 4))
+    assert(c.dump().contains("fill"), "painted")
+end a_zero_size_panel_paints_without_trouble
+
+@test
+private ground_resolves_through_the_current_theme()
+    val v = spacer().ground(t -> t.edge)
+
+    assert(recorded_panel(v).contains(s"#${dark().edge}"), "dark")
+    assert(recorded_panel(v.restyle(t -> light())).contains(s"#${light().edge}"), "light")
+    assert(recorded_panel(spacer().ground(t -> t.alt, 4)).contains(s"#${dark().alt} r4"), "radius")
+end ground_resolves_through_the_current_theme
+
+@test
+private ground_role_resolves_through_the_current_theme()
+    val v = spacer().ground_role(Role.Accent)
+
+    assert(recorded_panel(v).contains(s"#${dark().accent}"), "dark")
+    assert(recorded_panel(v.restyle(t -> light())).contains(s"#${light().accent}"), "light")
+    assert(pixel(v, light(), 2, 0, 0) == opaque(light().accent), "pixels at scale 2")
+end ground_role_resolves_through_the_current_theme

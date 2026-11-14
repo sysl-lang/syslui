@@ -182,7 +182,18 @@ trait View
     //
     // The themed counterpart to `background(color, radius)`, which names a colour and therefore
     // cannot be restyled. Both are worth having and they are not the same request.
-    panel(&self) -> &View = Panel(self)
+    //
+    // `radius` is the corner; the default, -1, is the theme's. `.panel(0)` is the same surface with
+    // square corners, for one that sits flush against a window edge or a split.
+    panel(&self, radius: int = -1) -> &View = Panel(self, radius)
+
+    // Fill the rectangle behind this view with a colour the *current theme* picks, rounded by
+    // `radius`. `.ground(t -> t.edge)` follows a restyle where `.background(light().edge)` cannot.
+    @answers(pick)
+    ground(&self, pick: &Fn(Theme) -> u32, radius: int = 0) -> &View = Ground(self, pick, radius)
+
+    // The same, for the colour of a `Role`: `.ground_role(Role.Accent)`.
+    ground_role(&self, role: Role, radius: int = 0) -> &View = Ground(self, t -> t.color(role), radius)
 
     // How much of a container's leftover room this view wants, relative to its siblings.
     //

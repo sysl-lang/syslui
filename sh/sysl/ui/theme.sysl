@@ -335,8 +335,13 @@ impl View for Themed
 // **The themed counterpart to `.background(color, radius)`**, and the reason both exist: an
 // application naming a colour is naming one, and a view asking for "a panel" is asking for whatever
 // this interface's panels look like. The second is the one a restyle can move.
+//
+// **`radius` is the corner, and -1 means the theme's own**, so `.panel()` is what it always was. A
+// panel that meets the window's edge, a split or another panel wants square corners (`radius = 0`),
+// and writing `.background(light().panel)` for that names a theme, which is wrong under every other.
 struct Panel
     child: &View
+    radius: int
 
 impl View for Panel
     measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
@@ -344,5 +349,22 @@ impl View for Panel
     paint(&self, c: *Canvas, r: Rect)
         val t = c.theme()
 
-        c.fill(r, t.panel, t.radius)
+        c.fill(r, t.panel, if self.radius < 0 then t.radius else self.radius)
+        self.child.paint(c, r)
+
+// A ground picked from whatever theme is in force when the frame is drawn.
+//
+// **The themed counterpart to `.background(color, radius)` for any colour the theme owns**, so an
+// application never names `light()` or `dark()` to get a theme colour. `pick` is handed the current
+// theme, which also lets it choose `t.edge`, `t.alt` or `t.ground`, none of which is a `Role`.
+struct Ground
+    child: &View
+    pick: &Fn(Theme) -> u32
+    radius: int
+
+impl View for Ground
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.fill(r, (self.pick)(c.theme()), self.radius)
         self.child.paint(c, r)
