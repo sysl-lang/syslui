@@ -1,0 +1,651 @@
+module sh.sysl.ui
+
+import sh.sysl.plutovg
+
+// A pane that says where it was put and fills it, so a test reads layout from what the pane was
+// handed rather than from a drawing.
+private struct Probe
+    seen: &Signal[string]
+    ink: u32
+end Probe
+
+impl View for Probe
+    measure(&self, c: *Canvas, avail: Size) -> Size = Size(10, 40)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.seen.set(s"${r.x},${r.y} ${r.w}x${r.h}")
+        c.fill(r, self.ink)
+    end paint
+end Probe
+
+private probe(seen: &Signal[string]) -> &View = Probe(seen, 0x336699u32)
+
+// Two views painted one after the other in the same rectangle, the first claiming what it likes.
+private struct Pair
+    first: &View
+    second: &View
+end Pair
+
+impl View for Pair
+    measure(&self, c: *Canvas, avail: Size) -> Size = avail
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.first.paint(c, r)
+        self.second.paint(c, r)
+end Pair
+
+private val WIDE: Rect = Rect(0, 0, 1000, 100)
+
+private val TALL: Rect = Rect(0, 0, 100, 1000)
+
+// Left 240 sized, the rest flexible with at least 200, right 300 sized: the rules sit at 240 and 699.
+private struct Three
+    left: &Signal[int]
+    right: &Signal[int]
+    a: &Signal[string]
+    b: &Signal[string]
+    c: &Signal[string]
+    view: &View
+end Three
+
+private three() -> Three
+    val left = signal(240)
+    val right = signal(300)
+    val a = signal("")
+    val b = signal("")
+    val c = signal("")
+
+    Three(left, right, a, b, c,
+          split_row([sized(probe(a), left, min_width = 100, max_width = 500),
+                     flexed(probe(b), min_width = 200),
+                     sized(probe(c), right, min_width = 120, max_width = 400, reset = 300)]))
+end three
+
+// Press at `x`, travel to `to`, over three frames, as a window would deliver them.
+private drag_from(t: Three, c: *Recorder, at: Rect, x: int, to: int)
+    c.point(x, 50, true)
+    render(t.view, c, at)
+    c.point(to, 50, true)
+    render(t.view, c, at)
+end drag_from
+
+// ## Layout
+
+@test
+private sized_panes_take_their_width_and_the_flexible_one_the_rest_between_one_point_rules()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.a.read(), "0,0 240x100")
+    assert_eq(t.b.read(), "241,0 458x100", "1000 less two rules less 540")
+    assert_eq(t.c.read(), "700,0 300x100")
+end sized_panes_take_their_width_and_the_flexible_one_the_rest_between_one_point_rules
+
+@test
+private the_rules_are_one_point_in_the_themes_edge_colour()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+
+    assert(c.dump().contains(s"fill 240,0 1x100 #${dark().edge}\n"), s"left rule:\n${c.dump()}")
+    assert(c.dump().contains(s"fill 699,0 1x100 #${dark().edge}\n"), "right rule")
+
+    var l = recorder()
+
+    l.push_theme(light())
+    render(t.view, &l, WIDE)
+
+    assert(l.dump().contains(s"fill 240,0 1x100 #${light().edge}\n"), "light theme edge")
+end the_rules_are_one_point_in_the_themes_edge_colour
+
+@test
+private a_split_measures_to_its_panes_and_asks_to_flex()
+    val t = three()
+    var c = recorder()
+
+    assert(t.view.measure(&c, Size(2000, 300)) == Size(742, 40), "240 + 200 + 300 + 2 rules, as tall as a pane")
+    assert_eq(t.view.weight(), 1)
+end a_split_measures_to_its_panes_and_asks_to_flex
+
+@test
+private a_width_outside_its_bounds_is_shown_clamped_and_left_alone()
+    val t = three()
+    var c = recorder()
+
+    t.left.set(9000)
+    t.right.set(-5)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.a.read(), "0,0 500x100")
+    assert_eq(t.c.read(), "880,0 120x100", "right is shown at its minimum")
+    assert_eq(t.left.read(), 9000, "the signal is not rewritten")
+    assert_eq(t.right.read(), -5)
+end a_width_outside_its_bounds_is_shown_clamped_and_left_alone
+
+@test
+private when_the_window_is_too_small_the_sized_panes_give_way_last_first_and_the_signals_stay()
+    val t = three()
+    var c = recorder()
+
+    // 598 for panes: 240 + 200 + 300 = 740 asked, 142 short, all taken from the right pane.
+    render(t.view, &c, Rect(0, 0, 600, 100))
+
+    assert_eq(t.a.read(), "0,0 240x100")
+    assert_eq(t.c.read(), "442,0 158x100")
+    assert_eq(t.left.read() + t.right.read(), 540)
+
+    // Past the right one's minimum the left gives way, still above the flexible one's.
+    render(t.view, &c, Rect(0, 0, 500, 100))
+
+    assert_eq(t.c.read(), "380,0 120x100", "the right pane at its minimum")
+    assert_eq(t.a.read(), "0,0 178x100", "the left gives the other 62")
+
+    // Then everything, so nothing is drawn outside the split.
+    render(t.view, &c, Rect(0, 0, 250, 100))
+
+    assert_eq(t.c.read(), "250,0 0x100")
+    assert_eq(t.right.read(), 300, "and none of it was written")
+
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.c.read(), "700,0 300x100", "a wide window brings the widths back")
+end when_the_window_is_too_small_the_sized_panes_give_way_last_first_and_the_signals_stay
+
+@test
+private a_split_given_no_room_or_no_panes_draws_without_crashing()
+    var c = recorder()
+    val t = three()
+
+    render(t.view, &c, Rect(0, 0, 0, 0))
+    render(t.view, &c, Rect(0, 0, 1, 1))
+    render(split_row([]), &c, WIDE)
+    render(split_row([flexed(probe(signal("")))]), &c, WIDE)
+    render(split_row([sized(probe(signal("")), signal(10))]), &c, WIDE)
+end a_split_given_no_room_or_no_panes_draws_without_crashing
+
+@test
+private with_no_flexible_pane_the_sized_ones_keep_their_widths()
+    val a = signal("")
+    val b = signal("")
+    val v = split_row([sized(probe(a), signal(100), 10, 400), sized(probe(b), signal(150), 10, 400)])
+    var c = recorder()
+
+    render(v, &c, WIDE)
+
+    assert_eq(a.read(), "0,0 100x100")
+    assert_eq(b.read(), "101,0 150x100")
+end with_no_flexible_pane_the_sized_ones_keep_their_widths
+
+@test
+private several_flexible_panes_share_what_is_left_equally()
+    val a = signal("")
+    val b = signal("")
+    val v = split_row([flexed(probe(a)), sized(probe(signal("")), signal(100), 10, 400), flexed(probe(b))])
+    var c = recorder()
+
+    render(v, &c, Rect(0, 0, 303, 50))
+
+    assert_eq(a.read(), "0,0 100x50")
+    assert_eq(b.read(), "202,0 101x50", "the last one has the odd point")
+end several_flexible_panes_share_what_is_left_equally
+
+// ## Dragging
+
+@test
+private dragging_the_left_rule_sets_the_left_width_to_where_the_pointer_is()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+    drag_from(t, &c, WIDE, 240, 330)
+
+    assert_eq(t.left.read(), 330)
+    assert_eq(t.a.read(), "0,0 330x100", "and the very frame that moved it paints it")
+    assert_eq(t.right.read(), 300, "the other side is untouched")
+end dragging_the_left_rule_sets_the_left_width_to_where_the_pointer_is
+
+@test
+private dragging_the_right_rule_sets_the_right_width_from_the_far_edge()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+    drag_from(t, &c, WIDE, 699, 650)
+
+    assert_eq(t.right.read(), 349)
+    assert_eq(t.left.read(), 240)
+    assert_eq(t.c.read(), "651,0 349x100")
+end dragging_the_right_rule_sets_the_right_width_from_the_far_edge
+
+@test
+private a_drag_stops_at_the_panes_minimum_and_maximum()
+    val t = three()
+    var c = recorder()
+
+    drag_from(t, &c, WIDE, 240, 5)
+    assert_eq(t.left.read(), 100, "the minimum")
+
+    var d = recorder()
+
+    t.right.set(120)
+    drag_from(t, &d, WIDE, 101, 900)
+    assert_eq(t.left.read(), 500, "the maximum")
+
+    var e = recorder()
+
+    t.right.set(300)
+    drag_from(t, &e, WIDE, 699, 999)
+    assert_eq(t.right.read(), 120, "the right pane's minimum, from the other side")
+end a_drag_stops_at_the_panes_minimum_and_maximum
+
+@test
+private a_drag_stops_where_the_flexible_pane_reaches_its_minimum()
+    val t = three()
+    var c = recorder()
+
+    t.left.set(500)
+
+    // 998 for panes, 300 on the right and 200 kept for the middle leaves 498 for the left, and the
+    // right pane is not asked to give way for it.
+    drag_from(t, &c, WIDE, 500, 990)
+
+    assert_eq(t.left.read(), 498)
+    assert_eq(t.b.read(), "499,0 200x100")
+end a_drag_stops_where_the_flexible_pane_reaches_its_minimum
+
+@test
+private a_drag_follows_the_pointer_back_after_it_went_past_a_limit_and_further_than_the_strip()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+    c.point(240, 50, true)
+    render(t.view, &c, WIDE)
+    c.point(900, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 498, "the flexible pane's minimum")
+
+    c.point(300, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 300, "the drag was still the rule's, though the rule had stopped at 500")
+
+    c.point(300, 50, false)
+    render(t.view, &c, WIDE)
+    c.point(10, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 300, "a release ends it")
+end a_drag_follows_the_pointer_back_after_it_went_past_a_limit_and_further_than_the_strip
+
+@test
+private the_strip_is_seven_points_wide_and_only_a_press_on_it_drags()
+    for x in [237, 243]
+        val t = three()
+        var c = recorder()
+
+        drag_from(t, &c, WIDE, x, 400)
+        assert_eq(t.left.read(), 400, s"a press at ${x} is on the strip")
+
+    for x in [236, 244, 100, 500]
+        val t = three()
+        var c = recorder()
+
+        drag_from(t, &c, WIDE, x, 400)
+        assert_eq(t.left.read(), 240, s"a press at ${x} is not")
+end the_strip_is_seven_points_wide_and_only_a_press_on_it_drags
+
+@test
+private a_press_that_barely_moves_changes_nothing()
+    val t = three()
+    var c = recorder()
+
+    drag_from(t, &c, WIDE, 240, 242)
+
+    assert_eq(t.left.read(), 240)
+end a_press_that_barely_moves_changes_nothing
+
+@test
+private a_pointer_that_is_only_resting_on_the_strip_moves_nothing()
+    val t = three()
+    var c = recorder()
+
+    c.point(240, 50)
+    render(t.view, &c, WIDE)
+    c.point(300, 50)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 240)
+end a_pointer_that_is_only_resting_on_the_strip_moves_nothing
+
+@test
+private something_painted_earlier_that_claimed_the_press_keeps_it()
+    val t = three()
+    var c = recorder()
+    val hog = PointerReader((k, r) -> if k.grab(Rect(0, 0, 1000, 100), 9) then ())
+    val v = Pair(hog, t.view)
+
+    c.point(240, 50, true)
+    render(v, &c, WIDE)
+    c.point(400, 50, true)
+    render(v, &c, WIDE)
+
+    assert_eq(t.left.read(), 240, "first claim wins, as it does for every grab")
+end something_painted_earlier_that_claimed_the_press_keeps_it
+
+@test
+private a_drag_that_began_elsewhere_and_crosses_the_strip_is_not_taken()
+    val t = three()
+    var c = recorder()
+
+    c.point(100, 50, true)
+    render(t.view, &c, WIDE)
+    c.point(240, 50, true)
+    render(t.view, &c, WIDE)
+    c.point(300, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 240)
+end a_drag_that_began_elsewhere_and_crosses_the_strip_is_not_taken
+
+@test
+private a_second_rule_is_dragged_independently_of_the_first()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+    drag_from(t, &c, WIDE, 699, 600)
+    c.point(600, 50, false)
+    render(t.view, &c, WIDE)
+    drag_from(t, &c, WIDE, 240, 260)
+
+    assert_eq(t.right.read(), 399, "far edge 1000, pointer 600")
+    assert_eq(t.left.read(), 260)
+end a_second_rule_is_dragged_independently_of_the_first
+
+@test
+private a_rule_between_two_sized_panes_resizes_the_one_away_from_the_flexible_pane()
+    val l = signal(100)
+    val r = signal(100)
+    val v = split_row([flexed(probe(signal(""))), sized(probe(signal("")), l, 10, 400),
+                       sized(probe(signal("")), r, 10, 400)])
+    var c = recorder()
+
+    // Rules at 798 and 899: the second one is between the two sized panes, with the flexible pane
+    // to its left, so it moves the right pane's width.
+    c.point(899, 50, true)
+    render(v, &c, WIDE)
+    c.point(850, 50, true)
+    render(v, &c, WIDE)
+
+    assert_eq(r.read(), 149)
+    assert_eq(l.read(), 100)
+end a_rule_between_two_sized_panes_resizes_the_one_away_from_the_flexible_pane
+
+@test
+private a_rule_between_two_flexible_panes_is_drawn_and_cannot_be_dragged()
+    var c = recorder()
+    val v = split_row([flexed(probe(signal(""))), flexed(probe(signal("")))])
+
+    render(v, &c, WIDE)
+
+    assert(c.dump().contains("fill 499,0 1x100"), "drawn")
+
+    c.point(499, 50)
+    render(v, &c, WIDE)
+
+    assert(c.shape() == Cursor.Arrow, "but it does not ask for a resize cursor")
+end a_rule_between_two_flexible_panes_is_drawn_and_cannot_be_dragged
+
+// ## Double-click
+
+@test
+private a_double_click_on_the_rule_puts_the_width_back_to_the_default()
+    val t = three()
+    var c = recorder()
+
+    t.right.set(380)
+    render(t.view, &c, WIDE)
+
+    c.press(651, 50, PointerButton.Primary)
+    render(t.view, &c, WIDE)
+    c.let_go(651, 50, PointerButton.Primary)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.right.read(), 380, "one click does nothing")
+
+    c.press(621, 50, PointerButton.Primary)
+    c.counted(2)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.right.read(), 300, "the second press of a double resets")
+
+    render(t.view, &c, WIDE)
+    c.let_go(621, 50, PointerButton.Primary)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.right.read(), 300, "and holding the button afterwards does not undo it")
+end a_double_click_on_the_rule_puts_the_width_back_to_the_default
+
+@test
+private a_double_click_reset_still_respects_the_bounds()
+    val v = signal(100)
+    val s = split_row([sized(probe(signal("")), v, 100, 200, reset = 900), flexed(probe(signal("")))])
+    var c = recorder()
+
+    render(s, &c, WIDE)
+    c.press(100, 50, PointerButton.Primary)
+    c.counted(2)
+    render(s, &c, WIDE)
+
+    assert_eq(v.read(), 200)
+end a_double_click_reset_still_respects_the_bounds
+
+// ## The cursor
+
+@test
+private the_resize_cursor_shows_over_the_strip_and_only_there()
+    val t = three()
+    var c = recorder()
+
+    c.point(243, 50)
+    render(t.view, &c, WIDE)
+    assert(c.shape() == Cursor.EwResize, "over the strip")
+
+    c.point(100, 50)
+    render(t.view, &c, WIDE)
+    assert(c.shape() == Cursor.Arrow, "off it")
+
+    c.point(244, 50)
+    render(t.view, &c, WIDE)
+    assert(c.shape() == Cursor.Arrow, "just past it")
+end the_resize_cursor_shows_over_the_strip_and_only_there
+
+@test
+private the_resize_cursor_stays_while_the_rule_is_dragged_however_far_the_pointer_goes()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+    c.point(240, 50, true)
+    render(t.view, &c, WIDE)
+    c.point(800, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert(c.shape() == Cursor.EwResize, "a long way from the strip")
+
+    c.point(800, 50, false)
+    render(t.view, &c, WIDE)
+
+    assert(c.shape() == Cursor.Arrow, "and goes at the release")
+end the_resize_cursor_stays_while_the_rule_is_dragged_however_far_the_pointer_goes
+
+// ## What a driver sees
+
+@test
+private the_snapshot_names_each_draggable_rule_with_its_width_and_range()
+    val t = three()
+    var c = recorder()
+
+    t.left.set(250)
+
+    val s = snapshot(t.view, &c, WIDE)
+    val all = s.entries.view()
+    var found = 0
+    var widths = ""
+
+    for i in 0..<all.len
+        if all[i].role == "divider"
+            found += 1
+            widths += all[i].value + " "
+
+            assert(all[i].marks.contains("range="), "and how far it can go")
+
+            assert(all[i].rect.w == 7 && all[i].rect.h == 100, "the strip is what a driver aims at")
+
+    assert_eq(found, 2)
+    assert_eq(widths, "250 300 ")
+end the_snapshot_names_each_draggable_rule_with_its_width_and_range
+
+// ## Vertical
+
+@test
+private a_split_column_lays_out_top_to_bottom_and_drags_up_and_down()
+    val top = signal("")
+    val mid = signal("")
+    val h = signal(300)
+    val v = split_column([flexed(probe(top), min_width = 100), sized(probe(mid), h, 100, 600)])
+    var c = recorder()
+
+    render(v, &c, TALL)
+
+    assert_eq(top.read(), "0,0 100x699")
+    assert_eq(mid.read(), "0,700 100x300")
+
+    // The rule is at y 699, and the sized pane is below it, so its height runs from the far edge.
+    c.point(50, 699, true)
+    render(v, &c, TALL)
+    c.point(50, 600, true)
+    render(v, &c, TALL)
+
+    assert_eq(h.read(), 399)
+    assert_eq(top.read(), "0,0 100x600")
+    assert_eq(mid.read(), "0,601 100x399")
+end a_split_column_lays_out_top_to_bottom_and_drags_up_and_down
+
+@test
+private a_vertical_rule_asks_for_the_vertical_resize_cursor()
+    val v = split_column([flexed(probe(signal(""))), sized(probe(signal("")), signal(300))])
+    var c = recorder()
+
+    c.point(50, 699)
+    render(v, &c, TALL)
+
+    assert(c.shape() == Cursor.NsResize, "up and down")
+end a_vertical_rule_asks_for_the_vertical_resize_cursor
+
+// ## Around other things
+
+// Drawn at a scale of two and moved, the pointer is still the view's own coordinates.
+@test
+private under_a_transform_the_rule_is_where_the_view_put_it()
+    val t = three()
+    var c = recorder()
+
+    c.push_transform(2.0, 10.0, 0.0)
+    c.point(10 + 2 * 240, 50, true)
+    t.view.paint(&c, WIDE)
+    c.point(10 + 2 * 330, 50, true)
+    t.view.paint(&c, WIDE)
+    c.pop_transform()
+
+    assert_eq(t.left.read(), 330)
+end under_a_transform_the_rule_is_where_the_view_put_it
+
+// A scroll claims a drag that nothing took, and the rule must have taken it first: the pointer
+// moves down as well as across.
+@test
+private inside_a_scroll_the_rule_is_dragged_and_the_scroll_stays_put()
+    val t = three()
+    val offset = signal(0)
+    val v = scroll(t.view, offset, 20)
+    var c = recorder()
+    val at = Rect(0, 0, 1000, 20)
+
+    render(v, &c, at)
+    c.point(240, 10, true)
+    render(v, &c, at)
+    c.point(300, 19, true)
+    render(v, &c, at)
+
+    assert_eq(t.left.read(), 300)
+    assert_eq(offset.read(), 0, "the scroll was not dragged along")
+end inside_a_scroll_the_rule_is_dragged_and_the_scroll_stays_put
+
+@test
+private under_an_open_modal_the_rule_does_not_hear_the_pointer()
+    val t = three()
+    val open = signal(true)
+    val v = t.view.modal(open, text("hi"))
+    var c = recorder()
+
+    render(v, &c, WIDE)
+    c.point(240, 50, true)
+    render(v, &c, WIDE)
+    c.point(300, 50, true)
+    render(v, &c, WIDE)
+
+    assert_eq(t.left.read(), 240)
+    assert(c.shape() == Cursor.Arrow, "nor asks for a cursor there")
+end under_an_open_modal_the_rule_does_not_hear_the_pointer
+
+// ## Pixels
+
+private face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var f: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if f.is_none() then f = plutovg.font(found[i])
+
+    assert(f.is_some(), "a face to measure with")
+
+    f.unwrap()
+end face
+
+private pixel_at(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+end pixel_at
+
+// The rule is edge-coloured at one pixel wide at scale one and two wide at scale two, and the panes
+// either side are their own colour right up to it.
+@test
+private the_real_backend_draws_the_rule_and_the_panes_at_both_scales()
+    for scale in [1, 2]
+        val surf = plutovg.surface(220 * scale, 20 * scale).unwrap()
+        var c = pluto_canvas(plutovg.canvas(surf).unwrap(), face(), 15.0)
+        val v = split_row([sized(probe(signal("")), signal(100), 10, 400), flexed(probe(signal("")))])
+        val edge = 0xFF000000u32 | dark().edge
+
+        c.push_transform(real(scale), 0.0, 0.0)
+        v.paint(&c, Rect(0, 0, 220, 20))
+        c.pop_transform()
+
+        val s = scale
+        val mid = 10 * s
+
+        assert(pixel_at(surf, 99 * s, mid) == 0xFF336699u32, s"pane before at scale ${scale}")
+        assert(pixel_at(surf, 100 * s, mid) == edge, s"rule at scale ${scale}")
+        assert(pixel_at(surf, 101 * s - 1, mid) == edge, s"rule's last pixel at scale ${scale}")
+        assert(pixel_at(surf, 101 * s, mid) == 0xFF336699u32, s"pane after at scale ${scale}")
+        assert(pixel_at(surf, 100 * s, 0) == edge && pixel_at(surf, 100 * s, 20 * s - 1) == edge,
+               "the rule runs the whole height")
+end the_real_backend_draws_the_rule_and_the_panes_at_both_scales

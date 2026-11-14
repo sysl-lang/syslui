@@ -1,0 +1,341 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// ## Resizable panels
+//
+// A row (or column) of panes in which some have a width the user drags, and one flexes to fill what
+// they leave. Between two neighbours is a one-point rule in the theme's edge colour, and over it an
+// invisible strip seven points wide that takes the pointer: hovering it shows the resize cursor,
+// dragging it sets the width of the pane that is sized, and a double-click puts the width back to
+// its default.
+//
+// **The application owns the widths.** A sized pane's width is a `&Signal[int]` the caller made,
+// so remembering it between runs is the caller reading and writing a file -- nothing is stored
+// here, which is also why a width the caller changes (a "reset layout" command) is simply honoured
+// on the next frame.
+//
+//     val left = signal(240)
+//     val right = signal(300)
+//
+//     split_row([
+//         sized(shapes, left, min_width = 160, max_width = 420),
+//         flexed(viewport, min_width = 200),
+//         sized(inspector, right, reset = 300)])
+//
+// **The flexible pane is never squeezed below its own minimum by a drag**: the drag stops where
+// the flexible pane reaches it. When the window itself shrinks until the panes no longer fit, the
+// sized panes give way instead -- last first, each down to its own minimum, and only then the
+// flexible one -- and nothing is written to the signals, so growing the window again brings the
+// widths back.
+//
+// **Exactly one flexible pane is meant.** With several, they share what is left equally; with
+// none, the panes keep their widths and the remainder is empty.
+
+// The strip the pointer is caught by, centred on the one-point rule.
+private const GRAB_W: int = 7
+
+// How far the pointer must travel from where it went down before a press is a drag, so a click or
+// the pair of presses in a double-click moves nothing.
+private const GRAB_SLOP: int = 2
+
+// The slot in the canvas's single grab. A rectangle is the key, and slots tell two things sharing
+// one apart.
+private const SPLIT_SLOT: int = 0
+
+// One pane of a split: what it shows, and how its width is decided.
+struct Pane
+    view: &View
+
+    // The width the user drags, or `None` for the pane that takes what is left.
+    width: Option[&Signal[int]]
+
+    // What a sized pane may be dragged between; for a flexible pane `lo` is the least it is given.
+    lo: int
+    hi: int
+
+    // What a double-click on the rule puts the width back to.
+    reset: int
+end Pane
+
+// A pane whose width is `width`, in points, kept between `min_width` and `max_width` -- by the
+// drag, and when the width is read, so a stored value that is out of range is shown clamped rather
+// than trusted. A double-click on the rule beside it sets `reset`.
+sized(view: &View, width: &Signal[int], min_width: int = 120, max_width: int = 480,
+      reset: int = 240) -> Pane =
+    Pane(view, Some(width), min_width, max_width, reset)
+
+// The pane that fills what the sized ones leave, never dragged below `min_width`.
+flexed(view: &View, min_width: int = 0) -> Pane = Pane(view, None, min_width, 0, 0)
+
+private floor_of(p: Pane) -> int = if p.lo > 0 then p.lo else 0
+
+private ceiling_of(p: Pane) -> int = if p.hi > floor_of(p) then p.hi else floor_of(p)
+
+private bounded(v: int, lo: int, hi: int) -> int = if v < lo then lo elif v > hi then hi else v
+
+private smaller(a: int, b: int) -> int = if a < b then a else b
+
+// What a pane asks for before the room is shared out: a sized pane's width kept in range, a
+// flexible pane's minimum.
+private asked(p: Pane) -> int
+    p.width match
+        Some(s) -> bounded(s.read(), floor_of(p), ceiling_of(p))
+        None -> floor_of(p)
+end asked
+
+// How wide each pane is, given `avail` points for the panes alone (the rules are already taken out).
+//
+// **A shortfall is taken from the sized panes, last first, down to their minimums**, then from
+// anything at all down to nothing, so the panes never add up to more than they were given.
+private extents(v: []const Pane, avail: int) -> Buf[int]
+    var out: Buf[int] = buf()
+    var taken = 0
+    var fills = 0
+
+    for i in 0..<v.len
+        val w = asked(v[i])
+
+        out.push(w)
+
+        taken += w
+
+        if v[i].width.is_none() then fills += 1
+
+    val room = if avail > 0 then avail else 0
+
+    for pass in 0..<2
+        var j = int(v.len) - 1
+
+        while j >= 0 && taken > room
+            val least = if pass == 1 then 0 elif v[j].width.is_some() then floor_of(v[j]) else out[j]
+            val give = smaller(taken - room, out[j] - least)
+
+            out[j] = out[j] - give
+            taken -= give
+            j -= 1
+
+    if fills > 0 && room > taken
+        val share = (room - taken) / fills
+        var extra = (room - taken) - share * fills
+        var j = int(v.len) - 1
+
+        while j >= 0
+            if v[j].width.is_none()
+                out[j] = out[j] + share + extra
+                extra = 0
+
+            j -= 1
+
+    out
+end extents
+
+// Where each pane starts along the axis, one rule between neighbours.
+private starts(ext: []const int, origin: int) -> Buf[int]
+    var out: Buf[int] = buf()
+    var at = origin
+
+    for i in 0..<ext.len
+        out.push(at)
+
+        at += ext[i] + 1
+
+    out
+end starts
+
+// Which pane the rule between `d` and `d + 1` resizes, or -1 where neither is sized.
+//
+// **The pane on the side away from the flexible one**, because that is the one whose far edge stays
+// put as it changes: the flexible pane absorbs the difference.
+private owner(v: []const Pane, d: int) -> int
+    var fill = -1
+
+    for i in 0..<v.len
+        if fill < 0 && v[i].width.is_none() then fill = int(i)
+
+    val left = v[d].width.is_some()
+    val right = v[d + 1].width.is_some()
+
+    if fill >= 0 && fill <= d
+        if right then d + 1 elif left then d else -1
+    else
+        if left then d elif right then d + 1 else -1
+end owner
+
+// The width `want` becomes for pane `k`: inside its own bounds and, where there is a flexible pane,
+// leaving that pane its minimum.
+//
+// **The other panes count at the widths their signals hold**, not at what a narrow window has
+// squeezed them to, so a drag stops where the flexible pane meets its minimum rather than taking
+// room from a neighbour that is only giving way for now.
+private limited(v: []const Pane, avail: int, k: int, want: int) -> int
+    var others = 0
+    var flexes = false
+
+    for j in 0..<v.len
+        if int(j) != k then others += asked(v[j])
+
+        if v[j].width.is_none() then flexes = true
+
+    val cap = if flexes then smaller(ceiling_of(v[k]), avail - others) else ceiling_of(v[k])
+
+    bounded(want, floor_of(v[k]), if cap < floor_of(v[k]) then floor_of(v[k]) else cap)
+end limited
+
+// A rectangle `len` long starting at `pos` along the axis, and as deep as `r` across it.
+private span(vertical: bool, r: Rect, pos: int, len: int) -> Rect =
+    if vertical then Rect(r.x, pos, r.w, len) else Rect(pos, r.y, len, r.h)
+
+struct Split
+    panes: Buf[Pane]
+    vertical: bool
+
+    private along(self, r: Rect) -> int = if self.vertical then r.h else r.w
+
+    // The rectangle the pointer is caught in for the rule after pane `d`.
+    private strip(self, r: Rect, gap: int) -> Rect = span(self.vertical, r, gap - GRAB_W / 2, GRAB_W)
+
+    // The one rectangle a drag of the rule after pane `d` is claimed under, whatever width it has
+    // reached: every place the rule can be. **A grab is keyed by its rectangle and the rule moves**,
+    // so the strip itself cannot be the key from one frame to the next.
+    private sweep(self, r: Rect, ext: []const int, st: []const int, d: int, k: int) -> Rect
+        val p = self.panes.view()[k]
+        val lo = floor_of(p)
+        val hi = ceiling_of(p)
+
+        if k == d
+            span(self.vertical, r, st[d] + lo - GRAB_W / 2, hi - lo + GRAB_W)
+        else
+            val end = st[k] + ext[k]
+
+            span(self.vertical, r, end - 1 - hi - GRAB_W / 2, hi - lo + GRAB_W)
+    end sweep
+
+    // Everything the pointer does to the rules: dragging, and the double-click. It runs before the
+    // panes are painted, so that a press on the strip is claimed before anything underneath asks.
+    private steer(self, c: *Canvas, r: Rect)
+        val v = self.panes.view()
+        val n = int(v.len)
+
+        if n < 2 then return
+
+        val o = if self.vertical then r.y else r.x
+        val avail = self.along(r) - (n - 1)
+        val ext = extents(v, avail)
+        val st = starts(ext.view(), o)
+
+        for d in 0..<(n - 1)
+            val k = owner(v, d)
+
+            if k >= 0
+                val gap = st[d] + ext[d]
+                val hr = self.strip(r, gap)
+                val s = v[k].width.unwrap()
+                val sw = self.sweep(r, ext.view(), st.view(), d, k)
+                val (ox, oy) = c.press_origin()
+                val begun = c.held(PointerButton.Primary) && hr.holds(ox, oy)
+
+                if (begun || c.owns(sw, SPLIT_SLOT)) && c.grab(sw, SPLIT_SLOT)
+                    val (px, py) = c.pointer()
+                    val p = if self.vertical then py else px
+                    val from = if self.vertical then oy else ox
+
+                    // **Only a press that has travelled is a drag**, or a double-click's second press
+                    // would take the width from the pointer and undo the reset it just made.
+                    if (p - from).abs() > GRAB_SLOP
+                        val want = if k == d then p - st[d] else st[k] + ext[k] - 1 - p
+                        val now = limited(v, avail, k, want)
+
+                        if now != s.read() then s.set(now)
+
+                if c.tapped(hr) && c.tap_count() == 2
+                    val now = limited(v, avail, k, v[k].reset)
+
+                    if now != s.read() then s.set(now)
+    end steer
+end Split
+
+impl View for Split
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        val v = self.panes.view()
+        var along = if v.len > 0 then int(v.len) - 1 else 0
+        var across = 0
+
+        for i in 0..<v.len
+            val w = asked(v[i])
+            val s = v[i].view.measure(c, if self.vertical then Size(avail.w, w) else Size(w, avail.h))
+
+            along += w
+
+            val m = if self.vertical then s.w else s.h
+
+            if m > across then across = m
+
+        if self.vertical then Size(across, along) else Size(along, across)
+    end measure
+
+    override weight(&self) -> int = 1
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.steer(c, r)
+
+        val v = self.panes.view()
+        val n = int(v.len)
+        val o = if self.vertical then r.y else r.x
+        val avail = self.along(r) - (if n > 0 then n - 1 else 0)
+        val ext = extents(v, avail)
+        val st = starts(ext.view(), o)
+
+        for i in 0..<v.len
+            val at = span(self.vertical, r, st[i], ext[i])
+
+            if c.visible(at) then v[i].view.paint(c, at)
+
+        val edge = c.theme().edge
+        val shape = if self.vertical then Cursor.NsResize else Cursor.EwResize
+
+        for d in 0..<(n - 1)
+            val gap = st[d] + ext[d]
+            val line = span(self.vertical, r, gap, 1)
+
+            c.fill(line, edge)
+
+            val k = owner(v, d)
+
+            if k >= 0
+                val hr = self.strip(r, gap)
+                val sw = self.sweep(r, ext.view(), st.view(), d, k)
+
+                // While the rule is being dragged the pointer is wherever it likes, so the shape is
+                // asked for over the whole split rather than the strip.
+                c.cursor(if c.owns(sw, SPLIT_SLOT) then r else hr, shape)
+
+                c.survey() match
+                    Some(s) ->
+                        val range = s"range=${floor_of(v[k])}..${ceiling_of(v[k])}"
+
+                        s.leaf("divider", hr, s"${ext[k]}",
+                               if self.vertical then range + " vertical" else range)
+                    None -> ()
+    end paint
+end Split
+
+// Panes side by side, left to right, with a draggable rule between each pair. See `sized` and
+// `flexed`.
+split_row(panes: []const Pane) -> &View
+    var b: Buf[Pane] = buf()
+
+    b.extend(panes)
+
+    Split(b, false)
+end split_row
+
+// Panes one above the next, with a draggable rule between each pair: the same widget on the other
+// axis, so a sized pane's number is its height.
+split_column(panes: []const Pane) -> &View
+    var b: Buf[Pane] = buf()
+
+    b.extend(panes)
+
+    Split(b, true)
+end split_column
