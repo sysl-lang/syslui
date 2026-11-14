@@ -1,0 +1,97 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+import sysl.math.Float
+
+// A header that folds its body away: a chevron and a title, and under them the body only while the
+// section is open.
+//
+// **It is a composition, not a new kind of view.** The header is a `Tappable` over a `Reactive`
+// row, exactly as a `tab` or a `button` is; the body is the second child of a `column`. The one
+// small view of its own is the chevron, because it has to ease between pointing right and pointing
+// down, which a fixed glyph cannot.
+//
+// **The body is built only while open**, so a closed section measures to its header alone and
+// closing one inside a `scroll` shortens the content the scroll sees. Whether it is open is read at
+// BUILD time and captured, as `tabs` does: the chevron, the snapshot mark and the body all describe
+// the same state, and none can be a frame ahead of another. The chevron's turn eases over the frames
+// after the rebuild; the body's height does not animate.
+//
+// **Which sections are open is the application's**, one signal per section, so it survives a
+// rebuild and can be saved with the rest of a layout.
+
+// A collapsible section.
+//
+//     val shapes = signal(true)
+//
+//     section("Shapes", shapes, column([cube_tile, sphere_tile], 4))
+//
+// A snapshot calls it `section`, labelled with the title and marked `expanded` while open, and a
+// click on it toggles the signal.
+section(title: string, open: &Signal[bool], body: &View) -> &View
+    val on = open.read()
+    val head = Tappable(reactive((i, t) -> header_row(t, title, on, i)),
+                        () -> open.set(!open.read()), "section", false)
+
+    if on then column([head, body], 0) else head
+end section
+
+private header_row(t: Theme, title: string, on: bool, i: Interaction) -> &View =
+    row([Expanded(on, Chevron(on)), text(title)], 6).padding(t.pad)
+
+// Marks the node it is painted inside as expanded, then paints its child. It exists because
+// `Tappable` marks only `selected`, and a section is not the chosen one of a set.
+struct Expanded
+    on: bool
+    child: &View
+
+impl View for Expanded
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.survey() match
+            Some(n) -> if self.on then n.mark("expanded")
+            None -> ()
+
+        self.child.paint(c, r)
+
+// The chevron: two strokes meeting at a point, pointing right when closed and down when open.
+//
+// **One path turned by the phase**, so the glyph is a right angle at every moment of the turn and
+// not a cross-fade between two. The phase is the canvas's, so with no clock it is the target at
+// once.
+struct Chevron
+    on: bool
+
+impl View for Chevron
+    measure(&self, c: *Canvas, avail: Size) = Size(CHEVRON, CHEVRON)
+
+    paint(&self, c: *Canvas, r: Rect)
+        val box = Rect(r.x + (r.w - CHEVRON) / 2, r.y + (r.h - CHEVRON) / 2, CHEVRON, CHEVRON)
+        val t = c.phase(box, CHEVRON_SLOT, if self.on then 1.0 else 0.0, CHEVRON_RATE)
+
+        if !c.visible(box) then return
+
+        c.draw_path(box, 1.0, turned(t * 1.5707963267948966).view(), None, Some((c.text_ink(), 1.5)))
+
+// The closed chevron (a point at the right) turned clockwise by `a` radians about the middle of
+// its box.
+private turned(a: real) -> Buf[PathStep]
+    var steps: Buf[PathStep] = buf()
+    val s = a.sin()
+    val k = a.cos()
+    val pts = [(0.38, 0.25), (0.65, 0.5), (0.38, 0.75)]
+
+    for i in 0..<pts.len
+        val dx = pts[i].0 - 0.5
+        val dy = pts[i].1 - 0.5
+        val x = 0.5 + dx * k - dy * s
+        val y = 0.5 + dx * s + dy * k
+
+        steps.push(if i == 0 then PathStep.Move(x, y) else PathStep.Line(x, y))
+
+    steps
+
+private const CHEVRON: int = 14
+private const CHEVRON_SLOT: int = 8
+private const CHEVRON_RATE: real = 14.0

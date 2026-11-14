@@ -1,0 +1,311 @@
+module sh.sysl.ui
+@tests
+
+import sysl.buf.{Buf, buf}
+import sh.sysl.plutovg
+
+// ## `section`: a header that folds its body away
+
+private val SECTION_WINDOW: Rect = Rect(0, 0, 200, 600)
+
+// The header is a line of text (16) with the theme's padding either side.
+private val HEADER: int = 32
+
+private val CLOSED_CHEVRON = "M0.38,0.25 L0.65,0.5 L0.38,0.75"
+private val OPEN_CHEVRON = "M0.75,0.38 L0.5,0.65 L0.25,0.38"
+
+private section_shot(v: &View) -> Snapshot
+    var c = recorder()
+
+    render(v, &c, SECTION_WINDOW)
+    snapshot(v, &c, SECTION_WINDOW)
+end section_shot
+
+private section_height(v: &View) -> int
+    var c = recorder()
+
+    v.measure(&c, Size(200, 1000)).h
+
+private section_dump(v: &View) -> string
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 200, 600))
+    c.dump()
+end section_dump
+
+private entry_at(s: Snapshot, role: string, label: string) -> Entry
+    val all = s.entries.view()
+
+    for i in 0..<all.len
+        if all[i].role == role && all[i].label == label then return all[i]
+
+    assert(false, s"no ${role} '${label}' in:\n${s.dump()}")
+    all[0]
+end entry_at
+
+private has_entry(s: Snapshot, role: string, label: string) -> bool
+    val all = s.entries.view()
+
+    for i in 0..<all.len
+        if all[i].role == role && all[i].label == label then return true
+
+    false
+end has_entry
+
+// A real tap on the first entry of the frame, through the two steps a window delivers.
+private tap_first(v: &View)
+    var c = recorder()
+
+    render(v, &c, SECTION_WINDOW)
+
+    val (x, y) = snapshot(v, &c, SECTION_WINDOW).click_point("@1").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+end tap_first
+
+private tall_body() -> &View = column([text("one"), text("two"), text("three")], 0)
+
+// ### Measure
+
+@test
+private a_closed_section_measures_to_its_header_alone()
+    assert_eq(section_height(section("Shapes", signal(false), tall_body())), HEADER)
+
+@test
+private an_open_section_measures_to_its_header_and_its_body()
+    assert_eq(section_height(section("Shapes", signal(true), tall_body())), HEADER + 48)
+
+@test
+private an_empty_body_and_an_empty_title_still_make_a_header()
+    assert_eq(section_height(section("", signal(true), spacer())), HEADER)
+    assert_eq(section_height(section("", signal(false), spacer())), HEADER)
+
+@test
+private a_zero_width_window_does_not_break_the_header()
+    var c = recorder()
+
+    section("A very long title indeed", signal(true), tall_body()).paint(&c, Rect(0, 0, 0, 0))
+
+// ### Paint
+
+@test
+private a_closed_section_draws_a_right_pointing_chevron_and_no_body()
+    val d = section_dump(section("Shapes", signal(false), text("body")))
+
+    assert(d.contains(CLOSED_CHEVRON), d)
+    assert(d.contains("'Shapes'"), d)
+    assert(!d.contains("'body'"), d)
+
+@test
+private an_open_section_draws_a_down_pointing_chevron_and_its_body_under_the_header()
+    val d = section_dump(section("Shapes", signal(true), text("body")))
+
+    assert(d.contains(OPEN_CHEVRON), d)
+    assert(d.contains("text 0,32 200x16 'body'"), d)
+
+@test
+private the_chevron_is_the_ink_of_the_theme_light_and_dark()
+    var c = recorder()
+    val v = section("Shapes", signal(false), text("body"))
+
+    v.paint(&c, Rect(0, 0, 200, 100))
+    assert(c.dump().contains(s"stroke #${dark().ink} w1.5"), c.dump())
+
+    var l = recorder()
+
+    l.push_theme(light())
+    v.paint(&l, Rect(0, 0, 200, 100))
+    assert(l.dump().contains(s"stroke #${light().ink} w1.5"), l.dump())
+    assert(dark().ink != light().ink)
+
+// ### Interaction and the snapshot
+
+@test
+private a_tap_on_the_header_opens_and_closes_it()
+    val open = signal(false)
+
+    tap_first(section("Shapes", open, text("body")))
+    assert_eq(open.read(), true)
+
+    tap_first(section("Shapes", open, text("body")))
+    assert_eq(open.read(), false)
+
+@test
+private a_tap_in_the_body_does_not_toggle()
+    val open = signal(true)
+    val v = section("Shapes", open, text("body").on_tap(() -> ()))
+    var c = recorder()
+
+    render(v, &c, SECTION_WINDOW)
+    c.point(10, 40, true)
+    c.release(10, 40)
+    assert_eq(open.read(), true)
+
+@test
+private the_snapshot_calls_it_a_section_with_the_title_and_marks_it_expanded_while_open()
+    val shut = section_shot(section("Shapes", signal(false), text("body")))
+    val wide = section_shot(section("Shapes", signal(true), text("body")))
+
+    assert_eq(entry_at(shut, "section", "Shapes").marks, "")
+    assert_eq(entry_at(wide, "section", "Shapes").marks, "expanded")
+    assert(!has_entry(shut, "text", "body"), shut.dump())
+    assert(has_entry(wide, "text", "body"), wide.dump())
+    assert_eq(wide.find("@1").unwrap().role, "section")
+
+@test
+private the_expanded_mark_is_on_the_section_and_not_on_a_section_inside_it()
+    val v = section("Outer", signal(true), section("Inner", signal(false), text("body")))
+    val s = section_shot(v)
+
+    assert_eq(entry_at(s, "section", "Outer").marks, "expanded")
+    assert_eq(entry_at(s, "section", "Inner").marks, "")
+
+@test
+private nested_sections_open_and_close_independently()
+    val outer = signal(true)
+    val inner = signal(true)
+
+    assert_eq(section_height(section("O", outer, section("I", inner, text("b")))), HEADER + HEADER + 16)
+
+    inner.set(false)
+
+    assert_eq(section_height(section("O", outer, section("I", inner, text("b")))), 2 * HEADER)
+
+    outer.set(false)
+
+    assert_eq(section_height(section("O", outer, section("I", inner, text("b")))), HEADER)
+
+@test
+private tapping_an_inner_header_toggles_the_inner_signal_only()
+    val outer = signal(true)
+    val inner = signal(false)
+    val v = section("O", outer, section("I", inner, text("b")))
+    var c = recorder()
+
+    render(v, &c, SECTION_WINDOW)
+
+    val (x, y) = section_shot(v).click_point("@2").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    assert_eq(inner.read(), true)
+    assert_eq(outer.read(), true)
+
+// ### Neighbours
+
+@test
+private closing_a_section_in_a_column_with_spacing_pulls_the_next_one_up_by_its_body_only()
+    val a = signal(true)
+    val b = signal(false)
+
+    private_column(a, b)
+
+    val open_shot = section_shot(private_column(a, b))
+
+    assert_eq(entry_at(open_shot, "section", "B").rect.y, HEADER + 48 + 10)
+
+    a.set(false)
+
+    val shut_shot = section_shot(private_column(a, b))
+
+    assert_eq(entry_at(shut_shot, "section", "B").rect.y, HEADER + 10)
+end closing_a_section_in_a_column_with_spacing_pulls_the_next_one_up_by_its_body_only
+
+private private_column(a: &Signal[bool], b: &Signal[bool]) -> &View =
+    column([section("A", a, tall_body()), section("B", b, text("b"))], 10)
+
+// The scroll draws a thumb only while its content is taller than its window, so a section that
+// folds away inside one makes the thumb go.
+@test
+private closing_a_section_inside_a_scroll_shortens_what_the_scroll_has_to_cover()
+    val open = signal(true)
+    val wide = section_dump(scroll(section("Shapes", open, tall_body()), signal(0), 40))
+
+    open.set(false)
+
+    val shut = section_dump(scroll(section("Shapes", open, tall_body()), signal(0), 40))
+
+    assert(wide.contains("fill 192,0 8x40") && !shut.contains("fill"),
+           s"open:\n${wide}closed:\n${shut}")
+    assert_eq(section_height(scroll(section("Shapes", open, tall_body()), signal(0), 40)), 40)
+
+@test
+private a_section_under_a_transform_keeps_its_chevron_in_step()
+    var c = recorder()
+
+    c.push_transform(2.0, 10, 20)
+    section("Shapes", signal(true), text("body")).paint(&c, Rect(0, 0, 100, 100))
+    assert(c.dump().contains(OPEN_CHEVRON), c.dump())
+
+// ### The real backend
+
+private section_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end section_face
+
+private section_alpha(s: &plutovg.Surface, x: int, y: int) -> int
+    val d = s.data()
+
+    int(d[usize(y * s.stride() + x * 4 + 3)])
+
+// The chevron sits in a 14-point box at (8, 9). Closed it runs from (13.3, 12.5) to the tip at (17.1,
+// 16) and back to (13.3, 19.5); open, from (18.5, 14.3) to the tip at (15, 18.1) and up to (11.5,
+// 14.3). The ends are far from the other's lines, so each state has a pixel only it covers.
+private chevron_pixels(k: int, on: bool)
+    val surf = plutovg.surface(100 * k, 100 * k).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), section_face(), 15.0)
+
+    c.vg.scale(f32(k), f32(k))
+    section("S", signal(on), text("b")).paint(&c, Rect(0, 0, 100, HEADER))
+
+    val closed_only = section_alpha(surf, 13 * k, 12 * k)
+    val open_only = section_alpha(surf, 18 * k, 14 * k)
+
+    if on
+        assert(open_only > 0 && closed_only == 0, s"open at scale ${k}: ${open_only} ${closed_only}")
+    else
+        assert(closed_only > 0 && open_only == 0, s"closed at scale ${k}: ${open_only} ${closed_only}")
+end chevron_pixels
+
+@test
+private the_closed_chevron_is_drawn_at_scale_one()
+    chevron_pixels(1, false)
+
+@test
+private the_closed_chevron_is_drawn_at_scale_two()
+    chevron_pixels(2, false)
+
+@test
+private the_open_chevron_is_drawn_at_scale_one()
+    chevron_pixels(1, true)
+
+@test
+private the_open_chevron_is_drawn_at_scale_two()
+    chevron_pixels(2, true)
+
+// Opening eases: a frame after the signal flips, a tenth of a second on, the chevron has begun to
+// turn but is not yet where the open one is.
+@test
+private the_chevron_eases_between_closed_and_open()
+    val surf = plutovg.surface(100, 100).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), section_face(), 15.0)
+    val on = signal(false)
+
+    section("S", on, text("b")).paint(&c, Rect(0, 0, 100, HEADER))
+    on.set(true)
+    c.tick(0.03)
+    section("S", on, text("b")).paint(&c, Rect(0, 0, 100, HEADER))
+
+    assert(section_alpha(surf, 13, 12) > 0, "still near the closed pose")
+    assert(section_alpha(surf, 18, 14) == 0, "not yet the open one")
+end the_chevron_eases_between_closed_and_open
+
