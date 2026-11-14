@@ -195,6 +195,13 @@ trait Canvas
     // answers no.
     owns(*self, r: Rect, slot: int) -> bool = false
 
+    // One number the owner of the press that is down may keep until it ends -- zero at each new
+    // press. A drag that moves something by how far the pointer has travelled needs the thing's
+    // starting value for the whole drag, and the tree has nowhere to keep it.
+    anchor(*self) -> int = 0
+
+    set_anchor(*self, v: int) = ()
+
     // Where the pointer actually is, in the same coordinates a view is painted in.
     //
     // **`hovered` and `pressed` answer a yes-or-no question and a drag is not one.** A slider has to
@@ -773,6 +780,10 @@ impl Canvas for Recorder
 
     override grab(*self, r: Rect, slot: int) -> bool =
         self.covers.admits(&self.hold) && self.hold.claim(self.placed(r), slot)
+
+    override anchor(*self) -> int = self.hold.anchor
+
+    override set_anchor(*self, v: int) = self.hold.anchor = v
 
     override owns(*self, r: Rect, slot: int) -> bool =
         self.covers.admits(&self.hold) && self.hold.owns(self.placed(r), slot)

@@ -272,14 +272,24 @@ private a_drag_held_at_a_limit_stays_the_rules_and_a_release_ends_it()
     c.point(890, 50, true)
     render(t.view, &c, WIDE)
 
-    assert_eq(t.left.read(), 488, "still the rule's, a long way from the strip")
+    assert_eq(t.left.read(), 498, "still at the limit: the pointer is far past the rule")
 
-    c.point(890, 50, false)
+    c.point(500, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 498, "and past it until the pointer is back over the rule")
+
+    c.point(490, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 490, "then it follows one for one")
+
+    c.point(490, 50, false)
     render(t.view, &c, WIDE)
     c.point(10, 50, true)
     render(t.view, &c, WIDE)
 
-    assert_eq(t.left.read(), 488, "a release ends it")
+    assert_eq(t.left.read(), 490, "a release ends it")
 end a_drag_held_at_a_limit_stays_the_rules_and_a_release_ends_it
 
 // **The rule stays under the part of the strip that was grabbed**: pressed three points left of the

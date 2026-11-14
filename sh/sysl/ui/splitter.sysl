@@ -236,17 +236,25 @@ struct Split
                 val (ox, oy) = c.press_origin()
                 val begun = c.held(PointerButton.Primary) && hr.holds(ox, oy)
 
-                // **The drag is relative**: the canvas answers how far the pointer has travelled since
-                // the press, so the rule stays under the part of the strip that was grabbed, and
-                // nothing moves until the pointer is past the slop -- which is also why a click, and
-                // the second press of a double-click, change no width.
+                // **The drag is relative and never drifts**: the width is where the pane started plus
+                // how far the pointer has travelled since the press, worked out afresh every frame
+                // and then limited. Nothing moves until the pointer is past the slop, so a click, or
+                // the second press of a double-click, changes no width; after it the rule is under
+                // the part of the strip that was grabbed, and a pointer pushed past a limit has to
+                // come back over the rule before it moves again.
+                //
+                // The canvas keeps the width the pane had when the drag began.
                 if begun || c.owns(sw, SPLIT_SLOT)
-                    val (dx, dy) = c.drag(sw, SPLIT_SLOT, GRAB_SLOP, GRAB_SLOP)
-                    val moved = if self.vertical then dy else dx
+                    if !c.owns(sw, SPLIT_SLOT)
+                        c.drag(sw, SPLIT_SLOT, GRAB_SLOP, GRAB_SLOP)
 
-                    if moved != 0
-                        val base = asked(v[k])
-                        val now = limited(v, avail, k, if k == d then base + moved else base - moved)
+                        if c.owns(sw, SPLIT_SLOT) then c.set_anchor(asked(v[k]))
+
+                    if c.owns(sw, SPLIT_SLOT)
+                        val (px, py) = c.pointer()
+                        val (ox, oy) = c.press_origin()
+                        val moved = if self.vertical then py - oy else px - ox
+                        val now = limited(v, avail, k, c.anchor() + (if k == d then moved else -moved))
 
                         if now != s.read() then s.set(now)
 
