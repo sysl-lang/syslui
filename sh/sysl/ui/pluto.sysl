@@ -90,6 +90,9 @@ struct PlutoCanvas
     // the pointer, the clips and the covers are mapped through, in the arithmetic the recorder shares.
     xforms: Transforms
 
+    // How long the pointer has rested on something with a tooltip. See `Tips`.
+    tips: Tips
+
     // The shape the frame `render` last finished asked for under the pointer -- what a frame loop
     // shows. See `Canvas.cursor`.
     shape(*self) -> Cursor = self.shapes.now
@@ -128,7 +131,9 @@ struct PlutoCanvas
     // **The keys are not cleared here**, though it looks like the place: a frame loop polls its
     // events before it ticks its clock, so clearing them here would throw away the keys of the frame
     // about to be painted. `render` does it, at the end, which is the only moment that is certain.
-    tick(*self, dt: real) = self.anim.tick(dt)
+    tick(*self, dt: real)
+        self.anim.tick(dt)
+        self.tips.tick(dt)
 
     // The size in force, with everything a run drawn at it needs.
     private now(*self) -> &Sizing
@@ -351,6 +356,8 @@ impl Canvas for PlutoCanvas
         self.board.landed(self.placed(r)) && !self.covers.struck(self.board.tap_x, self.board.tap_y)
 
     override covering(*self) -> Option[*Covers] = Some(&self.covers)
+
+    override tipping(*self) -> Option[*Tips] = Some(&self.tips)
 
     override tap_point(*self) -> (int, int) = self.back((self.board.tap_x, self.board.tap_y))
 
@@ -585,7 +592,8 @@ pluto_canvas(vg: &plutovg.Canvas, face: &plutovg.Font, size: f32) -> PlutoCanvas
     sizings.push(sizing(face, size))
 
     PlutoCanvas(vg, face, sizings, buf(), -1, -1, false, hits(), clips(), grabbing(), buf(),
-                phases(), buf(), dark(), buf(), keyboard(), chord(), covers(), shaping(), transforms())
+                phases(), buf(), dark(), buf(), keyboard(), chord(), covers(), shaping(), transforms(),
+                tips())
 end pluto_canvas
 
 // One size of the face: where a run's baseline sits below the top of its line, how tall a line is,

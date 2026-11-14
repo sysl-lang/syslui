@@ -1,0 +1,560 @@
+module sh.sysl.ui
+@tests
+
+import sysl.text.Search
+import sh.sysl.plutovg
+
+// ## Tooltips
+//
+// In the recorder's font a caption is six by thirteen, so a tip is its text plus six a side across
+// and plus three a side down: "Alpha" is 42x19 and "Beta" 36x19. The toolbar is two 40x24 buttons
+// side by side, so a tip below one sits at y = 24 + 4.
+
+private val SCREEN: Rect = Rect(0, 0, 400, 300)
+
+private val ALPHA_TIP: string = "raise 0,28 42x19"
+private val BETA_TIP: string = "raise 42,28 36x19"
+
+private nothing() -> &Fn() -> unit = () -> ()
+
+private bump(n: &Signal[int]) -> &Fn() -> unit = () -> n.set(n.read() + 1)
+
+// `v` at its own size in the top left corner, rather than stretched across the window.
+private corner(v: &View) -> &View = column([row([v, spacer()]), spacer()])
+
+private toolbar(ran: &Signal[int]) -> &View =
+    corner(row([
+        button("A", bump(ran)).frame(40, 24).tooltip("Alpha"),
+        button("B", bump(ran)).frame(40, 24).tooltip("Beta")
+    ]))
+
+// One frame worth `dt` seconds, with a fresh recording.
+private frame(v: &View, c: *Recorder, dt: real)
+    c.tick(dt)
+    c.taps.reset()
+    c.ops.clear()
+    render(v, c, SCREEN)
+end frame
+
+private shows(c: *Recorder, op: string) -> bool = c.dump().contains(op)
+
+// Rest the pointer on `(x, y)` until a tip is due: a first frame to arrive, and one past the delay.
+private rest_on(v: &View, c: *Recorder, x: int, y: int)
+    c.point(x, y)
+    frame(v, c, 0.016)
+    frame(v, c, TIP_DELAY + 0.1)
+end rest_on
+
+// ### Timing
+
+@test
+private a_tip_waits_for_the_pointer_to_rest()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    c.point(20, 10)
+    frame(v, &c, 0.0)
+    assert(!shows(&c, "raise"), "nothing on arrival")
+
+    frame(v, &c, 0.3)
+    assert(!shows(&c, "raise"), "nor before the delay")
+
+    frame(v, &c, 0.25)
+    assert(shows(&c, ALPHA_TIP), c.dump())
+    assert(shows(&c, "'Alpha' @12.8"), "the hint, in the caption size")
+end a_tip_waits_for_the_pointer_to_rest
+
+// No clock is no tip: a canvas never ticked, or ticked with no time passing, waits for ever.
+@test
+private a_tip_never_shows_without_time_passing()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    c.point(20, 10)
+
+    for i in 0..<10
+        frame(v, &c, 0.0)
+
+    assert(!shows(&c, "raise"), c.dump())
+end a_tip_never_shows_without_time_passing
+
+@test
+private the_tip_goes_when_the_pointer_leaves()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    assert(shows(&c, ALPHA_TIP), "up")
+
+    c.point(200, 200)
+    frame(v, &c, 0.016)
+    assert(!shows(&c, "raise"), "gone the frame the pointer left")
+end the_tip_goes_when_the_pointer_leaves
+
+@test
+private a_press_puts_the_tip_away_until_the_pointer_leaves()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.point(20, 10, true)
+    frame(v, &c, 0.016)
+    assert(!shows(&c, "raise"), "a press hides it")
+
+    c.release(20, 10)
+    frame(v, &c, 0.016)
+    frame(v, &c, 2.0)
+    assert(!shows(&c, "raise"), "and it stays hidden however long the pointer rests")
+
+    c.point(200, 200)
+    frame(v, &c, 0.016)
+    frame(v, &c, 1.0)
+    rest_on(v, &c, 20, 10)
+    assert(shows(&c, ALPHA_TIP), "leaving and coming back starts again")
+end a_press_puts_the_tip_away_until_the_pointer_leaves
+
+// A click quicker than a frame -- the press and the release both between two paints -- is a tap.
+@test
+private a_quick_click_puts_the_tip_away()
+    var c = recorder()
+    val ran = signal(0)
+    val v = toolbar(ran)
+
+    rest_on(v, &c, 20, 10)
+    c.point(20, 10, true)
+    c.release(20, 10)
+    frame(v, &c, 0.016)
+    assert_eq(ran.read(), 1)
+    assert(!shows(&c, "raise"), c.dump())
+end a_quick_click_puts_the_tip_away
+
+@test
+private a_key_puts_the_tip_away()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.key(press(Key.Escape))
+    frame(v, &c, 0.016)
+    assert(!shows(&c, "raise"), "a key hides it")
+
+    frame(v, &c, 1.0)
+    assert(!shows(&c, "raise"), "and it stays hidden after the key is gone")
+end a_key_puts_the_tip_away
+
+// ### Moving between tips
+
+@test
+private moving_to_a_neighbour_while_a_tip_shows_shows_its_tip_at_once()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.point(60, 10)
+    frame(v, &c, 0.016)
+    assert(shows(&c, BETA_TIP) && !shows(&c, ALPHA_TIP), c.dump())
+end moving_to_a_neighbour_while_a_tip_shows_shows_its_tip_at_once
+
+// Crossing a gap with no tip takes a frame or two, and that still counts as moving along.
+@test
+private a_short_gap_between_tips_keeps_the_handoff()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.point(200, 200)
+    frame(v, &c, 0.016)
+    frame(v, &c, 0.016)
+    c.point(60, 10)
+    frame(v, &c, 0.016)
+    assert(shows(&c, BETA_TIP), c.dump())
+end a_short_gap_between_tips_keeps_the_handoff
+
+@test
+private after_a_pause_the_neighbour_waits_again()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.point(200, 200)
+    frame(v, &c, 0.016)
+    frame(v, &c, TIP_HANDOFF + 0.1)
+    c.point(60, 10)
+    frame(v, &c, 0.016)
+    assert(!shows(&c, "raise"), "waits again")
+
+    frame(v, &c, TIP_DELAY)
+    assert(shows(&c, BETA_TIP), c.dump())
+end after_a_pause_the_neighbour_waits_again
+
+// Coming back to the same view after a pause is a new rest, not the old one resumed.
+@test
+private coming_back_after_a_pause_waits_again()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.point(200, 200)
+    frame(v, &c, 0.016)
+    frame(v, &c, TIP_HANDOFF + 0.1)
+    c.point(20, 10)
+    frame(v, &c, 0.016)
+    assert(!shows(&c, "raise"), c.dump())
+end coming_back_after_a_pause_waits_again
+
+// A tip put away by a press hands nothing on: the neighbour waits.
+@test
+private a_hidden_tip_hands_nothing_on()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+    c.point(20, 10, true)
+    frame(v, &c, 0.016)
+    c.release(20, 10)
+    frame(v, &c, TIP_HANDOFF + 0.1)
+    c.point(60, 10)
+    frame(v, &c, 0.016)
+    assert(!shows(&c, "raise"), c.dump())
+end a_hidden_tip_hands_nothing_on
+
+// Of two tips one inside the other, the inner one -- the more specific -- is the one shown.
+@test
+private the_inner_of_two_tips_wins()
+    var c = recorder()
+    val v = column([button("A", nothing()).frame(40, 24).tooltip("Inner")]).tooltip("Outer")
+
+    rest_on(v, &c, 20, 10)
+    assert(shows(&c, "'Inner'") && !shows(&c, "'Outer'"), c.dump())
+end the_inner_of_two_tips_wins
+
+// ### Input goes through
+
+// The tip of the top button lands on the one under it, and a click there still reaches it.
+@test
+private a_tip_does_not_block_what_it_lands_on()
+    var c = recorder()
+    val ran = signal(0)
+    val v = corner(column([
+        button("Top", nothing()).frame(200, 24).tooltip("A hint wide enough to cover"),
+        button("Under", bump(ran)).frame(200, 24)
+    ]))
+
+    rest_on(v, &c, 100, 10)
+    assert(shows(&c, "raise 13,28 174x19"), c.dump())
+
+    // Inside the tip and inside "Under", read against the frame that raised the tip.
+    assert(c.hovered(Rect(0, 24, 200, 24)) == false, "the pointer is still on Top")
+    c.point(100, 32)
+    assert(c.hovered(Rect(0, 24, 200, 24)), "hovering what the tip covers")
+
+    c.point(100, 32, true)
+    c.release(100, 32)
+    frame(v, &c, 0.016)
+    assert_eq(ran.read(), 1)
+end a_tip_does_not_block_what_it_lands_on
+
+@test
+private a_disabled_button_still_shows_its_tip()
+    var c = recorder()
+    val v = corner(button("A", nothing(), enabled = false).frame(40, 24).tooltip("Alpha"))
+
+    rest_on(v, &c, 20, 10)
+    assert(shows(&c, ALPHA_TIP), c.dump())
+end a_disabled_button_still_shows_its_tip
+
+// ### Placement
+
+@test
+private a_tip_sits_centred_below()
+    assert_eq(tip_place(Rect(100, 50, 40, 20), Size(20, 10), SCREEN), Rect(110, 74, 20, 10))
+
+@test
+private a_tip_that_would_leave_the_bottom_flips_above()
+    assert_eq(tip_place(Rect(100, 280, 40, 20), Size(20, 10), SCREEN), Rect(110, 266, 20, 10))
+
+@test
+private a_tip_that_fits_neither_way_stays_below()
+    assert_eq(tip_place(Rect(0, 5, 40, 290), Size(20, 10), SCREEN), Rect(10, 299, 20, 10))
+
+@test
+private a_tip_slides_inside_the_sides()
+    assert_eq(tip_place(Rect(390, 50, 10, 20), Size(40, 10), SCREEN), Rect(360, 74, 40, 10))
+    assert_eq(tip_place(Rect(0, 50, 10, 20), Size(40, 10), SCREEN), Rect(0, 74, 40, 10))
+
+// A tip wider than the window starts at its left edge.
+@test
+private a_tip_wider_than_the_window_starts_at_its_left()
+    assert_eq(tip_place(Rect(100, 50, 10, 20), Size(500, 10), SCREEN), Rect(0, 74, 500, 10))
+
+@test
+private a_tip_in_a_window_corner_is_flipped_and_slid()
+    var c = recorder()
+    val v = column([spacer(), row([spacer(), button("A", nothing()).frame(40, 24).tooltip("Alpha")])])
+
+    rest_on(v, &c, 380, 290)
+    assert(shows(&c, "raise 358,253 42x19"), c.dump())
+end a_tip_in_a_window_corner_is_flipped_and_slid
+
+// ### Edge cases
+
+@test
+private an_empty_tip_is_no_tip()
+    var c = recorder()
+    val v = button("A", nothing()).frame(40, 24).tooltip("")
+
+    rest_on(v, &c, 20, 10)
+    assert(!shows(&c, "raise"), c.dump())
+    assert(!snapshot(v, &c, SCREEN).dump().contains("tip="), "and nothing reported")
+end an_empty_tip_is_no_tip
+
+@test
+private a_view_of_no_size_never_shows_a_tip()
+    var c = recorder()
+    val v = column([text("").frame(0, 0).tooltip("Nothing")])
+
+    rest_on(v, &c, 0, 0)
+    assert(!shows(&c, "raise"), c.dump())
+end a_view_of_no_size_never_shows_a_tip
+
+// The modifier changes nothing about the view it is on.
+@test
+private a_tip_measures_and_paints_as_its_view()
+    var a = recorder()
+    var b = recorder()
+
+    render(button("A", nothing()), &a, SCREEN)
+    render(button("A", nothing()).tooltip("Alpha"), &b, SCREEN)
+    assert_eq(a.dump(), b.dump())
+    assert_eq(button("A", nothing()).tooltip("Alpha").measure(&a, Size(400, 300)),
+              button("A", nothing()).measure(&a, Size(400, 300)))
+    assert_eq(spacer().tooltip("x").weight(), 1)
+end a_tip_measures_and_paints_as_its_view
+
+// ### Theme
+
+@test
+private the_tip_is_drawn_in_the_theme()
+    for t in [dark(), light()]
+        var c = recorder()
+        val v = toolbar(signal(0)).restyle(_ -> t)
+
+        rest_on(v, &c, 20, 10)
+        assert(shows(&c, s"fill 0,28 42x19 #${t.panel} r${t.radius}"), c.dump())
+        assert(shows(&c, s"stroke 0,28 42x19 #${t.edge} w1 r${t.radius}"), c.dump())
+
+    assert(dark().panel != light().panel, "the two themes are told apart")
+
+// ### Snapshot
+
+@test
+private a_snapshot_reports_the_tip_without_hovering()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    render(v, &c, SCREEN)
+
+    val s = snapshot(v, &c, SCREEN)
+    val text = s.dump()
+
+    assert(text.contains("button \"A\" [0,0 40x24] tip=\"Alpha\""), text)
+    assert(text.contains("button \"B\" [40,0 40x24] tip=\"Beta\""), text)
+    assert(s.to_json().contains("\"tip\":\"Alpha\""), s.to_json())
+end a_snapshot_reports_the_tip_without_hovering
+
+@test
+private a_named_tipped_button_is_found_and_clicked_by_name()
+    var c = recorder()
+    val ran = signal(0)
+    val v = row([button("A", bump(ran)).frame(40, 24).named("undo").tooltip("Undo")])
+
+    render(v, &c, SCREEN)
+
+    val s = snapshot(v, &c, SCREEN)
+
+    assert(s.dump().contains("name=undo") && s.dump().contains("tip=\"Undo\""), s.dump())
+
+    val (x, y) = s.click_point("undo").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    render(v, &c, SCREEN)
+    assert_eq(ran.read(), 1)
+end a_named_tipped_button_is_found_and_clicked_by_name
+
+// A tip on something holding two things is reported on a group, and an inner tip keeps its own.
+@test
+private a_tip_on_a_group_is_reported_on_the_group()
+    val v = row([
+        button("A", nothing()).tooltip("Inner"),
+        button("B", nothing())
+    ]).tooltip("Outer")
+    var c = recorder()
+
+    render(v, &c, SCREEN)
+
+    val text = snapshot(v, &c, SCREEN).dump()
+
+    assert(text.contains("group") && text.contains("tip=\"Outer\""), text)
+    assert(text.contains("button \"A\"") && text.contains("tip=\"Inner\""), text)
+end a_tip_on_a_group_is_reported_on_the_group
+
+// Taking a snapshot while a tip shows neither lists the transient tip nor disturbs it.
+@test
+private a_snapshot_leaves_a_showing_tip_alone()
+    var c = recorder()
+    val v = toolbar(signal(0))
+
+    rest_on(v, &c, 20, 10)
+
+    val text = snapshot(v, &c, SCREEN).dump()
+
+    assert(!text.contains("overlay"), text)
+    frame(v, &c, 0.016)
+    assert(shows(&c, ALPHA_TIP), c.dump())
+end a_snapshot_leaves_a_showing_tip_alone
+
+// A snapshot of a tree with no tips carries no `tip` key at all.
+@test
+private no_tip_is_no_tip_key()
+    var c = recorder()
+    val v = button("A", nothing())
+
+    render(v, &c, SCREEN)
+    assert(!snapshot(v, &c, SCREEN).to_json().contains("tip"), "no key")
+
+// ### Neighbours
+
+@test
+private a_tip_inside_a_scroll_escapes_its_clip()
+    var c = recorder()
+    val v = scroll(row([button("A", nothing()).frame(40, 24).tooltip("Alpha"), spacer()]), signal(0), 30)
+
+    rest_on(v, &c, 20, 10)
+    assert(shows(&c, ALPHA_TIP), c.dump())
+
+    val ops = c.ops.view()
+    var raised = false
+
+    for i in 0..<ops.len
+        if ops[i].starts_with("raise") then raised = true
+        if raised then assert(!ops[i].starts_with("clip"), "drawn after every clip is unwound")
+end a_tip_inside_a_scroll_escapes_its_clip
+
+@test
+private a_tip_inside_a_popover_shows_above_it()
+    var c = recorder()
+    val content = button("In", nothing()).frame(40, 24).tooltip("Alpha")
+    val v = corner(button("Open", nothing()).frame(40, 24).popover(signal(true), content, gap = 0))
+
+    rest_on(v, &c, 20, 34)
+    assert(shows(&c, "raise 0,52 42x19"), c.dump())
+end a_tip_inside_a_popover_shows_above_it
+
+@test
+private a_tip_inside_a_modal_shows_and_the_modal_still_blocks_beneath()
+    var c = recorder()
+    val ran = signal(0)
+    val content = button("In", nothing()).frame(40, 24).tooltip("Alpha")
+    val v = button("Behind", bump(ran)).modal(signal(true), content)
+
+    // The content is centred at (400 - 40) / 2 by (300 - 24) / 2, and its tip below it.
+    rest_on(v, &c, 200, 150)
+    assert(shows(&c, "raise 179,166 42x19"), c.dump())
+
+    // A click on the tip, which is over nothing but the modal's catcher, reaches the catcher.
+    c.point(200, 170, true)
+    c.release(200, 170)
+    frame(v, &c, 0.016)
+    assert_eq(ran.read(), 0)
+end a_tip_inside_a_modal_shows_and_the_modal_still_blocks_beneath
+
+// A view that draws its child at a scale, moved, so the tip can be checked under a transform.
+private struct Zoomed
+    child: &View
+    scale: real
+    dx: real
+    dy: real
+
+impl View for Zoomed
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        c.push_transform(self.scale, self.dx, self.dy)
+        self.child.paint(c, r)
+        c.pop_transform()
+
+// At a scale of two moved by ten, the 40x24 button lands at 10,10 80x48. Its tip is placed below it in
+// the view's own coordinates -- where the window, seen through the transform, runs from -5,-5 to
+// 195,145, so centring it one to the left needs no slide -- and drawn through the same transform.
+@test
+private a_tip_under_a_transform_follows_it()
+    var c = recorder()
+    val v = Zoomed(corner(button("A", nothing()).frame(40, 24).tooltip("Alpha")), 2.0, 10.0, 10.0)
+
+    rest_on(v, &c, 30, 20)
+    assert(shows(&c, "raise -1,28 42x19"), c.dump())
+    assert(shows(&c, "fill 8,66 84x38"), c.dump())
+end a_tip_under_a_transform_follows_it
+
+// The window seen through the transform ends at 145 in the view's coordinates, so a button at 120
+// flips its tip above, which it would not do at one to one.
+@test
+private a_tip_under_a_transform_is_kept_inside_the_window_it_lands_in()
+    var c = recorder()
+    val v = Zoomed(corner(column([text("").frame(1, 120),
+                                  button("A", nothing()).frame(40, 24).tooltip("Alpha")])),
+                   2.0, 10.0, 10.0)
+
+    rest_on(v, &c, 30, 270)
+    assert(shows(&c, "raise -1,97 42x19"), c.dump())
+end a_tip_under_a_transform_is_kept_inside_the_window_it_lands_in
+
+// ### Pixels
+
+private a_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end a_face
+
+// One premultiplied ARGB pixel, which PlutoVG stores little end first.
+private pixel(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+
+// A wide button with a short tip, so the point just inside the tip's top edge, at its middle, is the
+// panel and nothing else. The real font sets the tip's size; its top is 24 + 4 whatever the font.
+private pixel_check(scale: int)
+    val surf = plutovg.surface(200 * scale, 100 * scale).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), a_face(), 15.0)
+    val v = column([button("Wide", nothing()).frame(200, 24).tooltip("Hi")])
+    val t = dark()
+
+    c.vg.scale(f32(scale), f32(scale))
+    c.point(100, 10, false)
+    c.tick(0.016)
+    render(v, &c, Rect(0, 0, 200, 100))
+    assert_eq(pixel(surf, 100 * scale, 30 * scale), 0u32)
+
+    c.tick(TIP_DELAY + 0.1)
+    render(v, &c, Rect(0, 0, 200, 100))
+    assert_eq(pixel(surf, 100 * scale, 30 * scale), 0xFF000000u32 | t.panel)
+    assert_eq(pixel(surf, 100 * scale, 26 * scale), 0u32)
+end pixel_check
+
+@test
+private the_tip_is_painted_at_scale_one()
+    pixel_check(1)
+
+@test
+private the_tip_is_painted_at_scale_two()
+    pixel_check(2)

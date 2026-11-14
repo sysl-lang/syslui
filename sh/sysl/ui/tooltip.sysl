@@ -1,0 +1,183 @@
+module sh.sysl.ui
+
+// A hint that appears beside a view once the pointer has rested on it.
+//
+// **The view carrying the tip is a modifier, not a widget**, for the same reason `.on_tap` is: a
+// toolbar of icons needs its hints on whatever it already has, and a tip is something said *about*
+// a view rather than a view of its own.
+//
+// **The waiting is the canvas's, not the view's.** A tree is rebuilt every frame and remembers
+// nothing, so "the pointer has been here for half a second" has to live where the pointer already
+// does. It cannot be a `phase`: a phase seen for the first time starts settled, which is right for a
+// hover and exactly wrong for a delay -- a row scrolled under a resting pointer would pop its tip at
+// once. So the canvas keeps one `Tips`, ticked by the same `tick(dt)` that moves every animation, and
+// a test advances it by calling `tick` with no real time passing at all.
+
+// How long the pointer rests on a view before its tip appears, in seconds.
+const TIP_DELAY: real = 0.5
+
+// How soon after one tip was last shown the next appears with no delay, in seconds.
+//
+// **This is what lets a person read a toolbar by sliding along it**: once one tip has been waited
+// for, the neighbours answer at once. The gap between two buttons takes a frame or two to cross, so a
+// window this wide covers it with room to spare and still forgets after a pause.
+const TIP_HANDOFF: real = 0.5
+
+// How far the tip sits from the view it describes.
+const TIP_GAP: int = 4
+
+// Where the pointer is resting, for how long, and whether a tip has just been seen.
+//
+// **One per canvas, and the frame drives it in two halves**: `tick` at the start of a frame adds the
+// frame's time, and `rest`, asked by the tipped view under the pointer as it paints, says whether its
+// tip is due. A frame in which no tipped view asked is a frame the pointer was somewhere else.
+struct Tips
+    // The tipped view the pointer is resting on, where it landed, and whether there is one.
+    over: Rect
+    resting: bool
+
+    // How long the pointer has rested on `over`.
+    rested: real
+
+    // Whether a tipped view under the pointer asked during the frame being drawn.
+    asked: bool
+
+    // Whether a tip was raised during the frame being drawn.
+    raised: bool
+
+    // How long since a tip was last raised.
+    since: real
+
+    // A press or a key put the tip away; it stays away until the pointer leaves the view.
+    hushed: bool
+
+    // The window, which `render` records and a tip is kept inside.
+    window: Rect
+
+    // Start a frame worth `dt` seconds.
+    tick(*self, dt: real)
+        if self.asked
+            self.rested += dt
+        else
+            self.resting = false
+            self.hushed = false
+
+        self.since = if self.raised then 0.0 else self.since + dt
+        self.asked = false
+        self.raised = false
+    end tick
+
+    // The tipped view at `r` -- where it landed, after any transform -- has the pointer. Is its tip
+    // due? `poked` is a press, a tap or a key this frame, which puts the tip away.
+    //
+    // **The first to ask in a frame is the one answered**, and a tip asks after painting what it
+    // wraps, so of two tipped views one inside the other the inner one shows: it is the more specific.
+    rest(*self, r: Rect, poked: bool) -> bool
+        if self.asked then return false
+
+        self.asked = true
+
+        if !self.resting || self.over != r
+            self.over = r
+            self.resting = true
+            self.hushed = false
+            self.rested = if self.since < TIP_HANDOFF then TIP_DELAY else 0.0
+
+        if poked then self.hushed = true
+
+        val due = !self.hushed && self.rested >= TIP_DELAY
+
+        if due then self.raised = true
+
+        due
+    end rest
+end Tips
+
+tips() -> Tips = Tips(Rect(0, 0, 0, 0), false, 0.0, false, false, 1_000_000.0, false, EVERYWHERE)
+
+// A view with a hint: `child`, and `tip` beside it once the pointer has rested on it.
+//
+// **It reports the tip to a snapshot always, not only while it shows**, so a driver reading the
+// interface learns what an icon means without hovering it. An empty `tip` is no tip at all.
+struct Tooltip
+    child: &View
+    tip: string
+
+impl View for Tooltip
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    override weight(&self) -> int = self.child.weight()
+
+    override place(&self) -> (int, int) = self.child.place()
+
+    paint(&self, c: *Canvas, r: Rect)
+        if self.tip.len == 0
+            self.child.paint(c, r)
+            return
+
+        c.survey() match
+            Some(s) ->
+                s.open_tipped(self.tip, r)
+                self.child.paint(c, r)
+                s.close()
+            None ->
+                self.child.paint(c, r)
+                offer(self.tip, c, r)
+    end paint
+
+// Raise `tip` for the view at `r` if the pointer has rested there long enough.
+//
+// **Hover is asked of the rectangle and nothing else**, so a disabled button -- which takes no tap and
+// answers no hover of its own -- still shows its tip, which is how a person learns why it is disabled.
+private offer(tip: string, c: *Canvas, r: Rect)
+    if !c.hovered(r) then return
+
+    val k = c.tipping() match
+        Some(k) -> k
+        None -> return
+
+    val poked = c.held(PointerButton.Primary) || c.held(PointerButton.Secondary) ||
+                c.held(PointerButton.Middle) || c.tapped(r) || c.keys().len > 0
+
+    if !k.rest(c.transform().rect(r), poked) then return
+
+    val face: &View = TipFace(tip)
+    val t = c.transform()
+    val (x0, y0) = t.back(k.window.x, k.window.y)
+    val (x1, y1) = t.back(k.window.right(), k.window.bottom())
+
+    c.raise_above(face, tip_place(r, face.measure(c, Size(1_000_000, 1_000_000)),
+                                  Rect(x0, y0, x1 - x0, y1 - y0)))
+end offer
+
+// Where a tip of size `s` goes for a view at `r`, inside `bounds`.
+//
+// **Below and centred, flipped above where below would leave the bounds and above would not, and
+// slid sideways to stay inside them.** Where it fits neither way it stays below: it is an overlay,
+// so it is not clipped, and below is where the eye was going.
+private[ui] tip_place(r: Rect, s: Size, bounds: Rect) -> Rect
+    val below = r.bottom() + TIP_GAP
+    val above = r.y - TIP_GAP - s.h
+    val y = if below + s.h > bounds.bottom() && above >= bounds.y then above else below
+    var x = r.x + (r.w - s.w) / 2
+
+    if x + s.w > bounds.right() then x = bounds.right() - s.w
+    if x < bounds.x then x = bounds.x
+
+    Rect(x, y, s.w, s.h)
+end tip_place
+
+// The tip itself: a small panel with the hint in the theme's caption style.
+private struct TipFace
+    tip: string
+
+impl View for TipFace
+    measure(&self, c: *Canvas, avail: Size) -> Size = tip_face(c.theme(), self.tip).measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect) = tip_face(c.theme(), self.tip).paint(c, r)
+
+    // **A tip takes no input**, so a tip that lands over another control leaves it working.
+    override see_through(&self) -> bool = true
+
+private tip_face(t: Theme, tip: string) -> &View =
+    text(tip).text_style(TextStyle.Caption).pad(3, 6, 3, 6).panel().border(t.edge, 1, t.radius)
