@@ -257,7 +257,7 @@ private a_drag_stops_where_the_flexible_pane_reaches_its_minimum()
 end a_drag_stops_where_the_flexible_pane_reaches_its_minimum
 
 @test
-private a_drag_follows_the_pointer_back_after_it_went_past_a_limit_and_further_than_the_strip()
+private a_drag_held_at_a_limit_stays_the_rules_and_a_release_ends_it()
     val t = three()
     var c = recorder()
 
@@ -269,18 +269,47 @@ private a_drag_follows_the_pointer_back_after_it_went_past_a_limit_and_further_t
 
     assert_eq(t.left.read(), 498, "the flexible pane's minimum")
 
-    c.point(300, 50, true)
+    c.point(890, 50, true)
     render(t.view, &c, WIDE)
 
-    assert_eq(t.left.read(), 300, "the drag was still the rule's, though the rule had stopped at 500")
+    assert_eq(t.left.read(), 488, "still the rule's, a long way from the strip")
 
-    c.point(300, 50, false)
+    c.point(890, 50, false)
     render(t.view, &c, WIDE)
     c.point(10, 50, true)
     render(t.view, &c, WIDE)
 
-    assert_eq(t.left.read(), 300, "a release ends it")
-end a_drag_follows_the_pointer_back_after_it_went_past_a_limit_and_further_than_the_strip
+    assert_eq(t.left.read(), 488, "a release ends it")
+end a_drag_held_at_a_limit_stays_the_rules_and_a_release_ends_it
+
+// **The rule stays under the part of the strip that was grabbed**: pressed three points left of the
+// rule, it does not jump to the pointer, and once moving it follows one for one.
+@test
+private a_press_off_the_rules_centre_does_not_make_it_jump()
+    val t = three()
+    var c = recorder()
+
+    render(t.view, &c, WIDE)
+    c.point(237, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 240, "pressed")
+
+    c.point(237, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 240, "dragged by nothing")
+
+    c.point(247, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 250, "dragged by ten")
+
+    c.point(240, 50, true)
+    render(t.view, &c, WIDE)
+
+    assert_eq(t.left.read(), 243, "and back by seven")
+end a_press_off_the_rules_centre_does_not_make_it_jump
 
 @test
 private the_strip_is_seven_points_wide_and_only_a_press_on_it_drags()
@@ -289,7 +318,7 @@ private the_strip_is_seven_points_wide_and_only_a_press_on_it_drags()
         var c = recorder()
 
         drag_from(t, &c, WIDE, x, 400)
-        assert_eq(t.left.read(), 400, s"a press at ${x} is on the strip")
+        assert_eq(t.left.read(), 240 + 400 - x, s"a press at ${x} is on the strip")
 
     for x in [236, 244, 100, 500]
         val t = three()

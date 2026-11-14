@@ -36,7 +36,8 @@ import sysl.buf.{Buf, buf}
 private const GRAB_W: int = 7
 
 // How far the pointer must travel from where it went down before a press is a drag, so a click or
-// the pair of presses in a double-click moves nothing.
+// the pair of presses in a double-click moves nothing. The travel up to it is not lost: the rule then
+// moves by the whole distance from the press.
 private const GRAB_SLOP: int = 2
 
 // The slot in the canvas's single grab. A rectangle is the key, and slots tell two things sharing
@@ -235,16 +236,17 @@ struct Split
                 val (ox, oy) = c.press_origin()
                 val begun = c.held(PointerButton.Primary) && hr.holds(ox, oy)
 
-                if (begun || c.owns(sw, SPLIT_SLOT)) && c.grab(sw, SPLIT_SLOT)
-                    val (px, py) = c.pointer()
-                    val p = if self.vertical then py else px
-                    val from = if self.vertical then oy else ox
+                // **The drag is relative**: the canvas answers how far the pointer has travelled since
+                // the press, so the rule stays under the part of the strip that was grabbed, and
+                // nothing moves until the pointer is past the slop -- which is also why a click, and
+                // the second press of a double-click, change no width.
+                if begun || c.owns(sw, SPLIT_SLOT)
+                    val (dx, dy) = c.drag(sw, SPLIT_SLOT, GRAB_SLOP, GRAB_SLOP)
+                    val moved = if self.vertical then dy else dx
 
-                    // **Only a press that has travelled is a drag**, or a double-click's second press
-                    // would take the width from the pointer and undo the reset it just made.
-                    if (p - from).abs() > GRAB_SLOP
-                        val want = if k == d then p - st[d] else st[k] + ext[k] - 1 - p
-                        val now = limited(v, avail, k, want)
+                    if moved != 0
+                        val base = asked(v[k])
+                        val now = limited(v, avail, k, if k == d then base + moved else base - moved)
 
                         if now != s.read() then s.set(now)
 
