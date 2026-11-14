@@ -1,0 +1,241 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+
+// Where each line of a paragraph sits across the width it was given.
+enum Align
+    // Against the left edge, which is where a line of `text` starts.
+    Leading
+
+    // In the middle, as a caption under an icon is.
+    Centre
+
+    // Against the right edge.
+    Trailing
+end Align
+
+// The mark a cut-short last line ends in.
+private val ELLIPSIS: string = "…"
+
+// A leaf: text set in as many lines as the width it is given needs.
+//
+// **The lines are worked out by one function, at measure and again at paint, from the canvas's own
+// `text_size`**, so there is no second opinion about where a line breaks. They agree because the
+// breaking is greedy: a run is kept on a line exactly when it measures no wider than the line, so
+// any width between the widest line measured and the width measured against breaks at the same
+// places -- which is what a container that hands back the measured width, or something between it
+// and the width it offered, does.
+struct Paragraph
+    s: string
+    align: Align
+    max_lines: int
+
+impl View for Paragraph
+    // **As wide as its widest line, never wider than offered, and a line height per line.** An empty
+    // string is one empty line, which is what `text("")` measures to.
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        val v = wrap_lines(c, self.s, avail.w, self.max_lines).view()
+        var w = 0
+
+        for i in 0..<v.len
+            val lw = c.text_size(v[i]).w
+
+            if lw > w then w = lw
+
+        if w > avail.w then w = if avail.w > 0 then avail.w else 0
+
+        Size(w, int(v.len) * c.text_size("").h)
+    end measure
+
+    // **Centred vertically in what it is given, as `text` is**, so a paragraph that fits on one line
+    // paints exactly what `text` would. A line wholly outside the clip is not drawn, which is what
+    // keeps a long paragraph in a scroll cheap.
+    paint(&self, c: *Canvas, r: Rect)
+        val v = wrap_lines(c, self.s, r.w, self.max_lines).view()
+        val lh = c.text_size("").h
+        val h = int(v.len) * lh
+        val top = if h >= r.h then r.y else r.y + (r.h - h) / 2
+
+        // A snapshot reports the whole string once, as `text` reports its run: what a driver searches
+        // for is what the caller wrote, not where it happened to break.
+        c.survey() match
+            Some(_) ->
+                c.text(Rect(r.x, top, r.w, if h >= r.h then r.h else h), self.s)
+                return
+            None -> ()
+
+        for i in 0..<v.len
+            val y = top + int(i) * lh
+            val bottom = if y + lh > r.y + r.h then r.y + r.h else y + lh
+
+            if bottom <= y then return
+
+            val lw = c.text_size(v[i]).w
+            val slack = if r.w > lw then r.w - lw else 0
+            val off = self.align match
+                Leading -> 0
+                Centre -> slack / 2
+                Trailing -> slack
+            val box = Rect(r.x + off, y, r.w - off, bottom - y)
+
+            if c.visible(box) then c.text(box, v[i])
+    end paint
+
+// The lines `s` is set in at `width`, measured by `c`.
+//
+// Lines break at an ASCII space and at every `\n`; spaces at a break belong to neither line, and a
+// line never ends in one. A word wider than the line is cut between characters -- never inside a
+// UTF-8 sequence -- with at least one character on each line, so nothing overflows but a single
+// character wider than the whole line. A width of nothing breaks only at `\n`. With `max_lines`
+// above nothing, the lines past it go and the last kept one ends in an ellipsis, shortened by
+// characters until the two fit.
+private[ui] wrap_lines(c: *Canvas, s: string, width: int, max_lines: int = 0) -> Buf[string]
+    var out: Buf[string] = buf()
+    val b = s.bytes
+    var at = 0usize
+
+    loop
+        var stop = at
+
+        while stop < s.len && b[stop] != u8('\n')
+            stop += 1
+
+        if width <= 0 then out.push(trimmed(s[at..<stop])) else soft_lines(c, s[at..<stop], width, &out)
+        if stop >= s.len then break
+
+        at = stop + 1
+
+    if max_lines <= 0 || int(out.view().len) <= max_lines then return out
+
+    val v = out.view()
+    var kept: Buf[string] = buf()
+
+    for i in 0..<usize(max_lines - 1)
+        kept.push(v[i])
+
+    kept.push(ellipsized(c, v[usize(max_lines - 1)], width))
+    kept
+end wrap_lines
+
+// One line of `s` -- which holds no `\n` -- broken to `width`, onto `out`.
+private soft_lines(c: *Canvas, s: string, width: int, out: *Buf[string])
+    val b = s.bytes
+    var at = 0usize
+    var first = true
+
+    loop
+        // Where the first word from here starts and stops.
+        var w0 = at
+
+        while w0 < s.len && b[w0] == u8(' ')
+            w0 += 1
+
+        if w0 >= s.len
+            // Only spaces left: the end of the line, or the whole of an empty one.
+            if first then out.push("")
+            return
+
+        var w1 = w0
+
+        while w1 < s.len && b[w1] != u8(' ')
+            w1 += 1
+
+        var fit = at
+
+        if c.text_size(s[at..<w1]).w <= width
+            fit = w1
+
+            // Then as many more whole words as still fit.
+            loop
+                var n0 = fit
+
+                while n0 < s.len && b[n0] == u8(' ')
+                    n0 += 1
+
+                if n0 >= s.len then break
+
+                var n1 = n0
+
+                while n1 < s.len && b[n1] != u8(' ')
+                    n1 += 1
+
+                if c.text_size(s[at..<n1]).w > width then break
+
+                fit = n1
+
+            out.push(s[at..<fit])
+            first = false
+            at = fit
+
+            while at < s.len && b[at] == u8(' ')
+                at += 1
+
+            if at >= s.len then return
+        else
+            // The word does not fit even alone: as many of its characters as do, and at least one.
+            var cut = next_char(b, w0)
+            var k = next_char(b, cut)
+
+            while k <= w1 && c.text_size(s[at..<k]).w <= width
+                cut = k
+                k = next_char(b, k)
+
+            out.push(s[at..<cut])
+            first = false
+            at = cut
+end soft_lines
+
+// The byte offset of the character after the one starting at `i`; past the end, one past it.
+private next_char(b: []const u8, i: usize) -> usize
+    var k = i + 1
+
+    while k < b.len && (b[k] & 0xC0) == 0x80
+        k += 1
+
+    k
+end next_char
+
+// `s` without its trailing spaces.
+private trimmed(s: string) -> string
+    val b = s.bytes
+    var n = s.len
+
+    while n > 0 && b[n - 1] == u8(' ')
+        n -= 1
+
+    s[0..<n]
+end trimmed
+
+// `line` with an ellipsis after as much of it as leaves room for one.
+private ellipsized(c: *Canvas, line: string, width: int) -> string
+    val b = line.bytes
+    var n = line.len
+
+    loop
+        val cand = trimmed(line[0..<n]) + ELLIPSIS
+
+        if n == 0 || width <= 0 || c.text_size(cand).w <= width then return cand
+
+        n -= 1
+
+        while n > 0 && (b[n] & 0xC0) == 0x80
+            n -= 1
+end ellipsized
+
+// Text that wraps to the width it is given.
+//
+// **A separate leaf rather than a flag on `text`**, because it is a different bargain with layout:
+// `text` is as wide as its run whatever it is offered, and a paragraph takes the width offered and
+// answers with a height. Keeping them apart keeps every `text` measuring and drawing exactly as it
+// did. It breaks at spaces and at `\n`, cuts a word too long for a line between characters, and
+// honours `text_style`, `font_size` and `foreground` as `text` does.
+//
+//     column([text("Inspector").text_style(TextStyle.Title),
+//             paragraph("Select a shape to change its size, position and colour.")], 4)
+//
+//     paragraph("Half\nsphere", align = Align.Centre).text_style(TextStyle.Caption)
+//
+// `max_lines` above nothing keeps that many lines and ends the last in an ellipsis -- a status line
+// is `paragraph(message, max_lines = 1)`.
+paragraph(s: string, align: Align = Align.Leading, max_lines: int = 0) -> &View =
+    Paragraph(s, align, max_lines)
