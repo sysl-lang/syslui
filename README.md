@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.2.3" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.2.4" }
 }
 ```
 
