@@ -1,0 +1,278 @@
+module sh.sysl.ui
+@tests
+
+import sysl.buf.{Buf, buf}
+import sh.sysl.plutovg
+
+// ## `button_with`: a button whose face holds a view
+
+private glyph() -> Path
+    var p = path()
+
+    p.move_to(0.25, 0.25)
+    p.line_to(0.75, 0.25)
+    p.line_to(0.75, 0.75)
+    p.line_to(0.25, 0.75)
+    p.close()
+    p.fill()
+    p.no_stroke()
+    p
+end glyph
+
+private val WIN: Rect = Rect(0, 0, 400, 800)
+
+private shot_of(v: &View) -> Snapshot
+    var c = recorder()
+
+    render(v, &c, WIN)
+    snapshot(v, &c, WIN)
+end shot_of
+
+private recorded(v: &View, r: Rect) -> string
+    var c = recorder()
+
+    v.paint(&c, r)
+    c.dump()
+end recorded
+
+private const DIM: int = 55
+
+// The colour a button's label is drawn in, which is what its content must be drawn in.
+private label_colour(role: Role, variant: Variant, enabled: bool) -> u32
+    val t = dark()
+    val base = if enabled then t.color(role) else mix(t.color(role), t.panel, DIM)
+
+    variant match
+        Filled -> t.on_fill
+        Soft -> lighten(base, 20)
+        Outline -> base
+        Dashed -> base
+end label_colour
+
+private variants() -> [4]Variant = [Variant.Filled, Variant.Soft, Variant.Outline, Variant.Dashed]
+
+// **Every variant, enabled and not, with a glyph alone and with a glyph over a label**: the glyph and
+// the caption are in the same ink, and that ink is the one `button` gives its text.
+@test
+private the_content_is_drawn_in_the_label_colour_in_every_variant_and_state()
+    val vs = variants()
+
+    for i in 0..<vs.len
+        for e in 0..<2
+            val on = e == 0
+            val want = label_colour(Role.Primary, vs[i], on)
+            val alone = recorded(button_with(icon([glyph()], 10), () -> (), .Primary, vs[i], on), Rect(0, 0, 40, 28))
+            val both = recorded(button_with(column([icon([glyph()], 10), text("Go")], 2), () -> (), .Primary,
+                                            vs[i], on), Rect(0, 0, 60, 48))
+
+            assert(alone.contains(s"ink #${want}\n"), s"ink, glyph alone, variant ${i} enabled ${on}:\n${alone}")
+            assert(alone.contains(s"of 1 fill #${want} "), s"glyph colour, variant ${i} enabled ${on}:\n${alone}")
+            assert(both.contains(s"ink #${want}\n") && both.contains(s"of 1 fill #${want} ") &&
+                   both.contains("'Go'"), s"glyph and label, variant ${i} enabled ${on}:\n${both}")
+            assert(alone.contains("hit ") == on, s"a disabled button registers no hit, variant ${i}")
+
+            // The text button of the same state is the reference for the colour itself.
+            val plain = recorded(button("Go", () -> (), .Primary, vs[i], on), Rect(0, 0, 60, 28))
+
+            assert(plain.contains(s"ink #${want}\n"), s"the text button agrees, variant ${i} enabled ${on}")
+end the_content_is_drawn_in_the_label_colour_in_every_variant_and_state
+
+@test
+private the_face_is_buttons_own_around_any_content()
+    val t = dark()
+    val a = recorded(button_with(text("hi"), () -> ()), Rect(0, 0, 100, 28))
+
+    assert(a == recorded(button("hi", () -> ()), Rect(0, 0, 100, 28)), "text content is button")
+    assert(button_with(icon([glyph()], 16), () -> ()).measure(&blind(), Size(500, 500)) ==
+           Size(16 + 2 * t.pad, 16 + 2 * t.pad), "padded by the theme's pad: a glyph and a margin")
+end the_face_is_buttons_own_around_any_content
+
+@test
+private an_icon_button_follows_the_theme()
+    val v = button_with(icon([glyph()], 10), () -> ())
+
+    assert(recorded(v.restyle(t -> light()), Rect(0, 0, 30, 30)).contains(s"of 1 fill #${light().on_fill} "),
+           "light")
+    assert(recorded(v.restyle(t -> dark()), Rect(0, 0, 30, 30)).contains(s"of 1 fill #${dark().on_fill} "),
+           "dark")
+end an_icon_button_follows_the_theme
+
+@test
+private hover_lifts_the_ground_and_lights_the_outline_of_an_icon_button()
+    val t = dark()
+    var away = recorder()
+    var over = recorder()
+
+    over.point(15, 15)
+
+    val filled = button_with(icon([glyph()], 10), () -> ())
+    val line = button_with(icon([glyph()], 10), () -> (), .Primary, .Outline)
+
+    filled.paint(&away, Rect(0, 0, 30, 30))
+    filled.paint(&over, Rect(0, 0, 30, 30))
+    assert(away.dump().contains(s"fill 0,0 30x30 #${t.primary} ") &&
+           over.dump().contains(s"fill 0,0 30x30 #${lighten(t.primary, t.hover_lift)} "), "the filled lifts")
+
+    var a2 = recorder()
+    var o2 = recorder()
+
+    o2.point(15, 15)
+    line.paint(&a2, Rect(0, 0, 30, 30))
+    line.paint(&o2, Rect(0, 0, 30, 30))
+    assert(a2.dump().contains(s"of 1 fill #${t.primary} "), "outline at rest")
+    assert(o2.dump().contains(s"of 1 fill #${lighten(t.primary, t.hover_lift)} "), "and the glyph lit with it")
+end hover_lifts_the_ground_and_lights_the_outline_of_an_icon_button
+
+@test
+private a_press_sinks_the_ground_of_an_icon_button()
+    val t = dark()
+    var c = recorder()
+    val v = button_with(icon([glyph()], 10), () -> ())
+
+    c.point(15, 15, true)
+    v.paint(&c, Rect(0, 0, 30, 30))
+
+    val sunk = darken(lighten(t.primary, t.hover_lift), t.press_sink)
+
+    assert(c.dump().contains(s"fill 0,0 30x30 #${sunk} "), c.dump())
+end a_press_sinks_the_ground_of_an_icon_button
+
+private bumps(n: &Signal[int]) -> &Fn() -> unit = () -> n.set(n.read() + 1)
+
+@test
+private a_tap_on_an_icon_button_fires_and_a_disabled_one_ignores_it()
+    val n = signal(0)
+    var c = recorder()
+    val live = button_with(icon([glyph()], 10), bumps(n), label = "go").named("live")
+
+    render(live, &c, WIN)
+
+    val (x, y) = snapshot(live, &c, WIN).click_point("live").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    assert(n.read() == 1, "a tap")
+
+    var d = recorder()
+    val dead = button_with(icon([glyph()], 10), bumps(n), enabled = false, label = "go").named("dead")
+
+    render(dead, &d, WIN)
+
+    val (x2, y2) = snapshot(dead, &d, WIN).click_point("dead").unwrap()
+
+    d.point(x2, y2, true)
+    d.release(x2, y2)
+    assert(n.read() == 1, "a disabled one does not")
+end a_tap_on_an_icon_button_fires_and_a_disabled_one_ignores_it
+
+// ## The snapshot
+
+private find_button(s: Snapshot, label: string) -> Option[Entry]
+    val v = s.entries.view()
+    var found: Option[Entry] = None
+
+    for i in 0..<v.len
+        if v[i].role == "button" && v[i].label == label then found = Some(v[i])
+
+    found
+end find_button
+
+@test
+private an_icon_button_is_a_button_named_by_its_label()
+    val s = shot_of(row([button_with(icon([glyph()], 16), () -> (), label = "Undo"),
+                         button_with(icon([glyph()], 16), () -> (), enabled = false, label = "Redo")], 4))
+
+    assert(find_button(s, "Undo").is_some(), s.dump())
+    assert(find_button(s, "Undo").unwrap().marks == "", s.dump())
+    assert(find_button(s, "Redo").is_some(), s.dump())
+    assert(find_button(s, "Redo").unwrap().marks == "disabled", s.dump())
+end an_icon_button_is_a_button_named_by_its_label
+
+@test
+private words_in_the_content_are_the_label_and_an_icon_with_no_label_has_none()
+    val s = shot_of(row([button_with(column([icon([glyph()], 10), text("Box")], 2), () -> ()),
+                         button_with(icon([glyph()], 10), () -> ())], 4))
+
+    assert(find_button(s, "Box").is_some(), s.dump())
+    assert(find_button(s, "").is_some(), s.dump())
+end words_in_the_content_are_the_label_and_an_icon_with_no_label_has_none
+
+@test
+private an_icon_button_can_be_found_and_clicked_through_a_scroll_and_a_modal()
+    val n = signal(0)
+    val inner = button_with(icon([glyph()], 16), bumps(n), label = "tap").named("t")
+    val v = scroll(column([spacer().frame(10, 30), inner]), signal(0), 100)
+    var c = recorder()
+
+    render(v, &c, WIN)
+
+    val (x, y) = snapshot(v, &c, WIN).click_point("t").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    assert(n.read() == 1, "in a scroll")
+
+    var m = recorder()
+    val dlg = text("page").modal(signal(true), button_with(icon([glyph()], 16), bumps(n), label = "ok").named("ok"))
+
+    render(dlg, &m, WIN)
+
+    val (mx, my) = snapshot(dlg, &m, WIN).click_point("ok").unwrap()
+
+    m.point(mx, my, true)
+    m.release(mx, my)
+    assert(n.read() == 2, "in a modal")
+end an_icon_button_can_be_found_and_clicked_through_a_scroll_and_a_modal
+
+@test
+private an_empty_or_zero_content_still_makes_a_button()
+    assert(button_with(spacer(), () -> ()).measure(&blind(), Size(100, 100)).w >= 2 * dark().pad, "empty")
+    assert(button_with(icon([glyph()], 0), () -> (), label = "z").measure(&blind(), Size(100, 100)) ==
+           Size(2 * dark().pad, 2 * dark().pad), "zero-size icon")
+end an_empty_or_zero_content_still_makes_a_button
+
+// ## The real backend: the glyph's pixels are the label's colour, at both densities
+
+private some_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end some_face
+
+private argb(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+
+// A 20-point glyph in a 36-point square button: its middle is at 18, whatever the density.
+private glyph_pixel(variant: Variant, enabled: bool, k: int) -> u32
+    val surf = plutovg.surface(36 * k, 36 * k).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+
+    c.vg.scale(f32(k), f32(k))
+    button_with(icon([glyph()], 20), () -> (), .Primary, variant, enabled).paint(&c, Rect(0, 0, 36, 36))
+    argb(surf, 18 * k, 18 * k)
+end glyph_pixel
+
+private opaque(c: u32) -> u32 = 0xFF000000u32 | c
+
+@test
+private the_glyph_is_in_the_label_colour_on_the_real_canvas_at_both_densities()
+    val vs = variants()
+
+    for k in 1..<3
+        for i in 0..<vs.len
+            for e in 0..<2
+                val on = e == 0
+                val got = glyph_pixel(vs[i], on, k)
+                val want = opaque(label_colour(Role.Primary, vs[i], on))
+
+                assert(got == want, s"variant ${i} enabled ${on} scale ${k}: got ${got} want ${want}")
+end the_glyph_is_in_the_label_colour_on_the_real_canvas_at_both_densities
