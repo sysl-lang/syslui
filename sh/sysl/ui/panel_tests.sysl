@@ -184,3 +184,49 @@ private outline_pixels_are_the_theme_colour_at_both_densities()
             assert(pixel(v, ts[i], k, 20, 0) == opaque(ts[i].edge), s"top edge theme ${i} scale ${k}")
             assert(pixel(v, ts[i], k, 20, 15) == WINDOW | 0xFF000000u32, s"interior untouched theme ${i} scale ${k}")
 end outline_pixels_are_the_theme_colour_at_both_densities
+
+// ## A border's ink lies wholly inside its rectangle, at any width and density
+
+@test
+private a_border_is_whole_pixels_at_widths_one_and_three_in_both_themes_and_densities()
+    val ts = themes()
+
+    for k in 1..<3
+        for i in 0..<2
+            for w in [1, 3]
+                val v = spacer().outline(t -> t.edge, w)
+                val e = opaque(ts[i].edge)
+                val win = opaque(WINDOW)
+
+                for j in 0..<w
+                    assert(pixel(v, ts[i], k, j, 15) == e, s"left col ${j} w${w} theme ${i} scale ${k}")
+                    assert(pixel(v, ts[i], k, 39 - j, 15) == e, s"right col ${j} w${w} theme ${i} scale ${k}")
+                    assert(pixel(v, ts[i], k, 20, j) == e, s"top row ${j} w${w} theme ${i} scale ${k}")
+                    assert(pixel(v, ts[i], k, 20, 29 - j) == e, s"bottom row ${j} w${w} theme ${i} scale ${k}")
+
+                assert(pixel(v, ts[i], k, w, 15) == win, s"inside of w${w} untouched theme ${i} scale ${k}")
+end a_border_is_whole_pixels_at_widths_one_and_three_in_both_themes_and_densities
+
+@test
+private a_rounded_and_a_dashed_border_keep_their_shape_on_the_real_canvas()
+    val ts = themes()
+
+    for k in 1..<3
+        for i in 0..<2
+            val e = opaque(ts[i].edge)
+            val round = spacer().outline(t -> t.edge, 1, 8)
+
+            assert(pixel(round, ts[i], k, 20, 0) == e, s"round top edge scale ${k}")
+            assert(pixel(round, ts[i], k, 0, 15) == e, s"round left edge scale ${k}")
+            assert(pixel(round, ts[i], k, 0, 0) == opaque(WINDOW), s"corner is cut by the curve scale ${k}")
+
+            val dashed = spacer().outline(t -> t.edge, 2, 0, 4)
+
+            var inked = 0
+            var bare = 0
+
+            for y in 4..<26
+                if pixel(dashed, ts[i], k, 0, y) == e then inked += 1 else bare += 1
+
+            assert(inked > 0 && bare > 0, s"dashes and gaps along the left edge scale ${k}: ${inked}/${bare}")
+end a_rounded_and_a_dashed_border_keep_their_shape_on_the_real_canvas

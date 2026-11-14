@@ -227,7 +227,16 @@ impl Canvas for PlutoCanvas
         self.use(color)
         self.vg.line_width(f32(width))
         self.dashes(dash)
-        self.path(stroke_box(r, width), stroke_radius(radius, width))
+        val b = stroke_box(r, width)
+        val k = stroke_radius(radius, width)
+
+        self.vg.begin()
+
+        if k <= 0.0 then
+            self.vg.rect(f32(b.0), f32(b.1), f32(b.2), f32(b.3))
+        else
+            self.vg.round_rect(f32(b.0), f32(b.1), f32(b.2), f32(b.3), f32(k), f32(k))
+
         self.vg.stroke()
 
     // A run of text with its top-left at `r`, clipped to `r`.
@@ -633,26 +642,29 @@ private sizing(face: &plutovg.Font, pt: f32) -> &Sizing
 // Named `fraction` rather than `unit`, which is a type conversion.
 fraction(color: u32, shift: u32) -> f32 = f32(int((color >> shift) & 0xFF)) / 255.0
 
-// Where a border of `width` is actually drawn, given the rectangle it was asked for.
+// Where a border of `width` is actually drawn, given the rectangle it was asked for, as
+// `(x, y, w, h)` in points.
 //
 // **PlutoVG centres a stroke on its path**, so a border asked for on the rectangle itself would put
 // half of its ink outside and bleed into whatever sits next to the view. Insetting by half the width
 // puts the whole of it inside the rectangle layout settled on, which is what lets a border be added
-// to a view without moving anything around it.
-stroke_box(r: Rect, width: int) -> Rect
-    val half = width / 2
+// to a view without moving anything around it. **The half is a real, not an integer half**: a
+// one-point border is inset by 0.5, so its ink is one whole row of pixels and not a half-covered
+// pair straddling the edge.
+stroke_box(r: Rect, width: int) -> (real, real, real, real)
+    val half = real(width) / 2.0
 
-    Rect(r.x + half, r.y + half, r.w - 2 * half, r.h - 2 * half)
+    (real(r.x) + half, real(r.y) + half, real(r.w) - 2.0 * half, real(r.h) - 2.0 * half)
 
 // And the radius that inset corner needs.
 //
 // A corner moved in by `half` has a radius smaller by the same amount, or the *outer* edge of the
 // stroke would not follow the fill it is sitting on -- which is the visible failure: a border that
 // is round where its background is square, or the other way about.
-stroke_radius(radius: int, width: int) -> int
-    val half = width / 2
+stroke_radius(radius: int, width: int) -> real
+    val half = real(width) / 2.0
 
-    if radius > half then radius - half else 0
+    if real(radius) > half then real(radius) - half else 0.0
 
 // How tall a line of this face is.
 //
