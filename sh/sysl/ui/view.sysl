@@ -195,6 +195,25 @@ trait View
     // The same, for the colour of a `Role`: `.ground_role(Role.Accent)`.
     ground_role(&self, role: Role, radius: int = 0) -> &View = Ground(self, t -> t.color(role), radius)
 
+    // Outline this view in a colour the *current theme* picks, drawn exactly as `border` draws.
+    //
+    // The themed counterpart to `border(color, ...)`, which names a colour and cannot follow a
+    // restyle or dark mode. The theme's own separator colour is `t.edge`, light and dark:
+    //
+    //     panel.outline(t -> t.edge)             // the hairline a dialog wears, in either theme
+    //     panel.outline(t -> t.edge, 2, 8)       // thicker, with rounded corners
+    //     panel.outline(t -> t.edge, 1, 0, 4)    // dashed
+    //
+    // Named `outline` rather than `border_*` because the pick is the point; the colour is resolved
+    // in the theme in force where it paints, so a `.restyle(...)` above it changes it.
+    @answers(pick)
+    outline(&self, pick: &Fn(Theme) -> u32, width: int = 1, radius: int = 0, dash: int = 0) -> &View =
+        Outline(self, pick, width, radius, dash)
+
+    // The same, for the colour of a `Role`: `.outline_role(Role.Accent)`.
+    outline_role(&self, role: Role, width: int = 1, radius: int = 0, dash: int = 0) -> &View =
+        Outline(self, t -> t.color(role), width, radius, dash)
+
     // How much of a container's leftover room this view wants, relative to its siblings.
     //
     // **Zero for everything but a `Spacer` and a view wrapped by `.flex(n)`, and that is what makes

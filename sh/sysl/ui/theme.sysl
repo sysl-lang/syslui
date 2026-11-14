@@ -368,3 +368,19 @@ impl View for Ground
     paint(&self, c: *Canvas, r: Rect)
         c.fill(r, (self.pick)(c.theme()), self.radius)
         self.child.paint(c, r)
+
+// An outline in a colour the current theme picks: `Border` with the colour resolved where it paints,
+// over the child as `Border` is.
+struct Outline
+    child: &View
+    pick: &Fn(Theme) -> u32
+    width: int
+    radius: int
+    dash: int
+
+impl View for Outline
+    measure(&self, c: *Canvas, avail: Size) -> Size = self.child.measure(c, avail)
+
+    paint(&self, c: *Canvas, r: Rect)
+        self.child.paint(c, r)
+        c.stroke(r, (self.pick)(c.theme()), self.width, self.radius, self.dash)
