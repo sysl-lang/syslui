@@ -583,6 +583,11 @@ impl Canvas for Survey
 
         if self.clips.shows(self.xforms.now().rect(r)) then self.leaf("image", r)
 
+    // Counted and nothing more: the `icon` that drew it has already reported itself, with its label.
+    override draw_path(*self, r: Rect, view: real, steps: []const PathStep, fill: Option[u32],
+                       stroke: Option[(u32, real)])
+        self.drew += 1
+
     clip(*self, r: Rect) = self.clips.push(self.xforms.now().rect(r))
 
     unclip(*self) = self.clips.pop()

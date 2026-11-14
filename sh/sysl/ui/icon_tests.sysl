@@ -1,0 +1,504 @@
+module sh.sysl.ui
+@tests
+
+import sysl.buf.{Buf, buf}
+import sysl.math.tau
+import sysl.text.Search
+import sh.sysl.plutovg
+
+// ## `icon`: a path as data, the view, the canvas member, and the real backend
+//
+// The glyph most tests draw is `diamond()`: four lines and a close in a box one wide, so its recording
+// is short enough to read and its middle is solid when filled.
+
+private diamond() -> Path
+    var p = path()
+
+    p.move_to(0.5, 0)
+    p.line_to(1, 0.5)
+    p.line_to(0.5, 1)
+    p.line_to(0, 0.5)
+    p.close()
+    p
+end diamond
+
+private val DIAMOND = "M0.5,0 L1,0.5 L0.5,1 L0,0.5 Z"
+
+private solid(p: Path) -> Path
+    var q = p
+
+    q.fill()
+    q.no_stroke()
+    q
+end solid
+
+private ink() -> u32 = dark().ink
+
+private drawn(v: &View, r: Rect) -> string
+    var c = recorder()
+
+    v.paint(&c, r)
+    c.dump()
+end drawn
+
+private assert_drawn(v: &View, r: Rect, expected: string)
+    val got = drawn(v, r)
+
+    assert(got == expected, s"expected:\n${expected}got:\n${got}")
+
+// ## The path is data
+
+@test
+private a_path_records_its_steps_in_order_with_no_canvas()
+    var p = path()
+
+    p.move_to(1, 2)
+    p.line_to(3, 4)
+    p.quad_to(5, 6, 7, 8)
+    p.cubic_to(1, 2, 3, 4, 5, 6)
+    p.arc(5, 5, 2, 0, 1.5)
+    p.arc_to(2, 3, 30, true, false, 9, 9)
+    p.close()
+
+    val v = p.steps.view()
+
+    assert(v.len == 7, "seven steps")
+    assert(v[0] == PathStep.Move(1.0, 2.0) && v[6] == PathStep.Close, "first and last")
+    assert(v[4] == PathStep.Arc(5.0, 5.0, 2.0, 0.0, 1.5, false), "the arc, clockwise by default")
+    assert(v[5] == PathStep.ArcTo(2.0, 3.0, 30.0, true, false, 9.0, 9.0), "the SVG arc")
+    assert(p.inside == Paint.Clear && p.outline == Paint.Ink && p.width == 1.5, "an inked outline")
+end a_path_records_its_steps_in_order_with_no_canvas
+
+@test
+private a_circle_is_a_subpath_of_its_own()
+    var p = path()
+
+    p.circle(0.5, 0.5, 0.25)
+
+    val v = p.steps.view()
+
+    assert(v.len == 3 && v[0] == PathStep.Move(0.75, 0.5) && v[2] == PathStep.Close, "move, arc, close")
+    assert(v[1] == PathStep.Arc(0.5, 0.5, 0.25, 0.0, tau, false), "a whole turn")
+
+// ## Measuring
+
+@test
+private an_icon_measures_to_its_size_whatever_it_is_offered()
+    var c = recorder()
+
+    assert(icon([diamond()], 24).measure(&c, Size(400, 400)) == Size(24, 24), "its size")
+    assert(icon([diamond()], 24).measure(&c, Size(10, 10)) == Size(24, 24), "not shrunk")
+    assert(icon([diamond()], 0).measure(&c, Size(400, 400)) == Size(0, 0), "zero")
+    assert(icon([diamond()], -5).measure(&c, Size(400, 400)) == Size(0, 0), "a negative size is zero")
+    assert(icon([], 16).measure(&c, Size(400, 400)) == Size(16, 16), "an empty icon still holds its room")
+
+// ## Painting
+
+@test
+private an_icon_draws_its_path_in_the_ink_at_its_box()
+    assert_drawn(icon([diamond()], 20), Rect(10, 10, 20, 20),
+                 s"path 10,10 20x20 of 1 stroke #${ink()} w1.5 ${DIAMOND}\n")
+
+@test
+private an_icon_is_centred_in_a_larger_rectangle_and_stays_square()
+    assert_drawn(icon([diamond()], 20), Rect(0, 0, 100, 40),
+                 s"path 40,10 20x20 of 1 stroke #${ink()} w1.5 ${DIAMOND}\n")
+
+@test
+private the_view_box_is_passed_through_and_the_steps_kept_in_its_coordinates()
+    var p = path()
+
+    p.move_to(4, 12)
+    p.line_to(20, 12)
+
+    assert_drawn(icon([p], 18, view = 24.0), Rect(0, 0, 18, 18),
+                 s"path 0,0 18x18 of 24 stroke #${ink()} w1.5 M4,12 L20,12\n")
+
+@test
+private every_step_is_recorded_as_svg_would_spell_it()
+    var p = path()
+
+    p.move_to(0, 0)
+    p.quad_to(0.5, 0, 1, 1)
+    p.cubic_to(0, 0.25, 0.5, 0.75, 1, 0)
+    p.arc(0.5, 0.5, 0.5, 0, 1.5, true)
+    p.arc_to(0.5, 0.25, 45, false, true, 0, 1)
+    p.close()
+
+    assert_drawn(icon([p], 10), Rect(0, 0, 10, 10),
+                 s"path 0,0 10x10 of 1 stroke #${ink()} w1.5 M0,0 Q0.5,0 1,1 C0,0.25 0.5,0.75 1,0 " +
+                 "R0.5,0.5 0.5 0 1.5 ccw A0.5,0.25 45 0 1 0,1 Z\n")
+end every_step_is_recorded_as_svg_would_spell_it
+
+@test
+private each_path_is_filled_and_stroked_as_it_says()
+    var both = diamond()
+    var red = diamond()
+    var accent = diamond()
+    var none = diamond()
+    var hairless = diamond()
+
+    both.fill()
+    both.stroke(2.0)
+    red.fill(Paint.Solid(0xFF0000))
+    red.no_stroke()
+    accent.stroke(1.0, Paint.Tone(Role.Accent))
+    none.no_stroke()
+    hairless.stroke(0.0)
+
+    assert_drawn(icon([both, red, accent, none, hairless], 10), Rect(0, 0, 10, 10),
+                 s"path 0,0 10x10 of 1 fill #${ink()} stroke #${ink()} w2 ${DIAMOND}\n" +
+                 s"path 0,0 10x10 of 1 fill #${0xFF0000} ${DIAMOND}\n" +
+                 s"path 0,0 10x10 of 1 stroke #${dark().accent} w1 ${DIAMOND}\n")
+end each_path_is_filled_and_stroked_as_it_says
+
+// ## The theme and the text colour
+
+@test
+private the_ink_follows_the_theme_light_and_dark()
+    assert(dark().ink != light().ink, "the two themes differ, or this proves nothing")
+    assert_drawn(icon([diamond()], 10).restyle(t -> light()), Rect(0, 0, 10, 10),
+                 s"path 0,0 10x10 of 1 stroke #${light().ink} w1.5 ${DIAMOND}\n")
+    assert_drawn(icon([diamond()], 10).restyle(t -> dark()), Rect(0, 0, 10, 10),
+                 s"path 0,0 10x10 of 1 stroke #${dark().ink} w1.5 ${DIAMOND}\n")
+
+    var tone = diamond()
+
+    tone.stroke(1.0, Paint.Tone(Role.Primary))
+
+    assert_drawn(icon([tone], 10).restyle(t -> light()), Rect(0, 0, 10, 10),
+                 s"path 0,0 10x10 of 1 stroke #${light().primary} w1 ${DIAMOND}\n")
+end the_ink_follows_the_theme_light_and_dark
+
+@test
+private a_foreground_colours_the_glyph_and_a_solid_colour_ignores_it()
+    var fixed = solid(diamond())
+
+    fixed.fill(Paint.Solid(0x00FF00))
+
+    assert_drawn(column([icon([diamond()], 10), icon([fixed], 10)]).foreground(0x123456), Rect(0, 0, 10, 20),
+                 s"ink #${0x123456}\npath 0,0 10x10 of 1 stroke #${0x123456} w1.5 ${DIAMOND}\n" +
+                 s"path 0,10 10x10 of 1 fill #${0x00FF00} ${DIAMOND}\nunink\n")
+
+// A button's face sets the ink around its content, so a glyph inside that face is the colour of the
+// label and turns with it.
+@test
+private inside_a_filled_face_the_glyph_takes_the_label_colour()
+    val face = row([icon([diamond()], 10), text("Undo")], 4).padding(4).background(dark().primary, 6)
+        .foreground(dark().on_fill)
+
+    assert_drawn(face, Rect(0, 0, 60, 18),
+                 s"ink #${dark().on_fill}\nfill 0,0 60x18 #${dark().primary} r6\n" +
+                 s"path 4,4 10x10 of 1 stroke #${dark().on_fill} w1.5 ${DIAMOND}\n" +
+                 "text 18,4 32x10 'Undo'\nunink\n")
+
+// ## The edge cases
+
+@test
+private nothing_is_drawn_for_nothing()
+    assert_drawn(icon([diamond()], 0), Rect(0, 0, 10, 10), "")
+    assert_drawn(icon([diamond()], -3), Rect(0, 0, 10, 10), "")
+    assert_drawn(icon([], 10), Rect(0, 0, 10, 10), "")
+    assert_drawn(icon([diamond()], 10, view = 0.0), Rect(0, 0, 10, 10), "")
+    assert_drawn(icon([diamond()], 10, view = -1.0), Rect(0, 0, 10, 10), "")
+
+    var clear = diamond()
+
+    clear.no_stroke()
+    assert_drawn(icon([clear], 10), Rect(0, 0, 10, 10), "")
+end nothing_is_drawn_for_nothing
+
+@test
+private an_empty_path_is_still_recorded_and_a_huge_icon_is_not_clamped()
+    assert_drawn(icon([path()], 10), Rect(0, 0, 10, 10), s"path 0,0 10x10 of 1 stroke #${ink()} w1.5\n")
+    assert_drawn(icon([diamond()], 100000), Rect(0, 0, 100000, 100000),
+                 s"path 0,0 100000x100000 of 1 stroke #${ink()} w1.5 ${DIAMOND}\n")
+
+// ## The snapshot
+
+private snap(v: &View, c: *Recorder) -> Snapshot
+    render(v, c, Rect(0, 0, 200, 100))
+    snapshot(v, c, Rect(0, 0, 200, 100))
+
+@test
+private an_icon_is_a_leaf_with_its_label()
+    var c = recorder()
+    var d = recorder()
+    val said = snap(icon([diamond()], 16, label = "Undo"), &c)
+    val unsaid = snap(icon([diamond()], 16), &d)
+
+    assert(said.len() == 1 && said.dump().contains("icon \"Undo\" [92,42 16x16]"), said.dump())
+    assert(unsaid.len() == 1 && unsaid.dump().contains("icon [92,42 16x16]"), unsaid.dump())
+
+// **A tile is a composition**: an icon over its label, padded, tappable. It is found by name, reported
+// with the icon and the text inside it, and a click at the point the snapshot gives lands.
+private tile(taps: &Signal[int]) -> &View =
+    column([icon([diamond()], 24, label = "Cube"), text("Cube")], 4).padding(4)
+        .on_tap(() -> taps.set(taps.read() + 1)).named("shapes.cube")
+
+@test
+private a_tile_of_icon_and_text_is_findable_and_takes_a_tap()
+    var c = recorder()
+    val taps = signal(0)
+    val v = tile(taps)
+    val s = snap(v, &c)
+
+    // The text beside the glyph is the tile's label, as a button's caption is, and the icon is a
+    // labelled entry inside it.
+    assert(s.dump() == "@1 tappable \"Cube\" name=shapes.cube [0,0 200x100]\n  @2 icon \"Cube\" [88,4 24x24]\n",
+           s.dump())
+
+    val (x, y) = s.click_point("shapes.cube").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    assert(taps.read() == 1, "the tap landed")
+
+    // The icon's own entry is reachable too, and a click there is a click on the tile.
+    val (ix, iy) = snap(v, &c).click_point("@1").unwrap()
+
+    c.taps.reset()
+    render(v, &c, Rect(0, 0, 200, 100))
+    c.point(ix, iy, true)
+    c.release(ix, iy)
+    assert(taps.read() == 2, "the icon is part of what takes the tap")
+end a_tile_of_icon_and_text_is_findable_and_takes_a_tap
+
+// A glyph-only toolbar button, reacting to the pointer the way `button` does.
+@test
+private an_icon_toolbar_button_lights_under_the_pointer()
+    var c = recorder()
+    val taps = signal(0)
+    val v = reactive((i, t) -> icon([diamond()], 16, label = "Undo").padding(4)
+        .background(if i.hover > 0.5 then t.alt else t.panel, 4))
+        .on_tap(() -> taps.set(taps.read() + 1)).named("toolbar.undo")
+
+    render(v, &c, Rect(0, 0, 24, 24))
+    assert(c.dump().contains(s"fill 0,0 24x24 #${dark().panel} r4"), c.dump())
+
+    c.point(12, 12, false)
+    c.ops.clear()
+    render(v, &c, Rect(0, 0, 24, 24))
+    assert(c.dump().contains(s"fill 0,0 24x24 #${dark().alt} r4"), c.dump())
+
+    val (x, y) = snapshot(v, &c, Rect(0, 0, 24, 24)).click_point("toolbar.undo").unwrap()
+
+    c.point(x, y, true)
+    c.release(x, y)
+    assert(taps.read() == 1, "tapped")
+end an_icon_toolbar_button_lights_under_the_pointer
+
+// ## The neighbours
+
+@test
+private inside_a_scroll_an_icon_moves_with_it_and_one_out_of_sight_is_not_drawn()
+    val offset = signal(30)
+    val v = scroll(column([icon([diamond()], 20), icon([diamond()], 20), icon([diamond()], 20)]), offset, 20)
+    val got = drawn(v, Rect(0, 0, 40, 20))
+
+    assert(got.contains(s"path 10,-10 20x20 of 1 stroke #${ink()} w1.5"), got)
+    assert(got.contains(s"path 10,10 20x20 of 1 stroke #${ink()} w1.5"), got)
+    assert(!got.contains("path 10,-30"), s"the first is scrolled away and culled:\n${got}")
+end inside_a_scroll_an_icon_moves_with_it_and_one_out_of_sight_is_not_drawn
+
+@test
+private inside_a_modal_an_icon_is_raised_and_drawn_above_and_reported()
+    var c = recorder()
+    val open = signal(true)
+    val v = text("page").modal(open, icon([diamond()], 20, label = "Warn"))
+
+    render(v, &c, Rect(0, 0, 100, 100))
+    assert(c.dump().contains(s"path 40,40 20x20 of 1 stroke #${ink()} w1.5 ${DIAMOND}"), c.dump())
+
+    val s = snapshot(v, &c, Rect(0, 0, 100, 100)).dump()
+
+    assert(s.contains("icon \"Warn\" [40,40 20x20]"), s)
+end inside_a_modal_an_icon_is_raised_and_drawn_above_and_reported
+
+@test
+private inside_a_popover_an_icon_is_drawn_below_its_anchor()
+    var c = recorder()
+    val open = signal(true)
+    val v = text("anchor").popover(open, icon([diamond()], 10))
+
+    render(v, &c, Rect(0, 0, 100, 100))
+    assert(c.dump().contains(s"path 0,104 10x10 of 1 stroke #${ink()} w1.5"), c.dump())
+
+@test
+private under_a_transform_the_box_lands_where_a_rectangle_would()
+    var c = recorder()
+
+    c.push_transform(2.0, 5.0, 5.0)
+    icon([diamond()], 10).paint(&c, Rect(0, 0, 10, 10))
+    c.fill(Rect(0, 0, 10, 10), 1)
+    c.pop_transform()
+
+    assert(c.dump() == s"transform 2 5,5\npath 5,5 20x20 of 1 stroke #${ink()} w1.5 ${DIAMOND}\n" +
+                       "fill 5,5 20x20 #1\nuntransform\n", c.dump())
+
+// An icon wholly outside the clip asks the canvas for nothing, as a container's culled child does.
+@test
+private an_icon_outside_the_clip_is_not_drawn()
+    var c = recorder()
+
+    c.clip(Rect(0, 0, 10, 10))
+    icon([diamond()], 10).paint(&c, Rect(50, 50, 10, 10))
+    icon([diamond()], 10).paint(&c, Rect(5, 5, 10, 10))
+    c.unclip()
+
+    assert(c.dump() == s"clip 0,0 10x10\npath 5,5 10x10 of 1 stroke #${ink()} w1.5 ${DIAMOND}\nunclip\n",
+           c.dump())
+
+// The blind canvas has no path: the default draws nothing, and the icon still measures.
+@test
+private a_backend_without_paths_draws_nothing_and_measures_the_same()
+    var b = blind()
+
+    icon([diamond()], 12).paint(&b, Rect(0, 0, 12, 12))
+    assert(icon([diamond()], 12).measure(&b, Size(100, 100)) == Size(12, 12), "measured")
+
+// ## The real backend
+
+private some_face() -> &plutovg.Font
+    val found = ["/System/Library/Fonts/Supplemental/Arial.ttf",
+                 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+    var face: Option[&plutovg.Font] = None
+
+    for i in 0..<found.len
+        if face.is_none() then face = plutovg.font(found[i])
+
+    assert(face.is_some(), "a face to measure with")
+    face.unwrap()
+end some_face
+
+// One premultiplied ARGB pixel, which PlutoVG stores little end first.
+private argb(s: &plutovg.Surface, x: int, y: int) -> u32
+    val d = s.data()
+    val at = usize(y * s.stride() + x * 4)
+
+    u32(d[at]) | (u32(d[at + 1]) << 8) | (u32(d[at + 2]) << 16) | (u32(d[at + 3]) << 24)
+
+// A square from a quarter to three quarters of its box, filled.
+private square() -> Path
+    var p = path()
+
+    p.move_to(0.25, 0.25)
+    p.line_to(0.75, 0.25)
+    p.line_to(0.75, 0.75)
+    p.line_to(0.25, 0.75)
+    p.close()
+    solid(p)
+end square
+
+// The square of a 20-point icon covers points 5 to 14; at a pixel scale of `k` that is device pixels
+// `5k` to `15k - 1`, and nothing either side.
+private a_filled_square_lands_on_whole_pixels(k: int)
+    val surf = plutovg.surface(40 * k, 40 * k).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+    var red = square()
+
+    red.fill(Paint.Solid(0xFF0000))
+    c.vg.scale(f32(k), f32(k))
+    icon([red], 20).paint(&c, Rect(0, 0, 20, 20))
+
+    assert(argb(surf, 5 * k, 5 * k) == 0xFFFF0000u32 && argb(surf, 15 * k - 1, 15 * k - 1) == 0xFFFF0000u32,
+           s"inside at scale ${k}")
+    assert(argb(surf, 5 * k - 1, 5 * k) == 0 && argb(surf, 15 * k, 10 * k) == 0 &&
+           argb(surf, 10 * k, 15 * k) == 0, s"and not beyond at scale ${k}")
+end a_filled_square_lands_on_whole_pixels
+
+@test
+private the_real_backend_fills_a_path_at_scale_one()
+    a_filled_square_lands_on_whole_pixels(1)
+
+@test
+private the_real_backend_fills_a_path_at_scale_two()
+    a_filled_square_lands_on_whole_pixels(2)
+
+// A horizontal stroke two points wide across the middle of a 20-point icon in a 24 view: it covers
+// y 9 to 10 in points, which is 18 to 21 at a pixel scale of two -- so the stroke is in points of the
+// icon, not in the view's units, and doubles in device pixels with the density.
+@test
+private a_stroke_is_as_wide_in_points_at_every_density()
+    for k in 1..<3
+        val surf = plutovg.surface(40 * k, 40 * k).unwrap()
+        var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+        var p = path()
+
+        p.move_to(6, 12)
+        p.line_to(18, 12)
+        p.stroke(2.0, Paint.Solid(0x0000FF))
+        c.vg.scale(f32(k), f32(k))
+        icon([p], 20, view = 24.0).paint(&c, Rect(0, 0, 20, 20))
+
+        assert(argb(surf, 10 * k, 9 * k) == 0xFF0000FFu32 && argb(surf, 10 * k, 11 * k - 1) == 0xFF0000FFu32,
+               s"the line at scale ${k}")
+        assert(argb(surf, 10 * k, 9 * k - 1) == 0 && argb(surf, 10 * k, 11 * k) == 0,
+               s"two points wide and no more at scale ${k}")
+end a_stroke_is_as_wide_in_points_at_every_density
+
+// **Joins and caps are round.** A V drawn in a 24 view at 24 points, two wide, has its apex at (12, 4):
+// a mitre would reach 2.2 points above it, into the pixel row at 2, and a round join reaches 1 and stops
+// at 3. Each end of the line from 6 to 18 is capped by a half circle reaching a point beyond it, where
+// a butt cap would stop dead.
+@test
+private joins_and_caps_are_round()
+    val surf = plutovg.surface(30, 30).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+    var v = path()
+    var bar = path()
+
+    v.move_to(4, 20)
+    v.line_to(12, 4)
+    v.line_to(20, 20)
+    v.stroke(2.0, Paint.Solid(0x0000FF))
+    bar.move_to(6, 26)
+    bar.line_to(18, 26)
+    bar.stroke(2.0, Paint.Solid(0x0000FF))
+    icon([v, bar], 24, view = 24.0).paint(&c, Rect(0, 0, 24, 24))
+
+    assert(argb(surf, 12, 3) != 0, "the join is drawn")
+    assert(argb(surf, 11, 2) == 0 && argb(surf, 12, 2) == 0, "and is not a mitre")
+    assert(argb(surf, 5, 25) != 0 && argb(surf, 18, 25) != 0, "both ends capped round, past the line")
+    assert(argb(surf, 4, 25) == 0 && argb(surf, 19, 25) == 0, "by no more than half the width")
+end joins_and_caps_are_round
+
+// The glyph follows the canvas's transform and clip as a rectangle does.
+@test
+private the_real_backend_draws_a_path_under_a_push_and_inside_a_clip()
+    val surf = plutovg.surface(60, 60).unwrap()
+    var c = pluto_canvas(plutovg.canvas(surf).unwrap(), some_face(), 15.0)
+    var red = square()
+
+    red.fill(Paint.Solid(0xFF0000))
+    c.push_transform(2.0, 4.0, 4.0)
+    c.clip(Rect(0, 0, 10, 20))
+    icon([red], 20).paint(&c, Rect(0, 0, 20, 20))
+    c.unclip()
+    c.pop_transform()
+
+    assert(argb(surf, 14, 14) == 0xFFFF0000u32 && argb(surf, 23, 33) == 0xFFFF0000u32, "scaled and moved")
+    assert(argb(surf, 24, 14) == 0, "cut by the clip")
+    assert(argb(surf, 13, 14) == 0 && argb(surf, 14, 34) == 0, "and not beyond")
+end the_real_backend_draws_a_path_under_a_push_and_inside_a_clip
+
+// **The round join is set inside a save**, so the square border drawn after an icon keeps its mitred
+// corner -- the corner pixel of a thick stroke is covered by a miter and not by a round join.
+@test
+private a_path_leaves_the_stroke_state_as_it_found_it()
+    val after = plutovg.surface(40, 40).unwrap()
+    val alone = plutovg.surface(40, 40).unwrap()
+    var a = pluto_canvas(plutovg.canvas(after).unwrap(), some_face(), 15.0)
+    var b = pluto_canvas(plutovg.canvas(alone).unwrap(), some_face(), 15.0)
+
+    a.stroke(Rect(0, 0, 12, 12), 0x00FF00, 2, 0, 3)
+    icon([diamond()], 10).paint(&a, Rect(20, 20, 10, 10))
+    a.stroke(Rect(20, 0, 16, 16), 0xFF0000, 6)
+    b.stroke(Rect(20, 0, 16, 16), 0xFF0000, 6)
+
+    for y in 0..<16
+        for x in 20..<36
+            assert(argb(after, x, y) == argb(alone, x, y), s"at ${x},${y}")
+
+    assert(argb(after, 20, 0) == 0xFFFF0000u32, "a mitred corner fills its corner pixel")
+end a_path_leaves_the_stroke_state_as_it_found_it

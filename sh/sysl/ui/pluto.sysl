@@ -5,6 +5,7 @@ import sysl.container.{Map, map}
 import sh.sysl.plutovg
 import sh.sysl.plutovg.c as native
 import sysl.math.Float
+import sysl.math.tau
 
 // The real backend: a frame drawn into a plutovg surface.
 //
@@ -178,6 +179,23 @@ struct PlutoCanvas
             self.vg.rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h))
         else
             self.vg.round_rect(f32(r.x), f32(r.y), f32(r.w), f32(r.h), f32(radius), f32(radius))
+
+    // The current path, as an icon's steps in its own coordinates.
+    private trace(*self, steps: []const PathStep)
+        self.vg.begin()
+
+        for i in 0..<steps.len
+            steps[i] match
+                Move(x, y) -> self.vg.move_to(f32(x), f32(y))
+                Line(x, y) -> self.vg.line_to(f32(x), f32(y))
+                Quad(x1, y1, x, y) -> self.vg.quad_to(f32(x1), f32(y1), f32(x), f32(y))
+                Cubic(x1, y1, x2, y2, x, y) ->
+                    self.vg.cubic_to(f32(x1), f32(y1), f32(x2), f32(y2), f32(x), f32(y))
+                Arc(cx, cy, r, a0, a1, ccw) -> self.vg.arc(f32(cx), f32(cy), f32(r), f32(a0), f32(a1), ccw)
+                ArcTo(rx, ry, rot, large, sweep, x, y) ->
+                    self.vg.arc_to(f32(rx), f32(ry), f32(rot * tau / 360.0), large, sweep, f32(x), f32(y))
+                Close -> self.vg.close_path()
+    end trace
 
     // A rectangle of the view's, where it lands through the transforms in force.
     private placed(*self, r: Rect) -> Rect = self.xforms.now().rect(r)
@@ -464,6 +482,45 @@ impl Canvas for PlutoCanvas
         self.vg.fill()
         self.vg.restore()
     end draw_image
+
+    // **The steps are traced through PlutoVG's own matrix, scaled from the icon's box to `r`**, so
+    // they land under every push and every clip exactly as a rectangle does, and at the device's
+    // pixel scale the rasterizer traces the curve itself rather than enlarging one traced smaller.
+    // The stroke width is divided by the same scale so that it comes out in points of `r`.
+    //
+    // Joins, caps and the dash are canvas state, so they are set inside a save and the `restore`
+    // hands the next border back exactly what it found; the path is emptied before it, since PlutoVG
+    // keeps the path outside its saved state.
+    override draw_path(*self, r: Rect, view: real, steps: []const PathStep, fill: Option[u32],
+                       stroke: Option[(u32, real)])
+        if r.w <= 0 || r.h <= 0 || view <= 0.0 || steps.len == 0 then return
+
+        val sx = real(r.w) / view
+
+        self.vg.save()
+        self.vg.translate(f32(r.x), f32(r.y))
+        self.vg.scale(f32(sx), f32(real(r.h) / view))
+        self.trace(steps)
+
+        fill match
+            Some(k) ->
+                self.use(k)
+                self.vg.fill_preserve()
+            None -> ()
+
+        stroke match
+            Some((k, w)) ->
+                self.use(k)
+                self.vg.line_width(f32(w / sx))
+                self.vg.line_join(plutovg.LineJoin.Round)
+                self.vg.line_cap(plutovg.LineCap.Round)
+                self.dashes(0)
+                self.vg.stroke_preserve()
+            None -> ()
+
+        self.vg.begin()
+        self.vg.restore()
+    end draw_path
 
     raise_above(*self, v: &View, at: Rect)
         val on = self.tints.view()

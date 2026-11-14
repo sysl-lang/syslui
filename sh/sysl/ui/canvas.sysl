@@ -420,6 +420,20 @@ trait Canvas
     draw_native_image(*self, x: int, y: int, img: &Image) =
         self.draw_image(Rect(x,y,img.width(),img.height()),img,0)
 
+    // Trace `steps`, given in a square box `view` wide, into `r`, then fill it in `fill` and stroke it
+    // `stroke.1` points wide in `stroke.0`, round-joined and round-capped -- either, both, or neither.
+    //
+    // **This is the shape the header refuses, and it is admitted on the terms `draw_image` was**: an
+    // icon is not expressible as rectangles at any price, and the default draws nothing, so a backend
+    // with no rasterizer shows a frame with the glyph missing rather than a wrong one. Nothing in the
+    // toolkit's own controls draws through it; only an `icon` an application asked for does.
+    //
+    // **The stroke width is in points of `r`, not in the steps' coordinates**, so a 24-wide icon and a
+    // 1-wide one drawn the same size have the same weight of line. `r` is square for an icon; one that
+    // is not stretches the drawing and measures the stroke along `x`.
+    draw_path(*self, r: Rect, view: real, steps: []const PathStep, fill: Option[u32],
+              stroke: Option[(u32, real)]) = ()
+
     // ## A scale and a translation for everything drawn and everything asked about the pointer
     //
     // **Draw a picture made in fixed pixels at another size without changing how it looks.** Every
@@ -665,6 +679,21 @@ end Recorder
 // A radius, written only when there is one.
 private radii(radius: int) -> string = if radius == 0 then "" else s" r${radius}"
 
+// One step of a path as SVG would spell it, with `R` for a circular arc SVG has no letter for.
+private step_text(s: PathStep) -> string = s match
+    Move(x, y) -> s"M${number(x)},${number(y)}"
+    Line(x, y) -> s"L${number(x)},${number(y)}"
+    Quad(x1, y1, x, y) -> s"Q${number(x1)},${number(y1)} ${number(x)},${number(y)}"
+    Cubic(x1, y1, x2, y2, x, y) ->
+        s"C${number(x1)},${number(y1)} ${number(x2)},${number(y2)} ${number(x)},${number(y)}"
+    Arc(cx, cy, r, a0, a1, ccw) ->
+        s"R${number(cx)},${number(cy)} ${number(r)} ${number(a0)} ${number(a1)}" + (if ccw then " ccw" else "")
+    ArcTo(rx, ry, rot, large, sweep, x, y) ->
+        s"A${number(rx)},${number(ry)} ${number(rot)} ${flag(large)} ${flag(sweep)} ${number(x)},${number(y)}"
+    Close -> "Z"
+
+private flag(b: bool) -> string = if b then "1" else "0"
+
 // **A fixed advance a byte, and it is a lie meant to be one.** A real font measures with
 // `TTF_GetStringSize`; this is stable, which is what a test wants, and wrong for anything but
 // ASCII, which is what keeps anybody from mistaking it for a font.
@@ -869,6 +898,28 @@ impl Canvas for Recorder
 
         self.ops.push(s"image ${at.x},${at.y} ${at.w}x${at.h} of ${img.width()}x${img.height()}" +
                       radii(radius))
+
+    // **The steps are written in the icon's own coordinates, beside the box they land in and the
+    // `view` that box stands for**, which is exact where the landed points would be fractions: a test
+    // reads `M0.5,0.1 L0.9,0.3` as it was written and sees the box move with layout and transforms.
+    override draw_path(*self, r: Rect, view: real, steps: []const PathStep, fill: Option[u32],
+                       stroke: Option[(u32, real)])
+        val at = self.placed(r)
+        var line = s"path ${at.x},${at.y} ${at.w}x${at.h} of ${number(view)}"
+
+        fill match
+            Some(k) -> line = line + s" fill #${k}"
+            None -> ()
+
+        stroke match
+            Some((k, w)) -> line = line + s" stroke #${k} w${number(w)}"
+            None -> ()
+
+        for i in 0..<steps.len
+            line = line + " " + step_text(steps[i])
+
+        self.ops.push(line)
+    end draw_path
 
     // **Recorded as well as kept**, so a test can see that something was raised without having to
     // run a whole frame through `render` -- which is the difference between asserting that a menu

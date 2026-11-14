@@ -1,0 +1,199 @@
+module sh.sysl.ui
+
+import sysl.buf.{Buf, buf}
+import sysl.math.tau
+
+// A small drawing made of paths, sharp at any size: a cube on a shape tile, an arrow on an undo
+// button.
+//
+// **A picture would not do, and the reason is that an icon has two jobs a picture cannot.** It has
+// to be as crisp at a pixel scale of two as at one, which a bitmap is only if somebody drew it twice;
+// and it has to be the colour of the text around it, so a toolbar follows the theme and a button's
+// glyph turns with its label when the pointer comes over it. A path is both for free: it is traced
+// at whatever scale the canvas is in, and it is filled in whatever colour is asked for at paint time.
+//
+// **The path is plain data, built with no canvas in sight**, so an application writes its icons as
+// functions returning `Path` and keeps them beside the rest of its vocabulary. The coordinates are
+// the icon's own -- a box `view` wide, `1.0` unless the icon says otherwise -- which is what lets one
+// copied from an SVG keep its numbers: `icon([undo()], 18, view = 24.0)` for one drawn on a 24 grid.
+//
+// **`Canvas.draw_path` draws nothing by default**, the rule every optional drawing member follows:
+// a backend that cannot trace a curve shows a frame with the glyph missing and the label beside it
+// still there, which is a plainer frame rather than a wrong one.
+
+// One step of a path, in the icon's own coordinates.
+enum PathStep derives Eq
+    // Start a new subpath at a point, without drawing to it.
+    Move(x: real, y: real)
+
+    Line(x: real, y: real)
+
+    // A quadratic Bezier through one control point.
+    Quad(x1: real, y1: real, x: real, y: real)
+
+    // A cubic Bezier through two control points.
+    Cubic(x1: real, y1: real, x2: real, y2: real, x: real, y: real)
+
+    // A circular arc about `(cx, cy)` from angle `a0` to `a1` in radians, angles growing clockwise on
+    // the screen (y points down), or the other way round with `ccw`. A line joins it to the point the
+    // path was at; with none, the arc begins the subpath.
+    Arc(cx: real, cy: real, r: real, a0: real, a1: real, ccw: bool)
+
+    // An elliptical arc to `(x, y)` in SVG's own terms -- the `A` command, rotation in degrees -- so a
+    // path copied out of an SVG keeps its numbers.
+    ArcTo(rx: real, ry: real, rotation: real, large: bool, sweep: bool, x: real, y: real)
+
+    // A straight line back to where the subpath began, joined rather than capped.
+    Close
+end PathStep
+
+// What a path is filled or stroked with.
+//
+// **`Ink` is the default and the point**: the colour text is being drawn in right now, which is the
+// theme's ink, or whatever a `.foreground` or a button's face has pushed over it -- so a glyph inside
+// a button is the colour of the button's label and changes with it.
+enum Paint derives Eq
+    // Not painted at all.
+    Clear
+
+    // The current text colour, `Canvas.text_ink`.
+    Ink
+
+    // A colour of the theme's, so an icon in `.Accent` follows a restyle as a button does.
+    Tone(role: Role)
+
+    // A fixed 0xRRGGBB, which no theme can reach -- for the red of a stop sign, not for chrome.
+    Solid(color: u32)
+end Paint
+
+// A shape and how it is painted: the steps, a fill, and a stroke `width` points wide.
+//
+// **The stroke width is in points, not in the icon's coordinates**, so a set of icons drawn at
+// different sizes has one weight of line, the way a set of type does; and points are what the canvas
+// scales to device pixels, so a line is as heavy at a pixel scale of two as at one.
+//
+// **A new path is an outline in the ink, 1.5 points wide, unfilled**, the common case for interface
+// glyphs; `fill` and `stroke` change either half, and `no_stroke` makes it a solid shape.
+struct Path
+    steps: Buf[PathStep]
+    inside: Paint
+    outline: Paint
+    width: real
+
+    move_to(*self, x: real, y: real) = self.steps.push(PathStep.Move(x, y))
+
+    line_to(*self, x: real, y: real) = self.steps.push(PathStep.Line(x, y))
+
+    quad_to(*self, x1: real, y1: real, x: real, y: real) = self.steps.push(PathStep.Quad(x1, y1, x, y))
+
+    cubic_to(*self, x1: real, y1: real, x2: real, y2: real, x: real, y: real) =
+        self.steps.push(PathStep.Cubic(x1, y1, x2, y2, x, y))
+
+    arc(*self, cx: real, cy: real, r: real, a0: real, a1: real, ccw: bool = false) =
+        self.steps.push(PathStep.Arc(cx, cy, r, a0, a1, ccw))
+
+    arc_to(*self, rx: real, ry: real, rotation: real, large: bool, sweep: bool, x: real, y: real) =
+        self.steps.push(PathStep.ArcTo(rx, ry, rotation, large, sweep, x, y))
+
+    close(*self) = self.steps.push(PathStep.Close)
+
+    // A whole circle as a subpath of its own.
+    circle(*self, cx: real, cy: real, r: real)
+        self.steps.push(PathStep.Move(cx + r, cy))
+        self.steps.push(PathStep.Arc(cx, cy, r, 0.0, tau, false))
+        self.steps.push(PathStep.Close)
+
+    // Fill the inside, nonzero winding: a hole is a subpath going the other way round.
+    fill(*self, p: Paint = Paint.Ink) = self.inside = p
+
+    stroke(*self, width: real = 1.5, p: Paint = Paint.Ink)
+        self.width = width
+        self.outline = p
+
+    no_stroke(*self) = self.outline = Paint.Clear
+end Path
+
+// An empty path: an outline in the ink, 1.5 points wide, unfilled, until its methods say otherwise.
+path() -> Path = Path(buf(), Paint.Clear, Paint.Ink, 1.5)
+
+// The view.
+struct Icon
+    paths: Buf[Path]
+    size: int
+    view: real
+    label: string
+
+impl View for Icon
+    measure(&self, c: *Canvas, avail: Size) -> Size
+        val s = if self.size < 0 then 0 else self.size
+
+        Size(s, s)
+
+    // **Drawn at its own size, centred in what it is given**, so a glyph in a row that stretches it
+    // stays square and in the middle rather than growing to the row.
+    paint(&self, c: *Canvas, r: Rect)
+        val s = if self.size < 0 then 0 else self.size
+        val box = Rect(r.x + (r.w - s) / 2, r.y + (r.h - s) / 2, s, s)
+
+        c.survey() match
+            Some(n) ->
+                n.open("icon", box, Words.Ignored)
+                if self.label.len > 0 then n.label(self.label)
+                n.close()
+            None -> ()
+
+        if s == 0 || self.view <= 0.0 || !c.visible(box) then return
+
+        val v = self.paths.view()
+
+        for i in 0..<v.len
+            val fill = resolved(c, v[i].inside)
+            val stroke = if v[i].width <= 0.0 then None else resolved(c, v[i].outline)
+
+            if fill.is_some() || stroke.is_some()
+                c.draw_path(box, self.view, v[i].steps.view(), fill, stroke match
+                    Some(k) -> Some((k, v[i].width))
+                    None -> None)
+    end paint
+
+// The colour a paint means on this canvas right now, or nothing for `Clear`.
+private resolved(c: *Canvas, p: Paint) -> Option[u32] = p match
+    Clear -> None
+    Ink -> Some(c.text_ink())
+    Tone(role) -> Some(c.theme().color(role))
+    Solid(color) -> Some(color)
+
+// Some paths drawn as one glyph `size` points square, in a box `view` wide in the paths' own
+// coordinates. `label` is what a snapshot calls it: an icon with nothing written beside it is still
+// findable as `icon` with that label.
+//
+// **A tile is a composition, not a widget** -- an icon over a short label, padded, tappable, and
+// lit under the pointer the way `button` is, through `reactive`:
+//
+//     cube() -> Path
+//         var p = path()
+//
+//         p.move_to(0.5, 0.1)
+//         p.line_to(0.9, 0.3)
+//         p.line_to(0.9, 0.7)
+//         p.line_to(0.5, 0.9)
+//         p.line_to(0.1, 0.7)
+//         p.line_to(0.1, 0.3)
+//         p.close()
+//         p
+//     end cube
+//
+//     reactive((i, t) -> column([icon([cube()], 32, label = "Cube"), text("Cube")], 4)
+//         .padding(6)
+//         .background(if i.hover > 0.5 then t.alt else t.panel, t.radius))
+//         .on_tap(add_cube)
+//
+// and a toolbar button is the same with no text: `icon([undo()], 18, view = 24.0, label = "Undo")
+// .padding(6).on_tap(undo).named("toolbar.undo")`. The glyph is drawn in the current ink, so inside a
+// `.foreground(...)` or any face that sets the text colour it takes that colour with the text.
+icon(paths: []const Path, size: int, view: real = 1.0, label: string = "") -> &View
+    var b: Buf[Path] = buf()
+
+    b.extend(paths)
+    Icon(b, size, view, label)
+end icon
