@@ -79,6 +79,9 @@ struct Entry
     // Something raised above it would take a click anywhere on it.
     covered: bool
 
+    // The hint `.tooltip` gives it, empty where there is none -- reported whether or not it is showing.
+    tip: string
+
     // The middle of the part that can be seen, which a click at this point is inside.
     centre(self) -> (int, int) = (self.shown.x + self.shown.w / 2, self.shown.y + self.shown.h / 2)
 
@@ -89,8 +92,9 @@ struct Entry
         val cut = if self.shown == self.rect then "" else s" shown ${at_text(self.shown)}"
         val holds = if self.value.len > 0 then s" value=${quoted(self.value)}" else ""
         val state = if self.marks.len > 0 then s" ${self.marks}" else ""
+        val hint = if self.tip.len > 0 then s" tip=${quoted(self.tip)}" else ""
 
-        s"@${self.id} ${self.role}${said}${called} ${at_text(self.rect)}${cut}${holds}${state}"
+        s"@${self.id} ${self.role}${said}${called} ${at_text(self.rect)}${cut}${holds}${state}${hint}"
     end line
 end Entry
 
@@ -237,6 +241,12 @@ struct Snapshot
             out.push(",\"depth\":")
             out.push_int(e.depth)
             json_marks(&out, e)
+
+            // Only where there is one, so an interface with no tooltips reads exactly as it did.
+            if e.tip.len > 0
+                out.push(",\"tip\":")
+                json_string(&out, e.tip)
+
             out.push("}")
             chain.push(e.id)
 
@@ -299,6 +309,9 @@ struct Node
 
     // Whether it registered a tap region, so that a region registered after it can sit on top of it.
     taps: bool
+
+    // The hint a `.tooltip` gave it.
+    tip: string
 end Node
 
 // Something raised above the tree, and how many nodes were opened before it, which it is above.
@@ -386,6 +399,14 @@ struct Survey
         self.opened.push(i)
     end open_named
 
+    // Open the entry a `.tooltip` view stands for, which `close` settles the way it settles a name.
+    open_tipped(*self, tip: string, r: Rect)
+        val i = self.add(NAMED, r, Words.Own, "", "")
+
+        self.nodes[i] = self.nodes.view()[i] with { tip = tip }
+        self.opened.push(i)
+    end open_tipped
+
     // An entry with nothing inside it.
     leaf(*self, role: string, r: Rect, value: string = "", marks: string = "")
         self.open(role, r, Words.Ignored, value, marks)
@@ -453,8 +474,15 @@ struct Survey
         if out_of_sight
             self.drop(at, n.parent)
         elif n.role == NAMED
-            if kids == 1 && v[only].name.len == 0
-                self.nodes[only] = v[only] with { name = n.name }
+            // A name or a tip lands on the one thing inside, unless that thing has its own already.
+            val one = v[only]
+
+            if kids == 1 && (n.name.len == 0 || one.name.len == 0) &&
+               (n.tip.len == 0 || one.tip.len == 0)
+                self.nodes[only] = one with {
+                    name = if n.name.len > 0 then n.name else one.name,
+                    tip = if n.tip.len > 0 then n.tip else one.tip
+                }
                 self.drop(at, n.parent)
             else
                 self.nodes[at] = n with { role = if kids == 0 then "view" else "group" }
@@ -484,7 +512,7 @@ struct Survey
         val shown = if top.len == 0 then landed else meet(top[top.len - 1], landed)
 
         self.nodes.push(Node(role, "", "", value, marks, landed, shown, words, parent, true, self.drew,
-                             false))
+                             false, ""))
         self.nodes.view().len - 1
     end add
 
@@ -508,7 +536,7 @@ struct Survey
                 val marks = if covered then joined(v[i].marks, "covered") else v[i].marks
 
                 out.push(Entry(id, v[i].role, v[i].label, v[i].name, v[i].value, marks, v[i].rect,
-                               shown, depth, covered))
+                               shown, depth, covered, v[i].tip))
 
         Snapshot(out, at)
     end finished

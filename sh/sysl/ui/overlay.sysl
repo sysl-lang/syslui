@@ -183,6 +183,11 @@ render(v: &View, c: *Canvas, at: Rect)
         Some(k) -> k.begin()
         None -> ()
 
+    // The window, which a tooltip is kept inside and nothing else needs to know.
+    c.tipping() match
+        Some(k) -> k.window = at
+        None -> ()
+
     v.measure(c, Size(at.w, at.h))
     v.paint(c, at)
 
@@ -199,8 +204,10 @@ render(v: &View, c: *Canvas, at: Rect)
         if depth > MAX_DEPTH then break
 
         for i in 0..<p.len
+            // Something the pointer goes through is not a cover, so it neither blocks a hover nor
+            // swallows a tap -- a tip over a neighbouring button leaves the button working.
             covering match
-                Some(k) -> k.enter(p[i])
+                Some(k) -> if !p[i].view.see_through() then k.enter(p[i])
                 None -> ()
 
             // Pushed only when there is one, so a frame with no transform paints exactly the calls it

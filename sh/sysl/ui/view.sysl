@@ -79,6 +79,10 @@ trait View
     // Raised last frame, is this still up? Only `up_while` answers anything but yes; see `Covers`.
     still_up(&self) -> bool = true
 
+    // Raised, does this let the pointer through to whatever is under it? Only a tooltip says yes: it
+    // is a hint about what is under the pointer, and a hint that blocked the click would be in the way.
+    see_through(&self) -> bool = false
+
     // Inset this view by `n` on every side.
     //
     // The wrapper stores `self` -- the receiver's own box, erased -- so a chain of modifiers is a
@@ -259,6 +263,18 @@ trait View
     // tree is rebuilt constantly, and the name is what stays the same across rebuilds when a
     // rectangle and a snapshot's reference do not.
     named(&self, name: string) -> &View = Named(self, name)
+
+    // Show `tip` below this view once the pointer has rested on it for half a second.
+    //
+    //     button("Undo", undo).tooltip("Undo the last change")
+    //     button("Save", save, enabled = false).tooltip("Nothing has changed since the last save")
+    //
+    // **Nothing moves and no pixel changes until the tip is due**: it measures, paints and places as
+    // this view does. The tip goes when the pointer leaves, on a press or on a key, and moving
+    // straight on to another view with a tip shows that one at once. It is drawn above everything,
+    // kept inside the window, takes no input, and shows on a disabled view too. A snapshot reports it
+    // as the view's `tip` whether or not it is showing. An empty `tip` is no tip.
+    tooltip(&self, tip: string) -> &View = Tooltip(self, tip)
 end View
 
 // A leaf: one run of text, measured by whatever font the canvas draws with.
