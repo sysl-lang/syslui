@@ -794,26 +794,26 @@ private a_colour_channel_becomes_a_fraction()
 end a_colour_channel_becomes_a_fraction
 
 // **A border is drawn inside the rectangle layout settled on**, because PlutoVG centres a stroke on
-// its path — so the path is inset by half the width, and the whole of the ink lands inside.
+// its path — so the path is inset by half the width, in reals, and the whole of the ink lands inside.
 @test
 private a_border_is_inset_by_half_its_width()
-    assert(stroke_box(Rect(0, 0, 100, 40), 1) == Rect(0, 0, 100, 40),
-           "a hairline sits on the edge, since half of one is none")
-    assert(stroke_box(Rect(0, 0, 100, 40), 2) == Rect(1, 1, 98, 38), "half of two, off every side")
-    assert(stroke_box(Rect(10, 20, 100, 40), 6) == Rect(13, 23, 94, 34), "and it moves the origin too")
+    assert(stroke_box(Rect(0, 0, 100, 40), 1) == (0.5, 0.5, 99.0, 39.0), "a hairline is inset by half a point")
+    assert(stroke_box(Rect(0, 0, 100, 40), 2) == (1.0, 1.0, 98.0, 38.0), "half of two, off every side")
+    assert(stroke_box(Rect(10, 20, 100, 40), 3) == (11.5, 21.5, 97.0, 37.0), "odd widths, and the origin moves")
 end a_border_is_inset_by_half_its_width
 
 // And the inset corner's radius comes in with it, or the stroke's outer edge would not follow the
 // fill it is sitting on — a border round where its background is square, or the other way about.
 @test
 private an_inset_corner_takes_a_smaller_radius()
-    assert_eq(stroke_radius(8, 2), 7)
-    assert_eq(stroke_radius(8, 6), 5)
+    assert(stroke_radius(8, 2) == 7.0, "even")
+    assert(stroke_radius(8, 1) == 7.5, "odd")
+    assert(stroke_radius(8, 6) == 5.0, "wide")
 
     // Never negative: a radius smaller than the inset is a square corner, not a curve turned inside
     // out.
-    assert_eq(stroke_radius(1, 6), 0)
-    assert_eq(stroke_radius(0, 2), 0)
+    assert(stroke_radius(1, 6) == 0.0, "smaller than the inset")
+    assert(stroke_radius(0, 2) == 0.0, "none")
 end an_inset_corner_takes_a_smaller_radius
 
 // **A face's `descent` is signed by whichever convention it carries**, and the two describe the same

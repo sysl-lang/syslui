@@ -182,7 +182,37 @@ trait View
     //
     // The themed counterpart to `background(color, radius)`, which names a colour and therefore
     // cannot be restyled. Both are worth having and they are not the same request.
-    panel(&self) -> &View = Panel(self)
+    //
+    // `radius` is the corner; the default, -1, is the theme's. `.panel(0)` is the same surface with
+    // square corners, for one that sits flush against a window edge or a split.
+    panel(&self, radius: int = -1) -> &View = Panel(self, radius)
+
+    // Fill the rectangle behind this view with a colour the *current theme* picks, rounded by
+    // `radius`. `.ground(t -> t.edge)` follows a restyle where `.background(light().edge)` cannot.
+    @answers(pick)
+    ground(&self, pick: &Fn(Theme) -> u32, radius: int = 0) -> &View = Ground(self, pick, radius)
+
+    // The same, for the colour of a `Role`: `.ground_role(Role.Accent)`.
+    ground_role(&self, role: Role, radius: int = 0) -> &View = Ground(self, t -> t.color(role), radius)
+
+    // Outline this view in a colour the *current theme* picks, drawn exactly as `border` draws.
+    //
+    // The themed counterpart to `border(color, ...)`, which names a colour and cannot follow a
+    // restyle or dark mode. The theme's own separator colour is `t.edge`, light and dark:
+    //
+    //     panel.outline(t -> t.edge)             // the hairline a dialog wears, in either theme
+    //     panel.outline(t -> t.edge, 2, 8)       // thicker, with rounded corners
+    //     panel.outline(t -> t.edge, 1, 0, 4)    // dashed
+    //
+    // Named `outline` rather than `border_*` because the pick is the point; the colour is resolved
+    // in the theme in force where it paints, so a `.restyle(...)` above it changes it.
+    @answers(pick)
+    outline(&self, pick: &Fn(Theme) -> u32, width: int = 1, radius: int = 0, dash: int = 0) -> &View =
+        Outline(self, pick, width, radius, dash)
+
+    // The same, for the colour of a `Role`: `.outline_role(Role.Accent)`.
+    outline_role(&self, role: Role, width: int = 1, radius: int = 0, dash: int = 0) -> &View =
+        Outline(self, t -> t.color(role), width, radius, dash)
 
     // How much of a container's leftover room this view wants, relative to its siblings.
     //
