@@ -4,7 +4,7 @@ A declarative retained user interface for sysl, for a machine with a heap.
 
 ```
 dependencies {
-  syslui { git = "github.com/sysl-lang/syslui", version = "0.2.5" }
+  syslui { git = "github.com/sysl-lang/syslui", version = "0.2.6" }
 }
 ```
 
@@ -455,6 +455,32 @@ A snapshot reports each title as `menu.<title>` with role `menu`, and each row a
 is raised above the catcher, so its titles stay clickable and are not reported as covered.
 
 **Absent on purpose:** submenus, check marks, keyboard navigation of the bar, and native macOS menus.
+
+## Context menu
+
+`view.context_menu(at, items)` — the same rows as a dropdown, opened by a right-click on `view` at the
+pointer. Where it is open is the application's: `at` is a `Signal[Option[(int, int)]]`, `None` while
+closed, so the menu survives a rebuild and the application can open or close it itself.
+
+```
+val at = signal(None)
+
+schematic.context_menu(at, [
+    item("Probe here", probe),
+    item("Delete", delete, "⌫", enabled = selected.read()),
+    separator(),
+    item("Rotate", rotate)
+])
+```
+
+A right-click inside the view opens the menu there, or moves it there while it is open; a right-click
+outside closes it, and so do choosing an enabled row, a left click anywhere else, and Escape. The menu
+opens down and to the right of the point and flips to the other side where it would leave the view.
+A snapshot reports its rows as `menu.context.<label>`, or `menu.<title>.<label>` given `title`.
+
+**Underneath it is `Canvas.tapped_by(r, button)`**, `tapped` for any button: true for exactly the frame
+a press of `Secondary` or `Middle` lands in `r`, transformed and not covered, with `tap_point_by(button)`
+for where. `tapped(r)` is `tapped_by(r, Primary)`.
 
 ## Tabs
 
