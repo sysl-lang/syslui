@@ -2359,7 +2359,7 @@ private an_outline_button_paints_no_ground()
 
     assert_paints(button("hi", () -> (), .Primary, .Outline), Size(300, 300), Rect(0, 0, 100, 28),
                   "hit 0,0 100x28\n" +
-                  s"ink #${look.primary}\n" +
+                  s"ink #${lighten(look.primary, look.label_lift)}\n" +
                   "text 8,8 84x12 'hi'\n" +
                   "unink\n" +
                   s"stroke 0,0 100x28 #${look.primary} w1 r6\n")
@@ -2373,7 +2373,7 @@ private a_dashed_button_is_an_outline_with_a_pattern()
 
     assert_paints(button("hi", () -> (), .Accent, .Dashed), Size(300, 300), Rect(0, 0, 100, 28),
                   "hit 0,0 100x28\n" +
-                  s"ink #${look.accent}\n" +
+                  s"ink #${lighten(look.accent, look.label_lift)}\n" +
                   "text 8,8 84x12 'hi'\n" +
                   "unink\n" +
                   s"stroke 0,0 100x28 #${look.accent} w1 r6 d4\n")
@@ -2388,7 +2388,7 @@ private a_soft_button_has_a_muted_ground_and_no_border()
     assert_paints(button("hi", () -> (), .Secondary, .Soft), Size(300, 300), Rect(0, 0, 100, 28),
                   "hit 0,0 100x28\n" +
                   s"fill 0,0 100x28 #${mix(look.ground, look.secondary, look.soft)} r6\n" +
-                  s"ink #${lighten(look.secondary, 20)}\n" +
+                  s"ink #${lighten(lighten(look.secondary, 20), look.label_lift)}\n" +
                   "text 8,8 84x12 'hi'\n" +
                   "unink\n")
 end a_soft_button_has_a_muted_ground_and_no_border

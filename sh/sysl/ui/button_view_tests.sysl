@@ -37,16 +37,18 @@ end recorded
 
 private const DIM: int = 55
 
-// The colour a button's label is drawn in, which is what its content must be drawn in.
+// The colour a button's label is drawn in, which is what its content must be drawn in. Only an
+// enabled label takes the theme's `label_lift`.
 private label_colour(role: Role, variant: Variant, enabled: bool) -> u32
     val t = dark()
     val base = if enabled then t.color(role) else mix(t.color(role), t.panel, DIM)
+    val lift = if enabled then t.label_lift else 0
 
     variant match
         Filled -> t.on_fill
-        Soft -> lighten(base, 20)
-        Outline -> base
-        Dashed -> base
+        Soft -> lighten(lighten(base, 20), lift)
+        Outline -> lighten(base, lift)
+        Dashed -> lighten(base, lift)
 end label_colour
 
 private variants() -> [4]Variant = [Variant.Filled, Variant.Soft, Variant.Outline, Variant.Dashed]
@@ -119,8 +121,9 @@ private hover_lifts_the_ground_and_lights_the_outline_of_an_icon_button()
     o2.point(15, 15)
     line.paint(&a2, Rect(0, 0, 30, 30))
     line.paint(&o2, Rect(0, 0, 30, 30))
-    assert(a2.dump().contains(s"of 1 fill #${t.primary} "), "outline at rest")
-    assert(o2.dump().contains(s"of 1 fill #${lighten(t.primary, t.hover_lift)} "), "and the glyph lit with it")
+    assert(a2.dump().contains(s"of 1 fill #${lighten(t.primary, t.label_lift)} "), "outline at rest")
+    assert(o2.dump().contains(s"of 1 fill #${lighten(lighten(t.primary, t.hover_lift), t.label_lift)} "),
+           "and the glyph lit with it")
 end hover_lifts_the_ground_and_lights_the_outline_of_an_icon_button
 
 @test

@@ -1,0 +1,123 @@
+module sh.sysl.ui
+@tests
+
+import sysl.math.Float
+
+// ## A coloured label is readable on the ground it is drawn on
+//
+// `Soft`, `Outline` and `Dashed` buttons draw their label in the role's colour rather than in
+// `on_fill`. On a dark theme the colour has to be lifted toward white before it reads as text, and a
+// disabled button's label must not be lifted with it, or the two would look alike.
+
+private roles() -> [6]Role = [Role.Primary, Role.Secondary, Role.Accent, Role.Success, Role.Warning, Role.Error]
+
+// The WCAG bar for ordinary text.
+private val TEXT: real = 4.5
+
+// One sRGB channel, linearised as WCAG defines it.
+private linear(c: u32, shift: u32) -> real
+    val s = real(int((c >> shift) & 0xFF)) / 255.0
+
+    if s <= 0.03928 then s / 12.92 else ((s + 0.055) / 1.055).pow(2.4)
+
+private luminance(c: u32) -> real = 0.2126 * linear(c, 16) + 0.7152 * linear(c, 8) + 0.0722 * linear(c, 0)
+
+// The WCAG contrast ratio of two colours, from 1 for the same colour to 21 for black on white.
+private contrast(a: u32, b: u32) -> real
+    val x = luminance(a)
+    val y = luminance(b)
+
+    if x > y then (x + 0.05) / (y + 0.05) else (y + 0.05) / (x + 0.05)
+
+private painted(v: &View) -> string
+    var c = recorder()
+
+    v.paint(&c, Rect(0, 0, 100, 28))
+    c.dump()
+
+@test
+private the_contrast_ratio_is_the_wcag_one()
+    assert(contrast(0x000000, 0xFFFFFF) > 20.99 && contrast(0x000000, 0xFFFFFF) < 21.01, "black on white")
+    assert(contrast(0x777777, 0x777777) == 1.0, "a colour on itself")
+    assert(contrast(0x767676, 0xFFFFFF) > 4.5 && contrast(0x777777, 0xFFFFFF) < 4.5,
+           "the grey that just passes on white and the one that just fails")
+
+@test
+private the_light_theme_draws_coloured_labels_exactly_as_before()
+    val t = light()
+
+    assert_eq(t.label_lift, 0)
+
+    for r in roles()
+        val c = t.color(r)
+
+        assert(painted(button("hi", () -> (), r, .Soft).restyle(x -> light())).contains(s"ink #${lighten(c, 20)}\n"),
+               "soft: the colour a fifth of the way to white")
+        assert(painted(button("hi", () -> (), r, .Outline).restyle(x -> light())).contains(s"ink #${c}\n"),
+               "outline: the colour itself")
+        assert(painted(button("hi", () -> (), r, .Dashed).restyle(x -> light())).contains(s"ink #${c}\n"),
+               "dashed: the colour itself")
+    end for
+end the_light_theme_draws_coloured_labels_exactly_as_before
+
+@test
+private on_the_dark_theme_every_coloured_label_meets_the_text_contrast_bar()
+    val t = dark()
+
+    for r in roles()
+        val c = t.color(r)
+        val soft = lighten(lighten(c, 20), t.label_lift)
+        val line = lighten(c, t.label_lift)
+
+        assert(painted(button("hi", () -> (), r, .Soft)).contains(s"ink #${soft}\n"), "the soft label drawn")
+        assert(painted(button("hi", () -> (), r, .Outline)).contains(s"ink #${line}\n"), "the outline label drawn")
+        assert(painted(button("hi", () -> (), r, .Dashed)).contains(s"ink #${line}\n"), "the dashed label drawn")
+
+        assert(contrast(soft, mix(t.ground, c, t.soft)) >= TEXT, s"soft on its own ground")
+
+        // An outline paints no ground, so it is held to both surfaces it is put on.
+        assert(contrast(line, t.ground) >= TEXT, s"outline on the ground")
+        assert(contrast(line, t.panel) >= TEXT, s"outline on the panel")
+    end for
+end on_the_dark_theme_every_coloured_label_meets_the_text_contrast_bar
+
+// **A disabled label keeps today's dim colour**, so the lift that makes an enabled one readable is
+// also what tells the two apart.
+@test
+private on_the_dark_theme_an_enabled_label_stands_apart_from_a_disabled_one()
+    val t = dark()
+
+    for r in roles()
+        val c = t.color(r)
+        val dim = mix(c, t.panel, 55)
+        val soft_on = lighten(lighten(c, 20), t.label_lift)
+        val soft_off = lighten(dim, 20)
+        val line_on = lighten(c, t.label_lift)
+
+        assert(painted(button("hi", () -> (), r, .Soft, enabled = false)).contains(s"ink #${soft_off}\n"),
+               "a disabled soft label is not lifted")
+        assert(painted(button("hi", () -> (), r, .Outline, enabled = false)).contains(s"ink #${dim}\n"),
+               "a disabled outline label is not lifted")
+        assert(painted(button("hi", () -> (), r, .Dashed, enabled = false)).contains(s"ink #${dim}\n"),
+               "a disabled dashed label is not lifted")
+
+        assert(contrast(soft_off, mix(t.ground, dim, t.soft)) < TEXT, s"a disabled soft label reads as dim")
+        assert(contrast(dim, t.ground) < TEXT, s"a disabled outline label reads as dim")
+        assert(contrast(soft_on, soft_off) >= 2.0, s"soft enabled and disabled apart")
+        assert(contrast(line_on, dim) >= 2.0, s"outline enabled and disabled apart")
+    end for
+end on_the_dark_theme_an_enabled_label_stands_apart_from_a_disabled_one
+
+// The lift is added to a hovered outline's label too, so pointing at it never makes it dimmer.
+@test
+private a_hovered_outline_label_is_lifted_on_top_of_the_hover()
+    val t = dark()
+    var over = recorder()
+
+    over.point(50, 14)
+    button("hi", () -> (), .Primary, .Outline).paint(&over, Rect(0, 0, 100, 28))
+
+    assert(over.dump().contains(s"ink #${lighten(lighten(t.primary, t.hover_lift), t.label_lift)}\n"), over.dump())
+    assert(over.dump().contains(s"stroke 0,0 100x28 #${lighten(t.primary, t.hover_lift)} w1 r6\n"),
+           s"and the outline is the hover alone:\n${over.dump()}")
+end a_hovered_outline_label_is_lifted_on_top_of_the_hover

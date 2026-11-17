@@ -165,7 +165,7 @@ button_with(content: &View, on_tap: &Fn() -> unit, role: Role = Role.Primary,
     val named: &View = if label.len > 0 then Labelled(content, label) else content
 
     if enabled then
-        Tappable(reactive((i, t) -> button_face(t, named, i, t.color(role), variant)), on_tap, "button",
+        Tappable(reactive((i, t) -> button_face(t, named, i, t.color(role), variant, t.label_lift)), on_tap, "button",
                  false)
     else DisabledButton(named, role, variant)
 end button_with
@@ -208,16 +208,20 @@ impl View for DisabledButton
     end paint
 
 private disabled_face(t: Theme, b: &DisabledButton) -> &View =
-    button_face(t, b.content, AT_REST, mix(t.color(b.role), t.panel, BUTTON_DIM), b.variant)
+    button_face(t, b.content, AT_REST, mix(t.color(b.role), t.panel, BUTTON_DIM), b.variant, 0)
 
 // **One function from a theme, a label and a state to a view**, which is the shape a `ButtonStyle`
 // would have if styles became a trait -- and the reason this is not written inline in the lambda.
-private button_face(t: Theme, content: &View, i: Interaction, color: u32, variant: Variant) -> &View =
+//
+// `lift` is how much further toward white a coloured label is drawn: the theme's `label_lift` for an
+// enabled button and nothing for a disabled one, so that a dark theme's lift brightens only what can
+// be pressed.
+private button_face(t: Theme, content: &View, i: Interaction, color: u32, variant: Variant, lift: int) -> &View =
     variant match
         Filled -> filled(t, content, i, color)
-        Soft -> soft(t, content, i, color)
-        Outline -> outlined(t, content, i, color, 0)
-        Dashed -> outlined(t, content, i, color, DASH)
+        Soft -> soft(t, content, i, color, lift)
+        Outline -> outlined(t, content, i, color, 0, lift)
+        Dashed -> outlined(t, content, i, color, DASH, lift)
 
 // The dash a `Dashed` border is drawn with: four on, four off.
 private const DASH: int = 4
@@ -239,15 +243,16 @@ private filled(t: Theme, content: &View, i: Interaction, color: u32) -> &View
         .border(lighten(ground, t.edge_lift), 1, t.radius)
 end filled
 
-// A muted ground mixed a little way from `ground` toward the colour, with the label in the colour.
+// A muted ground mixed a little way from `ground` toward the colour, with the label in the colour
+// lightened a fifth of the way to white and then by `lift`.
 //
 // **The one that scales.** A screen can carry a dozen of these where a dozen filled buttons is a
 // screen with no hierarchy at all, so this is the variant a table's row actions want.
-private soft(t: Theme, content: &View, i: Interaction, color: u32) -> &View
+private soft(t: Theme, content: &View, i: Interaction, color: u32, lift: int) -> &View
     val at = t.soft + int(i.hover * real(t.hover_lift)) + int(i.press * real(t.press_sink))
 
     content
-        .foreground(lighten(color, 20))
+        .foreground(lighten(lighten(color, 20), lift))
         .padding(t.pad)
         .background(mix(t.ground, color, at), t.radius)
 end soft
@@ -260,13 +265,14 @@ end soft
 // two things it *does* own needs no such knowledge and works on any background -- which is the whole
 // argument for this variant existing, since it is the only one that can sit on an unknown surface.
 //
-// The press thickens the border rather than darkening it, because there is no ground to sink.
-private outlined(t: Theme, content: &View, i: Interaction, color: u32, dash: int) -> &View
+// The press thickens the border rather than darkening it, because there is no ground to sink. The
+// label is the outline's colour lifted by `lift`; the outline itself is not lifted.
+private outlined(t: Theme, content: &View, i: Interaction, color: u32, dash: int, lift: int) -> &View
     val lit = lighten(color, int(i.hover * real(t.hover_lift)) + int(i.press * real(t.edge_lift)))
     val width = if i.press > 0.5 then 2 else 1
 
     content
-        .foreground(lit)
+        .foreground(lighten(lit, lift))
         .padding(t.pad)
         .border(lit, width, t.radius, dash)
 end outlined
