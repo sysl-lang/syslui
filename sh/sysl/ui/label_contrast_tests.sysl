@@ -73,11 +73,15 @@ private on_the_dark_theme_every_coloured_label_meets_the_text_contrast_bar()
         assert(painted(button("hi", () -> (), r, .Outline)).contains(s"ink #${line}\n"), "the outline label drawn")
         assert(painted(button("hi", () -> (), r, .Dashed)).contains(s"ink #${line}\n"), "the dashed label drawn")
 
-        assert(contrast(soft, mix(t.ground, c, t.soft)) >= TEXT, s"soft on its own ground")
+        assert(contrast(soft, mix(t.ground, c, t.soft)) >= TEXT, "soft on its own ground")
 
         // An outline paints no ground, so it is held to both surfaces it is put on.
-        assert(contrast(line, t.ground) >= TEXT, s"outline on the ground")
-        assert(contrast(line, t.panel) >= TEXT, s"outline on the panel")
+        assert(contrast(line, t.ground) >= TEXT, "outline on the ground")
+        assert(contrast(line, t.panel) >= TEXT, "outline on the panel")
+
+        // Lifted, but not washed out to plain ink: the label still reads as the role's colour.
+        assert(contrast(soft, t.ink) >= 1.35, "a soft label stays darker than ink")
+        assert(contrast(line, t.ink) >= 1.35, "an outline label stays darker than ink")
     end for
 end on_the_dark_theme_every_coloured_label_meets_the_text_contrast_bar
 
