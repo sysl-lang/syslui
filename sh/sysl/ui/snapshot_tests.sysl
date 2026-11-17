@@ -722,9 +722,13 @@ private what_a_frame_paints_has_not_moved()
     // **Without the `hit` lines**, which are not paint: a tappable registers its region before its
     // child paints, so a nested one is on top, and that moved the hit lines and nothing else. The
     // number is the one the full recording had before that change, with those lines taken out.
+    //
+    // **And with the dark theme's `label_lift`**, which moved exactly one line: the ink of the soft
+    // "Later" button. With the lift set to nothing the frame hashes to 8753789231368584446, the
+    // number this held before the lift existed.
     val made = fnv(without_hits(c.dump()))
 
-    assert(made == 8753789231368584446, s"${made}\n${c.dump()}")
+    assert(made == 11575005884634065595, s"${made}\n${c.dump()}")
 end what_a_frame_paints_has_not_moved
 
 private without_hits(d: string) -> string
