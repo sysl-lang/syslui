@@ -112,6 +112,24 @@ private on_the_dark_theme_an_enabled_label_stands_apart_from_a_disabled_one()
     end for
 end on_the_dark_theme_an_enabled_label_stands_apart_from_a_disabled_one
 
+// **A disabled field's text is clearly dimmer than an enabled one's** on the dark theme: the enabled
+// text meets the reading bar on the field's ground, the disabled text does not, and the two are far
+// enough apart to be told at a glance.
+@test
+private on_the_dark_theme_a_disabled_fields_text_is_clearly_dimmer_than_an_enabled_ones()
+    val t = dark()
+    val dim = mix(t.ink, t.panel, 55)
+    val s = signal("12.5")
+
+    assert(painted(text_field(s, 1, 100, enabled = false)).contains(s"ink #${dim}\ntext "), "drawn in the dim ink")
+    assert(!painted(text_field(s, 1, 100)).contains("ink #"), "an enabled field draws in the canvas's own ink")
+
+    assert(contrast(t.ink, t.ground) >= TEXT, "enabled text reads")
+    assert(contrast(dim, t.ground) < TEXT, "disabled text reads as dim")
+    assert(contrast(dim, t.ground) < contrast(t.ink, t.ground), "and is dimmer")
+    assert(contrast(t.ink, dim) >= 2.0, "the two are apart")
+end on_the_dark_theme_a_disabled_fields_text_is_clearly_dimmer_than_an_enabled_ones
+
 // The lift is added to a hovered outline's label too, so pointing at it never makes it dimmer.
 @test
 private a_hovered_outline_label_is_lifted_on_top_of_the_hover()

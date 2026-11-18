@@ -1,0 +1,228 @@
+module sh.sysl.ui
+@tests
+
+// ## A disabled field shows its text and takes nothing
+//
+// `text_field(..., enabled = false)` and `text_area(..., enabled = false)` draw the signal's text,
+// dimmed, and are not focused by a press, not typed into by keys, and give up a keyboard they held
+// without calling `on_blur`.
+
+private val ONE: Rect = Rect(0, 0, 200, 28)
+private val MANY: Rect = Rect(0, 0, 320, 60)
+private val PAGE: Rect = Rect(0, 0, 400, 400)
+
+// A press inside `r` at (20, 14), painted, and the frame it belongs to ended.
+private press_in(v: &View, c: *Recorder, r: Rect)
+    c.point(20, 14, true)
+    v.paint(c, r)
+    c.keys_done()
+    c.point(20, 14, false)
+end press_in
+
+private painted_in(v: &View, r: Rect) -> string
+    var c = recorder()
+
+    v.paint(&c, r)
+    c.dump()
+
+// What a disabled field holding `hi` draws on theme `t`: the ground as ever, then the border and the
+// text mixed toward the panel by a disabled button's amount, and no hit region.
+private dimmed_field(t: Theme) -> string =
+    s"fill 0,0 200x28 #${t.ground} r${t.radius}\n" +
+    s"stroke 0,0 200x28 #${mix(t.edge, t.panel, 55)} w1 r${t.radius}\n" +
+    "clip 6,6 188x16\n" +
+    s"ink #${mix(t.ink, t.panel, 55)}\n" +
+    "text 6,6 188x16 'hi'\n" +
+    "unink\n" +
+    "unclip\n"
+
+@test
+private a_disabled_field_is_drawn_dimmed_on_dark_and_on_light()
+    val t = signal("hi")
+
+    assert_eq(painted_in(text_field(t, 1, enabled = false), ONE), dimmed_field(dark()))
+    assert_eq(painted_in(text_field(t, 1, enabled = false).restyle(x -> light()), ONE), dimmed_field(light()))
+    assert(mix(dark().ink, dark().panel, 55) != dark().ink, "the dark ink is actually moved")
+    assert(mix(light().edge, light().panel, 55) != light().edge, "the light border is actually moved")
+end a_disabled_field_is_drawn_dimmed_on_dark_and_on_light
+
+@test
+private a_disabled_area_is_drawn_dimmed_on_dark_and_on_light()
+    val t = signal("one\ntwo")
+
+    for th in [dark(), light()]
+        val got = painted_in(text_area(t, 1, 320, 3, enabled = false).restyle(x -> th), MANY)
+
+        assert(got.contains(s"stroke 0,0 320x60 #${mix(th.edge, th.panel, 55)} w1 r${th.radius}\n"), got)
+        assert(got.contains(s"ink #${mix(th.ink, th.panel, 55)}\ntext 6,6 308x16 'one'\ntext 6,22 308x16 'two'\nunink\n"),
+               got)
+        assert(!got.contains("hit "), s"no hit region:\n${got}")
+end a_disabled_area_is_drawn_dimmed_on_dark_and_on_light
+
+// The pointer resting on a disabled field changes nothing in its picture.
+@test
+private a_hovered_disabled_field_is_drawn_as_at_rest()
+    val t = signal("hi")
+    val v = text_field(t, 1, enabled = false)
+    var over = recorder()
+
+    over.point(20, 14, false)
+    v.paint(&over, ONE)
+    assert_eq(over.dump(), dimmed_field(dark()))
+end a_hovered_disabled_field_is_drawn_as_at_rest
+
+@test
+private a_tap_on_a_disabled_field_or_area_takes_no_keyboard_and_places_no_caret()
+    val t = signal("hi")
+
+    for v in [text_field(t, 1, enabled = false), text_area(t, 1, 200, 1, enabled = false)]
+        var c = recorder()
+
+        press_in(v, &c, ONE)
+        assert(c.focus() == NOBODY, "the press focused nothing")
+        assert(c.editing().empty(), "and placed no caret")
+
+        v.paint(&c, ONE)
+        assert(!c.dump().contains(s"fill 22,6 2x16"), s"no caret drawn:\n${c.dump()}")
+end a_tap_on_a_disabled_field_or_area_takes_no_keyboard_and_places_no_caret
+
+// **Even a disabled field the keyboard was handed to in code ignores the keys**, because it gives the
+// keyboard up before it would read them.
+@test
+private keys_change_nothing_in_a_disabled_field_or_area()
+    val t = signal("hi")
+
+    for v in [text_field(t, 1, enabled = false), text_area(t, 1, enabled = false)]
+        var c = recorder()
+
+        press_in(v, &c, ONE)
+        c.key(typed("ab"))
+        v.paint(&c, ONE)
+        assert_eq(t.read(), "hi", "typed after a press")
+
+        c.keys_done()
+        c.take_focus(1)
+        c.key(typed("cd"))
+        v.paint(&c, ONE)
+        assert_eq(t.read(), "hi", "typed after the keyboard was handed over in code")
+        assert(c.focus() == NOBODY, "and it gave the keyboard back")
+end keys_change_nothing_in_a_disabled_field_or_area
+
+// **A focused field switched off gives the keyboard up, and its `on_blur` is not called**: the
+// application that switched it off already knows. Switched back on, it is an ordinary field again.
+@test
+private a_focused_field_switched_off_drops_the_keyboard_without_a_blur_and_switched_on_works_again()
+    val t = signal("hi")
+    val log = signal("")
+    val on = text_field(t, 1, on_blur = () -> log.set(log.read() + "blur "))
+    val off = text_field(t, 1, on_blur = () -> log.set(log.read() + "blur "), enabled = false)
+    var c = recorder()
+
+    c.point(20, 14, true)
+    render(on, &c, PAGE)
+    c.point(20, 14, false)
+    render(on, &c, PAGE)
+    assert(c.focus() == 1, "focused while enabled")
+
+    c.key(typed("x"))
+    render(off, &c, PAGE)
+    assert(c.focus() == NOBODY, "switched off, it has given the keyboard up")
+    assert_eq(t.read(), "hi", "the key in the frame it was switched off was not applied")
+    assert_eq(log.read(), "", "and on_blur was not called")
+
+    render(off, &c, PAGE)
+    render(on, &c, PAGE)
+    assert_eq(log.read(), "", "nor later")
+    assert(c.focus() == NOBODY, "switched on again, it does not take the keyboard back by itself")
+
+    c.point(20, 14, true)
+    render(on, &c, PAGE)
+    c.point(20, 14, false)
+    c.key(typed("!"))
+    render(on, &c, PAGE)
+    assert(c.focus() == 1, "a press focuses it again")
+    assert_eq(t.read(), "hi!", "and keys type into it")
+
+    c.point(300, 300, true)
+    render(on, &c, PAGE)
+    assert_eq(log.read(), "blur ", "and leaving it calls on_blur again")
+end a_focused_field_switched_off_drops_the_keyboard_without_a_blur_and_switched_on_works_again
+
+@test
+private a_focused_area_switched_off_drops_the_keyboard_without_a_blur()
+    val t = signal("")
+    val log = signal("")
+    var c = recorder()
+
+    c.point(20, 14, true)
+    render(text_area(t, 1, on_blur = () -> log.set("blur")), &c, PAGE)
+    c.point(20, 14, false)
+    assert(c.focus() == 1, "focused while enabled")
+
+    render(text_area(t, 1, on_blur = () -> log.set("blur"), enabled = false), &c, PAGE)
+    assert(c.focus() == NOBODY, "switched off, it has given the keyboard up")
+    assert_eq(log.read(), "")
+end a_focused_area_switched_off_drops_the_keyboard_without_a_blur
+
+// **A disabled field gives up only its own keyboard**: painting beside a focused field does not take
+// that field's focus, nor stop its `on_blur` from being called when it is left.
+@test
+private a_disabled_field_leaves_another_fields_focus_and_blur_alone()
+    val a = signal("")
+    val b = signal("")
+    val log = signal("")
+    val v = column([text_field(a, 1, on_blur = () -> log.set(log.read() + "a ")), text_field(b, 2, enabled = false)])
+    var c = recorder()
+
+    c.point(20, 14, true)
+    render(v, &c, PAGE)
+    c.point(20, 14, false)
+    c.key(typed("z"))
+    render(v, &c, PAGE)
+    assert(c.focus() == 1, "the enabled field keeps the keyboard")
+    assert_eq(a.read(), "z", "and is typed into")
+
+    c.point(300, 300, true)
+    render(v, &c, PAGE)
+    assert_eq(log.read(), "a ", "and is told when it loses it")
+end a_disabled_field_leaves_another_fields_focus_and_blur_alone
+
+@test
+private a_disabled_field_follows_its_signal()
+    val t = signal("hi")
+    val v = text_field(t, 1, enabled = false)
+
+    t.set("12.5")
+    assert(painted_in(v, ONE).contains("text 6,6 188x16 '12.5'\n"), painted_in(v, ONE))
+
+    val s = signal("one")
+    val w = text_area(s, 1, 320, 3, enabled = false)
+
+    s.set("one\ntwo")
+    assert(painted_in(w, MANY).contains("text 6,22 308x16 'two'\n"), painted_in(w, MANY))
+end a_disabled_field_follows_its_signal
+
+private shot_of(v: &View) -> Snapshot
+    var c = recorder()
+
+    render(v, &c, PAGE)
+    snapshot(v, &c, PAGE)
+end shot_of
+
+@test
+private a_disabled_field_or_area_is_reported_as_disabled_in_a_snapshot()
+    val t = signal("12.5")
+    val f = shot_of(text_field(t, 1, enabled = false).named("f"))
+    val a = shot_of(text_area(t, 1, enabled = false).named("a"))
+
+    assert(f.dump().contains("textfield name=f") && f.dump().contains("disabled"), f.dump())
+    assert(f.dump().contains("value=\"12.5\""), f.dump())
+    assert(f.to_json().contains("\"enabled\":false"), f.to_json())
+    assert(a.dump().contains("textarea name=a") && a.dump().contains("disabled"), a.dump())
+    assert(a.to_json().contains("\"enabled\":false"), a.to_json())
+
+    val on = shot_of(text_field(t, 1).named("f"))
+
+    assert(!on.dump().contains("disabled"), on.dump())
+    assert(on.to_json().contains("\"enabled\":true"), on.to_json())
+end a_disabled_field_or_area_is_reported_as_disabled_in_a_snapshot

@@ -305,7 +305,7 @@ trait Canvas
     // one of it, and `key.sysl` argues at length why the key for it is an id the caller picks rather
     // than the rectangle everything else here is keyed by.
     //
-    // **All five default to a canvas with no keyboard**, which draws an editable field as an
+    // **Every one of them defaults to a canvas with no keyboard**, which draws an editable field as an
     // ordinary run of text that cannot be typed into -- a plainer picture rather than a wrong one,
     // which is the rule every other defaulted member on this trait follows.
 
@@ -314,6 +314,10 @@ trait Canvas
 
     // Take it. A view calls this while painting, on the frame a press lands inside it.
     take_focus(*self, id: int) = ()
+
+    // `id` gives it up without being told it lost it: nobody has it afterwards, and the callback
+    // `id` registered with `watch_focus` is dropped uncalled. A disabled field calls this.
+    release_focus(*self, id: int) = ()
 
     // The view `id`, which has the keyboard, asks to have `f` called once when it stops having it --
     // whatever the cause, and whether or not it is painted in the frame that happens. A view calls
@@ -888,6 +892,8 @@ impl Canvas for Recorder
     override focus(*self) -> int = self.board.focus
 
     override take_focus(*self, id: int) = self.board.take(id)
+
+    override release_focus(*self, id: int) = self.board.release(id)
 
     override watch_focus(*self, id: int, f: &Fn() -> unit) = self.board.watch(id, f)
 

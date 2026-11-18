@@ -60,6 +60,9 @@ struct Field
     // Called once each time this field stops being the focused one.
     on_blur: &Fn() -> unit
 
+    // Whether it can be typed into. A disabled field shows its text, dimmed, and takes no focus.
+    enabled: bool
+
 impl View for Field
     measure(&self, c: *Canvas, avail: Size) -> Size =
         Size(self.width, self.rows * c.text_size("").h + 2 * FIELD_PAD)
@@ -72,7 +75,12 @@ impl View for Field
         // **`tapped` rather than `pressed`, because a tap is over before this runs.** A mouse press
         // lasts several frames and a finger's does not; asking whether the pointer is down now meant
         // a field that could be focused with a mouse and not with a thumb.
-        if c.tapped(r) then c.take_focus(self.id)
+        //
+        // **A disabled field takes nothing and keeps nothing**: a press inside it does not focus it,
+        // and one that still held the keyboard from an enabled build gives it up here, without its
+        // `on_blur`, because the application that switched it off already knows.
+        if !self.enabled then c.release_focus(self.id)
+        elif c.tapped(r) then c.take_focus(self.id)
 
         val mine = c.focus() == self.id
 
@@ -100,30 +108,44 @@ impl View for Field
         noted match
             Some(n) ->
                 n.open(if self.multiline then "textarea" else "textfield", r, Words.Ignored, e.text,
-                       if mine then "focused" else "")
+                       if mine then "focused" elif !self.enabled then "disabled" else "")
                 n.label(self.hint)
             None -> ()
 
         val look = c.theme()
 
         c.fill(r, look.ground, look.radius)
-        c.stroke(r, if mine then look.primary else look.edge, if mine then 2 else 1, look.radius)
+        c.stroke(r, if mine then look.primary elif self.enabled then look.edge else dimmed(look, look.edge),
+                 if mine then 2 else 1, look.radius)
 
         // **Clipped to the inside**, because a run longer than the box is the ordinary case rather
         // than the exception, and an unclipped one would be drawn straight through the border.
         c.clip(inner)
 
         if e.text.len == 0 && self.hint.len > 0 && !mine then hint(c, inner, self.hint)
-        else run(c, inner, e.text, e.sel, mine)
+        elif self.enabled then run(c, inner, e.text, e.sel, mine)
+        else
+            c.ink(dimmed(look, look.ink))
+            run(c, inner, e.text, e.sel, false)
+            c.unink()
 
         c.unclip()
-        c.hit(r, self.grab)
+
+        // A disabled field claims no rectangle, as a disabled button does, so a press on it falls
+        // through to whatever is behind.
+        if self.enabled then c.hit(r, self.grab)
 
         noted match
             Some(n) -> n.close()
             None -> ()
     end paint
 end Field
+
+// A disabled field's colour: mixed toward the panel by as much as a disabled button's is.
+private dimmed(t: Theme, color: u32) -> u32 = mix(color, t.panel, FIELD_DIM)
+
+// How far a disabled field's text and border are mixed toward the panel.
+private const FIELD_DIM: int = 55
 
 // The two keys a field hands back to the application, in the order they arrived.
 private answer(f: &Field, ps: []const Press)
@@ -152,10 +174,18 @@ private answer(f: &Field, ps: []const Press)
 // painted that frame (scrolled away, its panel closed); a field that is simply no longer drawn while
 // still holding the keyboard is not blurred until something else takes it. Tab is an ordinary key
 // that the library does not turn into a focus move. Defaults to nothing.
+//
+// **`enabled = false` makes it a read-only display of the signal**: its text is drawn with the text
+// and border mixed toward the panel, as a disabled button's colour is; a press on it neither focuses
+// it nor moves a caret; and it is reported in a snapshot with the `disabled` mark. The text still
+// follows the signal, so the application can go on setting it. A field that held the keyboard when it
+// was switched off gives it up on the next frame it is painted, and **`on_blur` is not called for
+// that**: the loss was the application's own doing, not somebody leaving the field. The flag is read
+// when the tree is built, so a tree rebuilt with a different value takes effect on the next frame.
 text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "",
            on_enter: &Fn() -> unit = () -> (), on_escape: &Fn() -> unit = () -> (),
-           on_blur: &Fn() -> unit = () -> ()) -> &View =
-    Field(text, id, width, 1, false, hint, () -> (), on_enter, on_escape, on_blur)
+           on_blur: &Fn() -> unit = () -> (), enabled: bool = true) -> &View =
+    Field(text, id, width, 1, false, hint, () -> (), on_enter, on_escape, on_blur, enabled)
 
 // Several lines of it. **Lines are the ones in the text**: nothing wraps, so a long paragraph is one
 // line that scrolls sideways. Wrapping needs the canvas to measure candidate breaks, which is a
@@ -164,10 +194,13 @@ text_field(text: &Signal[string], id: int, width: int = 200, hint: string = "",
 //
 // **Escape calls `on_escape`, and Enter is a newline** rather than a submit, which is what it is in an
 // area; a form submits an area with a button.
+//
+// **`enabled = false` is `text_field`'s**: dimmed, unfocusable, marked `disabled`, still following
+// its signal, and giving the keyboard up without an `on_blur`.
 text_area(text: &Signal[string], id: int, width: int = 320, rows: int = 5,
           hint: string = "", on_escape: &Fn() -> unit = () -> (),
-          on_blur: &Fn() -> unit = () -> ()) -> &View =
-    Field(text, id, width, rows, true, hint, () -> (), () -> (), on_escape, on_blur)
+          on_blur: &Fn() -> unit = () -> (), enabled: bool = true) -> &View =
+    Field(text, id, width, rows, true, hint, () -> (), () -> (), on_escape, on_blur, enabled)
 
 // ## The three things a paint has to work out
 

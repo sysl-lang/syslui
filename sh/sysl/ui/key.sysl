@@ -207,6 +207,19 @@ struct Keyboard
             self.focus = id
             self.sel = nothing_selected()
 
+    // `id` gives the keyboard up of its own accord, and is not told it lost it: nobody has it after,
+    // and a watch `id` set is forgotten rather than called. A view that does not have it changes
+    // nothing.
+    release(*self, id: int)
+        if self.focus == id
+            self.focus = NOBODY
+            self.sel = nothing_selected()
+
+        if self.watched == id
+            self.watched = NOBODY
+            self.leave = () -> ()
+    end release
+
     // Where the focused view's caret is now.
     edit(*self, sel: Selection) = self.sel = sel
 
